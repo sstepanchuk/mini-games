@@ -156,7 +156,8 @@ function onMessage(N, m, c) {
       if (P) leaveQuietly(N);
       break;
     case 'd':                                          // game data through the brokers (our mailbox from P)
-      if (!P || !Array.isArray(m.d)) break;
+      if (!P) { stranger(N, from); break; }
+      if (!Array.isArray(m.d)) break;
       if (!P.linked) {                                 // a moment before 'hi'
         if (N.role === 'guest' && from === N.host) for (const x of m.d) if (P.early.length < 64) P.early.push(x);
         break;
@@ -172,8 +173,21 @@ function onMessage(N, m, c) {
       break;
     case 'rtc':                                        // direct link signalling
       if (P && P.linked) onRtc(P, m);
+      else if (!P) stranger(N, from);
       break;
   }
+}
+
+// Someone talks to us as if we were linked, but we are not (we let them go after a long silence, or they missed
+// that we did): the host asks them to say hello again; anyone else tells them we are not together, so they stop
+// waiting for us. Once in a while per sender.
+function stranger(N, from) {
+  const now = performance.now(), told = N.told;
+  if (now - (told.get(from) || -1e9) < 2000) return;
+  if (told.size > 32) told.clear();
+  told.set(from, now);
+  if (N.role === 'host' && seats(N)) pub(N, { t: 'host', n: count(N), to: from });
+  else if (N.role === 'host' || N.role === 'guest') pub(N, { t: 'bye', menu: 1, to: from });
 }
 
 // is anyone in the room? if nobody answers, we are first

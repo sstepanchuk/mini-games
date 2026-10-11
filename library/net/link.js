@@ -3,23 +3,25 @@
 // that is the direct path, but a "direct" link through a far-away TURN relay can be slower than the brokers.
 //
 // Messages are plain objects with a string `t` ('p', 'q', 'bye' and those starting with '_' are the room's own).
-// Reliable ones get a number `_x` and run exactly once even when they arrive by both paths; fast ones (no `_x`)
-// may be lost or reordered — the game numbers them itself if it cares. A reliable message sent only directly is
-// kept for a moment: if the direct link turns out dead (it takes a second to notice), it goes again through the
-// brokers.
+// Fast ones may be lost or reordered — the game numbers them itself if it cares. Reliable ones really are: each
+// gets a number `_x` and stays in our outbox until the other side acknowledges it (`a` in every pulse: "I have
+// everything up to here"); until then it is sent again, by whatever path works, with growing pauses. So nothing
+// is lost to a dead direct link, brokers that are reconnecting, or a phone that was offline for a minute. The
+// receiver runs them exactly once and in order: a message that overtook a missing one waits for it.
 import { BROKERS } from './config.js';
 import { bestBrokers, brokerDiag, kickBrokers, pubData, tendBrokers } from './brokers.js';
 import { closeRtc, dcFresh, dcHear, dcLive, dcQuiet, probeLink, startRtc } from './rtc.js';
 import { hostPeer, linkedPeers, weakChanged } from './room.js';
 
-const RX_WINDOW = 512;                                 // how many reliable message numbers we remember
-const UNSURE_MS = 2500;                                // how long a message sent only directly is kept for a resend
+const OUTBOX_MAX = 5000;                               // reliable messages not yet acknowledged: more means they are gone
+const HOLD_MAX = 4096;                                 // messages that overtook a missing one, waiting for it
+const RESEND_PER_TICK = 64;
 
 // a new link with this player (or the same person in a new tab): measurements and numbering start over
 export function resetPaths(P) {
-  P.tx = 0; P.rxSet = new Set(); P.rxMax = 0; P.pts = -1; P.byePts = -1; P.suspect = -1e9;
-  P.rD = P.rR = null; P.sD = []; P.sR = []; P.qD = P.qR = -1; P.slowDirect = false; P.peerRtt = null;
-  P.unsure = []; P.wasFresh = false; P.aliveAt = 0;
+  P.tx = 0; P.outbox = []; P.rxNext = 1; P.rxHold = new Map(); P.byeX = 0;
+  P.pts = -1; P.byePts = -1; P.suspect = -1e9;
+  P.rD = P.rR = null; P.sD = []; P.sR = []; P.qD = P.qR = -1; P.slowDirect = false; P.peerRtt = null; P.aliveAt = 0;
 }
 
 /* ---------- sending ---------- */
@@ -27,16 +29,45 @@ export function resetPaths(P) {
 export function send(P, m, { fast = false, batch = false } = {}) {
   const N = P.N;
   if (N.closed || !P.linked) return;
-  if (!fast) m = { ...m, _x: ++P.tx };                 // a copy: the same message may go to several players
+  if (!fast) {
+    m = { ...m, _x: ++P.tx };                          // a copy: the same message may go to several players
+    P.outbox.push({ m, at: performance.now(), n: 1 });
+    if (P.outbox.length > OUTBOX_MAX) { N.peerGone(P); return; }   // they have not heard us for ages
+  }
+  transmit(P, m, fast, batch);
+}
+// by the path in use; while the direct link is not sure, through the brokers as well
+function transmit(P, m, fast, batch) {
+  const N = P.N;
   if (!N.relay) { if (dcLive(P)) { try { (fast ? P.dcF : P.dcC).send(JSON.stringify(m)); } catch (e) {} } return; }   // nearby: the direct link is all there is
   if (dcLive(P) && P.via === 'p2p') {
     try { (fast ? P.dcF : P.dcC).send(JSON.stringify(m)); } catch (e) {}
-    if (dcFresh(P)) { if (!fast) P.unsure.push([performance.now(), m]); return; }   // the direct link is alive: that is enough
+    if (dcFresh(P)) return;                            // the direct link is alive: that is enough
   }
   // through the brokers (no direct path, it went quiet, or it is slower)
   P.q.push(m);
   if (!batch || P.q.length >= 3) flushRelay(P);
   else if (!P.qTimer) P.qTimer = setTimeout(() => flushRelay(P), 45);
+}
+// The other side has everything up to `a`: those leave the outbox.
+function acked(P, a) {
+  if (!Number.isInteger(a)) return;
+  let i = 0;
+  while (i < P.outbox.length && P.outbox[i].m._x <= a) i++;
+  if (i) P.outbox.splice(0, i);
+}
+// Reliable messages not acknowledged in time go again: after twice the round trip (at least 300 ms), then with
+// longer and longer pauses (up to 4×), the oldest first, a few dozen per tick.
+function resend(P, now) {
+  if (!P.outbox.length) return;
+  const rtt = curRtt(P), rto = Math.max(300, (rtt == null ? 300 : rtt) * 2 + 100);
+  let k = 0;
+  for (const e of P.outbox) {
+    if (now - e.at < rto * Math.min(e.n, 4)) continue;
+    e.at = now; e.n++;
+    transmit(P, e.m, false, false);
+    if (++k >= RESEND_PER_TICK) break;
+  }
 }
 function sendDirect(P, m) { if (dcLive(P)) { try { P.dcF.send(JSON.stringify(m)); } catch (e) {} } }
 function sendRelay(P, m) { if (P.linked && P.N.relay) { P.q.push(m); flushRelay(P); } }
@@ -53,24 +84,37 @@ export function deliver(P, m, viaRelay) {
   if (N.closed || !P.linked || !m || typeof m !== 'object' || typeof m.t !== 'string') return;
   const now = performance.now();
   P.lastSeen = now;
-  if (m.t === 'bye') { N.byeFrom(P, m.menu === 1); return; }   // they closed the tab (menu: left for good)
-  let isNew = true;                                    // has this not already come by the other path?
   const x = m._x;
-  if (x === undefined) {                               // fast: the game filters its own; here only the pulse
-    if (m.t === 'p') { isNew = Number.isFinite(m.ts) && m.ts > P.pts; if (isNew) P.pts = m.ts; }
-  } else {                                             // reliable: exactly once. Numbers only grow, so anything
-    if (!Number.isInteger(x) || x <= P.rxMax - RX_WINDOW || P.rxSet.has(x)) return;   // older than the window is a replay
-    delete m._x;
-    P.rxSet.add(x);
-    if (x > P.rxMax) P.rxMax = x;
-    if (P.rxSet.size > 2 * RX_WINDOW) for (const y of P.rxSet) if (y <= P.rxMax - RX_WINDOW) P.rxSet.delete(y);
+  if (x === undefined) { signals(P, m, viaRelay, now); return; }   // fast: pulses, ping answers, the game's own
+  if (!Number.isInteger(x) || x < P.rxNext) return;   // a copy that came by the other path, or a resend we already have
+  if (m.t === 'bye') {                                 // they closed the tab (menu: left for good): at once, whatever is missing
+    if (P.byeX !== x) { P.byeX = x; N.byeFrom(P, m.menu === 1); }
+    return;
   }
+  if (x > P.rxNext) { if (P.rxHold.size < HOLD_MAX) P.rxHold.set(x, m); return; }   // one before it is missing: it waits
+  for (;;) {                                           // this one, and whatever was waiting behind it
+    delete m._x;
+    P.rxNext++;
+    N.arrive(P, m, true);
+    if (N.closed || !P.linked) return;
+    m = P.rxHold.get(P.rxNext);
+    if (!m) return;
+    P.rxHold.delete(P.rxNext);
+    if (m.t === 'bye') { P.rxNext++; if (P.byeX !== m._x) { P.byeX = m._x; N.byeFrom(P, m.menu === 1); } return; }
+  }
+}
+
+// the link's own fast messages: pulse and ping (p), ping answer (q); anything else fast is the game's
+function signals(P, m, viaRelay, now) {
+  const N = P.N;
   if (m.r === 1) P.suspect = now;                      // they say they cannot hear us directly
   if (m.t === 'p') {                                   // pulse and ping
     if (!Number.isFinite(m.ts)) return;
     const q = { t: 'q', ts: m.ts };
     if (viaRelay) sendRelay(P, q); else sendDirect(P, q);   // answer by the same path, so each path is measured on its own
-    if (!isNew) return;                                // the copy from the other path was already counted
+    acked(P, m.a);
+    if (m.ts <= P.pts) return;                         // the copy from the other path was already counted
+    P.pts = m.ts;
     if (viaRelay) P.aliveAt = now;                     // a pulse the direct link has not brought: they are there
     if (P.byeAt && m.ts > P.byePts) P.byeAt = 0;       // a new pulse after a goodbye: they are back (not a late packet)
     if (typeof m.rt === 'number' && m.rt >= 0 && m.rt < 5000) P.peerRtt = m.rt;
@@ -92,7 +136,7 @@ export function deliver(P, m, viaRelay) {
     }
     return;
   }
-  N.arrive(P, m, x !== undefined);
+  N.arrive(P, m, false);
 }
 
 /* ---------- ping and path choice ---------- */
@@ -172,10 +216,10 @@ function watchPeer(P, now) {
     if (dc) sendDirect(P, p);
     if (!dc || P.via !== 'p2p' || !dcFresh(P) || dcQuiet(P) || P.pN % 6 === 0) sendRelay(P, p);   // through the brokers when the game goes that way, the direct link is quiet, and now and then to measure
   }
-  resendUnsure(P, now);
+  resend(P, now);
   if (now < N.graceUntil) return;
   const quiet = now - P.lastSeen;
-  setWeak(P, !!P.byeAt || quiet > 2000);
+  setWeak(P, !!P.byeAt || quiet > 1500);            // the game pauses: nobody plays on while someone cannot
   if (P.byeAt && now - P.byeAt > 20000) { N.peerGone(P); return; }   // closed the tab and did not come back
   if (quiet > (N.patient() ? 90000 : N.lostAfter)) { N.peerGone(P); return; }
   // a direct link that went quiet for long is closed; the guest then tries to build a new one
@@ -187,15 +231,6 @@ function watchPeer(P, now) {
     startRtc(P);
   }
   if (pickRoute(P) !== P.via || now - P.viaAt > 1000) N.refresh(P);
-}
-
-// Reliable messages sent only directly in the last moments: once the direct link stops being fresh, they may
-// sit in a dead channel, so they go again through the brokers (the other side drops a second copy by _x).
-function resendUnsure(P, now) {
-  const fresh = dcFresh(P), u = P.unsure;
-  while (u.length && now - u[0][0] > UNSURE_MS) u.shift();
-  if (P.wasFresh && !fresh && P.N.relay && u.length) { for (const [, m] of u) P.q.push(m); u.length = 0; flushRelay(P); }
-  P.wasFresh = fresh;
 }
 
 // this player went quiet or came back
@@ -215,7 +250,7 @@ export function kick(N) {
 }
 
 function pingMsg(P, now) {
-  const N = P.N, m = { t: 'p', ts: Math.round(now * 10) / 10 };
+  const N = P.N, m = { t: 'p', ts: Math.round(now * 10) / 10, a: P.rxNext - 1 };   // a: what we have of theirs
   const rt = netRtt(P);
   if (rt != null) m.rt = Math.round(rt);               // our measured ping: they show it too
   const extra = N.pulse && N.pulse(now);               // the game's own fields (see room.pulse)

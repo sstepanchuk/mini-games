@@ -31,7 +31,7 @@ export function newRoom({ game, code = '', lostAfter = 60000, relay, max = MAX_P
     // the other players remember from our previous one
     topic: '', clients: [], br: [], seq: Date.now(), last: new Map(), ready: false, up: false, kickAt: -1e9, kAt: 0, winAt: 0, pubN: 0,
     // who is who: our role, the host (when we are a guest), every link (id → peer, in the order they joined)
-    role: null, host: null, peers: new Map(), roster: [me], linked: false, weak: false, statsDue: false,
+    role: null, host: null, peers: new Map(), roster: [me], linked: false, weak: false, statsDue: false, told: new Map(),
     // the watchdog (link.js)
     lastWatch: 0, watchMs: 0, graceUntil: 0,
     // timers

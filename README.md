@@ -101,7 +101,7 @@ room.on('linked', () => …)            // we play with someone now (also fires 
     .on('relinked', id => …);         // a player reopened the game in a new tab: send them the full state
 room.me, room.players, room.waiting   // player ids: us, who plays (the host first), who waits for a seat
 room.role                             // 'host' (the first player: usually runs the game), 'guest', or null (waiting)
-room.send({ t: 'move', … });                  // to everyone who plays; reliable: arrives exactly once
+room.send({ t: 'move', … });                  // to everyone who plays; reliable: exactly once, in order, even across an outage
 room.send({ t: 'pos', … }, { fast: true });   // may be lost or reordered: number it yourself
 room.send({ t: 'card', … }, { to: id });      // to one player
 ```
@@ -111,7 +111,10 @@ events; `room.lag(id?)`, `room.stats(id?)` (one player, or the slowest), `room.d
 `room.direct`, `room.seats`, `room.seated`; and policies a game may set: `room.keepSeat`, `room.patient`,
 `room.streaming`, `room.pulse` (see `library/net/room.js`).
 
-Under it, a room is a star: everyone is linked to the room's host, which passes on what guests send. If the host
+Under it, a room is a star: everyone is linked to the room's host, which passes on what guests send. Reliable
+messages stay in the sender's outbox until acknowledged and go again by whatever path works (direct, or the
+brokers), so a network switch or a minute offline loses nothing; a player who goes quiet pauses the game for
+everyone after 1.5 s, and a silence the other path does not explain (a busy phone) never drops the direct link. If the host
 leaves an internet room, the first guest on the roster takes over and the others follow without a word. Nearby
 (no internet), the host pairs with each guest in turn; the guests hear each other through it.
 
