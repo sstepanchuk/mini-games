@@ -177,11 +177,11 @@ export function checkVault() {
   let kr = null;
   try { kr = JSON.parse(fs.readFileSync(P.keyring, 'utf8')); } catch (e) { bad(rel(P.keyring) + ': ' + e.message); }
   if (kr) {
-    if (kr.v !== vault.KEYRING_V || !/^[A-Za-z0-9+/]{11}=$/.test(kr.kid) || !kr.kdf?.salt || !(kr.kdf.iterations >= 100000)) bad('keyring.json: invalid header');
+    if (kr.v !== vault.KEYRING_V || !/^[A-Za-z0-9+/]{11}=$/.test(kr.kid) || !(kr.kdf?.iterations >= 100000)) bad('keyring.json: invalid header');
     if (!Array.isArray(kr.people) || !kr.people.length) bad('keyring.json: no people');
     const ids = new Set();
     for (const p of Array.isArray(kr.people) ? kr.people : []) {
-      if (!(p.id && p.pub && p.priv && typeof p.name === 'string' && p.box?.epk && p.box?.ct)) bad('keyring.json: incomplete entry ' + (p.id || '?'));
+      if (!(p.id && p.salt && p.pub && p.priv && typeof p.name === 'string' && p.box?.epk && p.box?.ct)) bad('keyring.json: incomplete entry ' + (p.id || '?'));
       if (ids.has(p.id)) bad('keyring.json: duplicate id ' + p.id);
       ids.add(p.id);
     }

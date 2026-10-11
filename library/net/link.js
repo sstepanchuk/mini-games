@@ -147,7 +147,7 @@ export function diag(N) {
 // broker connections. So: a short silence pauses the game and waits; brokers reconnect on their own; the
 // direct link is rebuilt. Only a really long silence ends the link.
 export function watch(N) {
-  const now = performance.now(), slept = now - N.lastWatch > 1500;
+  const now = performance.now(), slept = now - N.lastWatch > N.watchMs + 1300;
   N.lastWatch = now;
   if (N.closed) return;
   // Our own tab was asleep (phone locked, timers throttled): the silence was ours, not theirs.

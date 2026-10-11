@@ -49,6 +49,7 @@ export function joinRoom({ game, code, lostAfter }) {
     N.topic = await roomTopic(game, code);
     if (N.closed) return;
     N.onConnected = c => connected(N, c);
+    N.onDown = () => signal(N);
     N.onMessage = (m, c) => onMessage(N, m, c);
     openBrokers(N);
     N.failTimer = setTimeout(() => { if (!N.closed && !N.ready) N.emit('status', 'no-signal'); }, 6000);
@@ -61,8 +62,19 @@ const dropQueue = N => { N.q = []; stop(N, 'qTimer'); };
 
 const pub = (N, obj) => { if (!N.closed) pubOn(N, obj); };
 
+// Whether any broker works, told once per change while nobody is linked (when linked, 'weak' tells it):
+// a waiting room that lost the internet says so instead of "waiting".
+function signal(N) {
+  const up = N.clients.some(c => c && c._ok);
+  if (up === N.up) return;
+  N.up = up;
+  if (N.closed || N.linked || !N.ready) return;
+  N.emit('status', !up ? 'no-signal' : N.role === 'host' ? 'waiting' : N.role === 'guest' ? 'joining' : 'connecting');
+}
+
 // a broker just connected: bring it up to date with what is going on in the room
 function connected(N, c) {
+  signal(N);
   if (N.heard) { try { c.subscribe(N.topic + '/d/' + N.heard, { qos: 0 }); } catch (e) {} }   // the mailbox we listen to, here too
   if (!N.ready) { N.ready = true; clearTimeout(N.failTimer); discover(N); }
   else if (N.role === null) pub(N, { t: 'who' });               // still looking: ask on this broker too

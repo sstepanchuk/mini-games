@@ -48,6 +48,9 @@ after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 test('init, build and check', () => {
   assert.ok(pw.alice && pw.bob);
+  const k = kr();                                                              // a salt per person: no guess tests everyone at once
+  assert.equal(new Set(k.people.map(p => p.salt)).size, 2);
+  assert.equal(k.kdf.salt, undefined);
   assert.match(must(['build'], pw.alice), /demo/);
   assert.match(must(['check']), /valid: 1 game/);
   assert.match(must(['build'], pw.alice), /unchanged/);                       // nothing changed → nothing rewritten

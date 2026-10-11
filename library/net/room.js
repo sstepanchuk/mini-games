@@ -19,7 +19,7 @@ export function newRoom({ game, code = '', lostAfter = 60000, relay, close, bye 
     topic: '', clients: [], br: [], seq: Date.now(), last: new Map(), ready: false, kickAt: -1e9, kAt: 0,
     heard: null, win: [], winAt: 0, peerBest: [], peerBestAt: -1e9, pubN: 0, early: [],
     // who is who
-    role: null, other: null, linked: false, weak: false, byeAt: 0, lastSeen: 0, lastWatch: 0, graceUntil: 0, failing: false,
+    role: null, other: null, linked: false, weak: false, byeAt: 0, lastSeen: 0, lastWatch: 0, watchMs: 0, graceUntil: 0, failing: false, up: false,
     // paths, numbering and ping (link.js)
     via: 'relay', viaAt: 0, q: [], qTimer: null, pingAt: 0, pN: 0, nudged: 0,
     // direct link (rtc.js)
@@ -84,8 +84,14 @@ export function newRoom({ game, code = '', lostAfter = 60000, relay, close, bye 
   return { N, room };
 }
 
-// the watchdog, several times a second (link.js); the time before its first tick is not sleep
-export const startWatch = N => { stop(N, 'watchTimer'); N.lastWatch = performance.now(); N.watchTimer = setInterval(() => watch(N), 200); };
+// The watchdog (link.js): 5 times a second while linked, once a second while not (there is only broker upkeep
+// to do then). It changes pace by itself; the time before its first tick is not sleep.
+const pace = N => N.linked ? 200 : 1000;
+export function startWatch(N) {
+  stop(N, 'watchTimer');
+  N.watchMs = pace(N); N.lastWatch = performance.now();
+  N.watchTimer = setInterval(() => { watch(N); if (!N.closed && pace(N) !== N.watchMs) startWatch(N); }, N.watchMs);
+}
 
 // both players are here and the link works
 export function markLinked(N) {
@@ -93,6 +99,7 @@ export function markLinked(N) {
   N.lastSeen = performance.now();
   N.weak = false; N.byeAt = 0; N.rtcTries = 0; N.rtcNext = performance.now() + 300;
   resetPaths(N);
+  if (N.watchTimer) startWatch(N);                     // at full pace from now on
   N.emit('status', 'ready');
   refresh(N);
   N.emit('linked');

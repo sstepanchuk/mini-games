@@ -5,7 +5,8 @@
      Everything else is public: the library itself, the list of games, who has access.
    - Each person has an ECDH P-256 key pair. keyring.json holds, per person, a "box" with the library
      key that only their private key opens, and their private key sealed with their password
-     (PBKDF2-SHA-256). People can be added or removed without knowing anyone else's password.
+     (PBKDF2-SHA-256, with a salt of their own: a guess has to be tried against each person separately).
+     People can be added or removed without knowing anyone else's password.
    - Every sealed file starts with the id of the library key it was sealed with (keyring.kid), so a
      file left behind by a key rotation is caught without a password (tools: check; site: "updating").
    ===================================================================== */
@@ -67,9 +68,9 @@ export function fileKid(blob) {
 export const openFile = (key, blob, aad) => unseal(key, new Uint8Array(blob).subarray(1 + KID), aad);
 
 /* ---------- keys derived from a password and from a key exchange ---------- */
-async function passwordKey(keyring, password) {
+async function passwordKey(keyring, salt, password) {
   const base = await subtle.importKey('raw', enc.encode(password.normalize('NFC')), 'PBKDF2', false, ['deriveKey']);
-  return subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: unb64(keyring.kdf.salt), iterations: keyring.kdf.iterations }, base, AES, false, ['encrypt', 'decrypt']);
+  return subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: unb64(salt), iterations: keyring.kdf.iterations }, base, AES, false, ['encrypt', 'decrypt']);
 }
 // ECDH + HKDF; both sides salt with the box's ephemeral public key (epk)
 async function boxKey(priv, pubRaw, epk, id) {
@@ -80,18 +81,19 @@ async function boxKey(priv, pubRaw, epk, id) {
 }
 
 /* ---------- keyring ---------- */
-export const KEYRING_V = 3;                            // format version (3: names are plain)
-export const newKeyring = () => ({ v: KEYRING_V, kid: '', kdf: { salt: b64(random(16)), iterations: 600000 }, people: [] });
+export const KEYRING_V = 4;                            // format version (4: a password salt per person)
+export const newKeyring = () => ({ v: KEYRING_V, kid: '', kdf: { iterations: 600000 }, people: [] });
+
+// a private key (PKCS#8) sealed with a password, under a new salt → { salt, priv }
+export async function sealPrivate(keyring, id, pkcs8, password) {
+  const salt = b64(random(16));
+  return { salt, priv: b64(await seal(await passwordKey(keyring, salt, password), pkcs8, label.priv(id))) };
+}
 
 // a new person: fresh key pair, private key sealed with their password (the caller adds name and box)
 export async function newPerson(keyring, id, password) {
   const pair = await subtle.generateKey(ECDH, true, ['deriveBits']);
-  const pkcs8 = await subtle.exportKey('pkcs8', pair.privateKey);
-  return {
-    id,
-    pub: b64(await subtle.exportKey('raw', pair.publicKey)),
-    priv: b64(await seal(await passwordKey(keyring, password), pkcs8, label.priv(id)))
-  };
+  return { id, pub: b64(await subtle.exportKey('raw', pair.publicKey)), ...await sealPrivate(keyring, id, await subtle.exportKey('pkcs8', pair.privateKey), password) };
 }
 
 // the library key in a box only this person can open (ephemeral-static ECDH)
@@ -102,15 +104,14 @@ export async function boxFor(person, libraryRaw) {
   return { epk: b64(epk), ct: b64(await seal(key, libraryRaw, label.box(person.id))) };
 }
 
-// Sign in: find the person whose private key this password opens. → { person, priv } or null
+// Sign in: find the person whose private key this password opens. One slow derivation per person (each has
+// their own salt), all at once. → { person, priv } or null
 export async function signIn(keyring, password) {
-  const key = await passwordKey(keyring, password);   // one slow derivation, then a cheap check per person
-  for (const person of keyring.people) {
-    let pkcs8 = null;
-    try { pkcs8 = await unseal(key, unb64(person.priv), label.priv(person.id)); } catch (e) { continue; }   // not theirs (or a damaged entry)
+  const tries = keyring.people.map(async person => {
+    const pkcs8 = await unseal(await passwordKey(keyring, person.salt, password), unb64(person.priv), label.priv(person.id));
     return { person, priv: await subtle.importKey('pkcs8', pkcs8, ECDH, false, ['deriveBits']) };
-  }
-  return null;
+  });
+  return Promise.any(tries).catch(() => null);         // nobody's (or a damaged entry)
 }
 
 // the raw library key from a person's box → Uint8Array, or null if they are no longer in the keyring
@@ -125,8 +126,7 @@ export async function libraryKey(keyring, id, priv) {
 // git history, and the old password would still open it. The old box in history holds the same library
 // key, so the tools also rotate the library key after this (see tools/cli.js: passwd).
 export async function replaceKeys(keyring, person, newPassword, libraryRaw) {
-  const fresh = await newPerson(keyring, person.id, newPassword);
-  person.pub = fresh.pub;
-  person.priv = fresh.priv;
+  const { pub, salt, priv } = await newPerson(keyring, person.id, newPassword);
+  Object.assign(person, { pub, salt, priv });
   person.box = await boxFor(person, libraryRaw);
 }
