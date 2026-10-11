@@ -144,13 +144,12 @@ const curRtt = P => P.via === 'p2p' ? (P.rD != null ? P.rD : P.rR) : (P.rR != nu
 // round trip to show: on the direct path the browser's own network measurement (unaffected by how busy the page is)
 const netRtt = P => { const r = curRtt(P); return r != null && P.via === 'p2p' && P.iceRtt != null ? Math.min(r, P.iceRtt + 1) : r; };
 
-// One-way delay estimate: half the round trip of the path in use. On the direct path the browser's own
-// network measurement is used when smaller: what needs evening out is the network, not a busy phone.
+// One-way delay estimate: half the round trip of the path in use, as our own messages make it (the median of the
+// last few pings). Not the browser's network measurement: a message also waits in the other phone's busy page and
+// in the data channel's queue, and a game evens out what the players actually get.
 export function lag(P) {
-  let r = P.linked ? curRtt(P) : null;
-  if (r == null) return 0;
-  if (P.via === 'p2p' && P.iceRtt != null) r = Math.min(r, P.iceRtt + 12);
-  return Math.min(300, r / 2);
+  const r = P.linked ? curRtt(P) : null;
+  return r == null ? 0 : Math.min(300, r / 2);
 }
 
 function pickRoute(P) {
