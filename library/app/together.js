@@ -8,13 +8,13 @@
      lib-here  { v: game id | null }           "my copy of this game is open and listening"
    The screens for all this are in invite.js; it follows the room through onChange.
    ===================================================================== */
-import { joinNearby, joinRoom, preload, validRoomCode } from '../net/index.js';
+import { joinNearby, joinRoom, validRoomCode } from '../net/index.js';
 import { safe } from './dom.js';
 
 const LIB = 'ihroteka';                                  // the room namespace of the whole library
 const LAST = 'ihroteka-room';                            // the last internet room: the same link keeps working
 
-let shell = null;                                        // { current() → id | null, follow(id), invite() }
+let shell = null;                                        // { current() → game id | null, follow(id), invite(), address(id) }
 let room = null;                                         // the room (see ../net), with .kind and .lastStatus
 let seq = 0;                                             // version of the shared view
 let peerHere = null, myHere = null;                      // which game each side has open and listening
@@ -23,13 +23,12 @@ const listeners = new Set();
 
 export function initTogether(s) {
   shell = s;
-  setTimeout(preload, 1500);                             // the internet transport, before anyone needs it
   const code = (new URLSearchParams(location.search).get('room') || '').toLowerCase();
   if (validRoomCode(code)) startInternet(code);         // opened from a friend's link
 }
 
 /* ---------- the room ---------- */
-export const current = () => room;
+export const currentRoom = () => room;
 export const linked = () => !!room && room.linked;
 const inGame = () => linked() && !!ch && myHere === ch.id && peerHere === ch.id;
 const send = m => { if (linked()) room.send(m); };

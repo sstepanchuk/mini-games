@@ -9,9 +9,14 @@ const CACHE = 'ihroteka-' + VERSION, FONT_CACHE = 'ihroteka-fonts';
 const BASE = new URL('./', self.location).href;
 
 self.addEventListener('install', e => e.waitUntil((async () => {
-  const cache = await caches.open(CACHE);
   // straight from the server, past the HTTP cache: a stale keyring next to fresh files would not open them
-  await cache.addAll(FILES.map(f => new Request(BASE + f, { cache: 'reload' })));
+  const all = () => caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(BASE + f, { cache: 'reload' }))));
+  try { await all(); }
+  catch (err) {                                        // no room for two copies: drop the old one first (online anyway)
+    if (err.name !== 'QuotaExceededError') throw err;
+    for (const k of await caches.keys()) if (k.startsWith('ihroteka-') && k !== FONT_CACHE) await caches.delete(k);
+    await all();
+  }
   await Promise.all(FONTS.map(url => storeFont(url).catch(() => {})));   // fonts are a nicety: never fail on them
   await self.skipWaiting();
 })()));

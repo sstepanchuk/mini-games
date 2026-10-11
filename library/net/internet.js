@@ -63,7 +63,7 @@ const pub = (N, obj) => { if (!N.closed) pubOn(N, obj); };
 
 // a broker just connected: bring it up to date with what is going on in the room
 function connected(N, c) {
-  if (N.other && N.linked) { try { c.subscribe(N.topic + '/d/' + N.other, { qos: 0 }); } catch (e) {} }
+  if (N.heard) { try { c.subscribe(N.topic + '/d/' + N.heard, { qos: 0 }); } catch (e) {} }   // the mailbox we listen to, here too
   if (!N.ready) { N.ready = true; clearTimeout(N.failTimer); discover(N); }
   else if (N.role === null) pub(N, { t: 'who' });               // still looking: ask on this broker too
   else if (N.role === 'host' && !N.linked) pub(N, { t: 'host' }); // waiting for the guest: announce here too
@@ -120,7 +120,7 @@ function onMessage(N, m, c) {
       break;
     case 'd':                                          // game data through the brokers
       if (!N.linked && from === N.other && Array.isArray(m.d) && N.role === 'guest') {   // a moment before 'hi'
-        if (N.early.length < 64) N.early.push(...m.d);
+        for (const x of m.d) if (N.early.length < 64) N.early.push(x);
         break;
       }
       if (N.linked && from === N.other && Array.isArray(m.d)) {
@@ -141,7 +141,7 @@ function onMessage(N, m, c) {
 // is anyone in the room? if nobody answers, we are first
 function discover(N) {
   stop(N, 'whoTimer', 'annTimer', 'helloTimer');
-  N.other = null;
+  N.other = null; N.early = [];
   listenTo(N, null);
   setRole(N, null);
   pub(N, { t: 'who' });

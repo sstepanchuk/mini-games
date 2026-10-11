@@ -7,7 +7,7 @@ import { $, root } from './dom.js';
 import { installHint, keepFiles, registerWorker } from './install.js';
 import { openGame, openShelf, preloadGame, signOut, whenSignedIn } from './lock.js';
 import { startShell } from './shell.js';
-import { current } from './together.js';
+import { currentRoom } from './together.js';
 
 /**
  * game  the game this page belongs to (its public page), if any
@@ -20,8 +20,9 @@ export async function boot({ game, dev } = {}) {
       startShell({ games: dev.games, initial: game, loader: async g => ({ src: new URL(g.id + '/?frame', root).href }) });
       return;
     }
-    // a new version of the library arrived: reload when it disturbs nobody (on the shelf, alone, no dialog)
-    registerWorker({ onUpdate: () => { if (!document.querySelector('.frame, .backdrop') && !current()) location.reload(); } });
+    // a new version of the library arrived: reload as soon as it disturbs nobody (on the shelf, alone, no dialog)
+    const idle = () => $('stage').hidden && !document.querySelector('.backdrop') && !currentRoom();
+    registerWorker({ onUpdate: () => { if (idle()) location.reload(); else setInterval(() => { if (idle()) location.reload(); }, 5000); } });
     if (game) preloadGame(game);                       // the game starts downloading at once
     const games = await openShelf();
     startShell({ games, initial: game, loader: async g => ({ srcdoc: await openGame(g) }), signOut, whenSignedIn });

@@ -12,7 +12,7 @@
 // room.pair.vpn: one of the devices runs a VPN (a likely reason for 'blocked').
 // room.pair.report() describes what happened, for bug reports.
 // The pairing screens (QR codes, camera) are the library's: app/invite.js.
-import { closeRtc, wireDc } from './rtc.js';
+import { closeRtc, openChannels, wireDc } from './rtc.js';
 import { ANSWER, OFFER, candidates, decode, describe, encode } from './code.js';
 import { markLinked, newRoom, setRole, startWatch, stop } from './room.js';
 
@@ -20,7 +20,6 @@ const GATHER_MS = 3000, CONNECT_MS = 20000;
 
 export function joinNearby({ game, lostAfter }) {
   const { N, room } = newRoom({ game, lostAfter, relay: false, close: N => stop(N, 'failTimer'), bye: () => {} });
-  N.early = [];
   N.peerGone = N.byeFrom = () => ended(N);
   N.onDirect = open => {
     if (open && !N.linked && !N.closed) { stop(N, 'failTimer'); note('linked'); markLinked(N); startWatch(N); }
@@ -77,8 +76,7 @@ export function joinNearby({ game, lostAfter }) {
     // host: a new offer → code to show
     async offer() {
       const pc = fresh('host');
-      wireDc(N, pc, pc.createDataChannel('fast', { ordered: false, maxRetransmits: 0 }));
-      wireDc(N, pc, pc.createDataChannel('ctl', { ordered: true }));
+      openChannels(N, pc);
       await pc.setLocalDescription(await pc.createOffer());
       return ours(pc, OFFER);
     },
@@ -122,6 +120,7 @@ async function fail(N, pc, pair, note) {
   stop(N, 'failTimer');
   pair.reason = !pair.local ? 'here' : !pair.remote ? 'there' : 'blocked';
   note('pairs tried: ' + ((await pairsOf(pc)) || pair.tried() || 'none'));
+  if (N.closed || N.linked) { N.failing = false; return; }   // linked (or left) meanwhile
   note('failed: ' + pair.reason);
   closeRtc(N);
   N.failing = false;

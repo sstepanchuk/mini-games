@@ -4,17 +4,20 @@
 //
 // Messages are plain objects with a string `t` ('p', 'q' and 'bye' are the link's own). Reliable ones get a
 // number `_x` and run exactly once even when they arrive by both paths; fast ones (no `_x`) may be lost or
-// reordered — the game numbers them itself if it cares.
+// reordered — the game numbers them itself if it cares. A reliable message sent only directly is kept for a
+// moment: if the direct link turns out dead (it takes a second to notice), it goes again through the brokers.
 import { BROKERS } from './config.js';
 import { bestBrokers, brokerDiag, kickBrokers, pubData, tendBrokers } from './brokers.js';
 import { closeRtc, dcFresh, dcHear, dcLive, probeLink, startRtc } from './rtc.js';
 
 const RX_WINDOW = 512;                                 // how many reliable message numbers we remember
+const UNSURE_MS = 2500;                                // how long a message sent only directly is kept for a resend
 
 // a new other player (or the same person in a new tab): measurements and numbering start over
 export function resetPaths(N) {
   N.tx = 0; N.rxSet = new Set(); N.rxMax = 0; N.pts = -1; N.byePts = -1; N.suspect = -1e9;
   N.rD = N.rR = null; N.sD = []; N.sR = []; N.qD = N.qR = -1; N.slowDirect = false; N.peerRtt = null;
+  N.unsure = []; N.wasFresh = false;
 }
 
 /* ---------- sending ---------- */
@@ -25,7 +28,7 @@ export function send(N, m, { fast = false, batch = false } = {}) {
   if (!N.relay) { if (dcLive(N)) { try { (fast ? N.dcF : N.dcC).send(JSON.stringify(m)); } catch (e) {} } return; }   // nearby: the direct link is all there is
   if (dcLive(N) && N.via === 'p2p') {
     try { (fast ? N.dcF : N.dcC).send(JSON.stringify(m)); } catch (e) {}
-    if (dcFresh(N)) return;                            // the direct link is alive: that is enough
+    if (dcFresh(N)) { if (!fast) N.unsure.push([performance.now(), m]); return; }   // the direct link is alive: that is enough
   }
   // through the brokers (no direct path, it went quiet, or it is slower)
   N.q.push(m);
@@ -56,7 +59,7 @@ export function deliver(N, m, viaRelay) {
     delete m._x;
     N.rxSet.add(x);
     if (x > N.rxMax) N.rxMax = x;
-    if (N.rxSet.size > 2 * RX_WINDOW) for (const x of N.rxSet) if (x <= N.rxMax - RX_WINDOW) N.rxSet.delete(x);
+    if (N.rxSet.size > 2 * RX_WINDOW) for (const y of N.rxSet) if (y <= N.rxMax - RX_WINDOW) N.rxSet.delete(y);
   }
   if (m.r === 1) N.suspect = now;                      // the other player says they cannot hear us directly
   if (m.t === 'p') {                                   // pulse and ping
@@ -159,6 +162,7 @@ export function watch(N) {
     if (dc) sendDirect(N, p);
     if (!dc || N.via !== 'p2p' || !dcFresh(N) || N.pN % 6 === 0) sendRelay(N, p);   // through the brokers when the game goes that way, and now and then to measure
   }
+  resendUnsure(N, now);
   N.emit('tick', now);
   if (now < N.graceUntil) return;
   const quiet = now - N.lastSeen;
@@ -174,6 +178,15 @@ export function watch(N) {
     startRtc(N);
   }
   if (pickRoute(N) !== N.via || now - N.viaAt > 1000) refresh(N);
+}
+
+// Reliable messages sent only directly in the last moments: once the direct link stops being fresh, they may
+// sit in a dead channel, so they go again through the brokers (the other side drops a second copy by _x).
+function resendUnsure(N, now) {
+  const fresh = dcFresh(N), u = N.unsure;
+  while (u.length && now - u[0][0] > UNSURE_MS) u.shift();
+  if (N.wasFresh && !fresh && N.relay && u.length) { for (const [, m] of u) N.q.push(m); u.length = 0; flushRelay(N); }
+  N.wasFresh = fresh;
 }
 
 // the link to the other player went quiet or came back

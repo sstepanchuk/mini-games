@@ -115,7 +115,10 @@ function passwordDialog(game) {
 
 /* ---------- a game's page ---------- */
 // Right after a key rotation the server may briefly hand out the new keyring with an old file (or the other way
-// round): then both are fetched again past every cache, once. Failures carry a message for the player (error.say).
+// round): then both are fetched again past every cache, once, and the library key is opened again from the new
+// keyring (the device remembers what it needs: no password). With the offline copy in charge, sw.js answers
+// from one consistent version, so this happens when a new version took over while this page was open.
+// Failures carry a message for the player (error.say).
 async function openSealed(file, aad, game, blob = prefetch(file)) {
   for (let retry = false; ; retry = true) {
     const key = await unlock(game), kr = await keyring();
@@ -128,6 +131,7 @@ async function openSealed(file, aad, game, blob = prefetch(file)) {
     if (retry) throw fail(MSG.updating, new Error(file + ': key id differs from keyring.json'));
     blob = prefetch(file, 'reload');
     await keyring('reload').catch(() => {});
+    keyP = null;
   }
 }
 const early = new Map();

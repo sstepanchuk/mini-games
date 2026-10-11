@@ -191,6 +191,7 @@ function onRaw(N, p, c) {
   if (qi > 0 && fi > 0) {
     const f = str.slice(fi + 5, str.indexOf('"', fi + 5));
     if (f !== me) { const w = N.last.get(f); if (w && w.set.has(parseInt(str.slice(qi + 4), 10))) return; }
+    else if (!str.startsWith('{"t":"k"')) { c._echo = true; return; }   // our own echo: only 'k' carries something to read
   }
   let m;
   try { m = JSON.parse(str); } catch (e) { return; }

@@ -7,7 +7,11 @@ import { $, el, root, safe } from './dom.js';
 import { initInvite, openDialog } from './invite.js';
 import { attachGame, detachGame, initTogether, leave, query, state, viewChanged } from './together.js';
 
-let games = [], current, frame = null, load = null, following = false;   // current: the open game id, null on the shelf (undefined before the first view)
+let games = [], current, frame = null, load = null, loads = 0;   // current: the open game id, null on the shelf (undefined before the first view)
+// Going back to the shelf is history.back() when the shelf is the entry before (Back then works as expected);
+// the view shows when popstate comes. Meanwhile: who asked (following), and a view asked for since (queued).
+const DOC = Math.random().toString(36).slice(2);       // marks this page's own history entries (not those of a reload)
+let backing = false, following = false, queued = null;
 
 /**
  * games         [{ id, title, tagline, image, emoji }]
@@ -27,12 +31,18 @@ export function startShell({ games: list, initial, loader, signOut, whenSignedIn
     $('sign-out').addEventListener('click', async () => { leave(); await signOut(); $('sign-out').hidden = true; });
     whenSignedIn(() => { $('sign-out').hidden = false; });
   }
-  addEventListener('popstate', () => { const byPeer = following; following = false; show(fromAddress(), true, byPeer); });
+  addEventListener('popstate', () => {
+    const byPeer = following;
+    backing = following = false;
+    show(fromAddress(), byPeer);
+    history.replaceState(history.state, '', address(current));   // the room in the address (?room=) is today's, not that entry's
+    if (queued) { const [id, p] = queued; queued = null; go(id, p); }
+  });
   $('busy').hidden = true;
-  const views = { current: () => current ?? null, follow: id => go(id, true), invite: openDialog };
+  const views = { current: () => current ?? null, follow: id => go(id, true), invite: openDialog, address: () => address(current) };
   initInvite(views);
   initTogether(views);
-  show(initial && find(initial) ? initial : null, true);
+  show(initial && find(initial) ? initial : null);
 }
 
 const find = id => games.find(g => g.id === id);
@@ -47,15 +57,18 @@ function card(g) {
 
 // Go to a view. From the shelf into a game is a step in history (Back returns to the shelf); everything else
 // replaces the current entry. byPeer: the friend went there (we follow, and do not tell them back).
+// A game this library does not have (the friend's library may be newer) means the shelf.
 export function go(id, byPeer = false) {
+  if (id && !find(id)) id = null;
+  if (backing) { queued = [id, byPeer]; return; }
   if (id === current) return;
-  if (!id && history.state && history.state.ihroteka === 'game') { following = byPeer; history.back(); return; }   // popstate shows the shelf
-  if (id && !current) history.pushState({ ihroteka: 'game' }, '', address(id));
-  else history.replaceState(null, '', address(id));
-  show(id, false, byPeer);
+  if (!id && history.state?.doc === DOC) { backing = true; following = byPeer; history.back(); return; }
+  if (id && !current) history.pushState({ doc: DOC }, '', address(id));
+  else history.replaceState(history.state, '', address(id));
+  show(id, byPeer);
 }
 
-function show(id, fromHistory, byPeer = false) {
+function show(id, byPeer = false) {
   if (id === current) return;
   closeFrame();
   current = id;
@@ -64,22 +77,23 @@ function show(id, fromHistory, byPeer = false) {
   $('shelf').hidden = !!g;
   $('stage').hidden = !g;
   viewChanged(id, byPeer);
-  if (g) openFrame(g);
+  if (g) openFrame(g, byPeer);
 }
 
-async function openFrame(g) {
-  const note = $('stage-note'), say = (text, cls) => { $('stage-text').textContent = text; $('stage-text').className = cls; $('stage-back').hidden = cls !== 'err'; };
+// byPeer: the friend opened it (then a cancelled password keeps us here, instead of taking the friend away too)
+async function openFrame(g, byPeer) {
+  const t = ++loads, note = $('stage-note'), say = (text, cls) => { $('stage-text').textContent = text; $('stage-text').className = cls; };
   say('Відкриваю гру…', 'busy'); note.hidden = false;
   let page;
   try { page = await load(g); }
   catch (e) {
-    if (current !== g.id) return;
-    if (e.cancelled) { go(null); return; }             // no password: back to the shelf
-    console.error(e);
-    say(e.say || 'Не вдалося відкрити гру. Онови сторінку.', 'err');
+    if (t !== loads || current !== g.id) return;
+    if (e.cancelled && !byPeer) { go(null); return; }  // no password: back to the shelf
+    if (!e.cancelled) console.error(e);
+    say(e.cancelled ? 'Друг відкрив цю гру. Щоб грати, потрібен пароль.' : e.say || 'Не вдалося відкрити гру. Онови сторінку.', 'err');
     return;
   }
-  if (current !== g.id) return;                          // switched elsewhere meanwhile
+  if (t !== loads || current !== g.id) return;          // switched elsewhere meanwhile (or reopened: a newer load is on its way)
   frame = el('iframe', { className: 'frame', title: g.title });
   frame.allow = 'fullscreen; screen-wake-lock; autoplay; gamepad; camera';
   frame.setAttribute('allowfullscreen', '');
@@ -89,6 +103,7 @@ async function openFrame(g) {
 }
 
 function closeFrame() {
+  loads++;                                               // a load still running is for nothing now
   if (!frame) return;
   detachGame();
   frame.remove();

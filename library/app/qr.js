@@ -17,8 +17,10 @@ export function drawQr(canvas, text, px = 260) {
 
 // The camera, kept on for the whole pairing: while it runs, browsers also reveal this device's real local
 // addresses to WebRTC instead of hidden mDNS names, which makes a link between two phones more likely.
+const safeScan = (scan, image) => { try { return scan(image); } catch (e) { return null; } };
+
 export class Camera {
-  constructor(video) { this.video = video; this.stream = null; this.detect = null; this.stopped = false; }
+  constructor(video) { this.video = video; this.stream = null; this.detect = null; this.stopped = false; this.run = null; }
   async start() {
     if (this.stream) return true;
     let stream;
@@ -32,39 +34,42 @@ export class Camera {
     try { await this.video.play(); } catch (e) {}
     return true;
   }
-  // resolves with the first QR text that test(text) accepts; stop() ends it with null
+  // resolves with the first QR text that test(text) accepts; a newer read() or stop() ends it with null
   async read(test) {
-    const detect = await this.detector();
-    const c = document.createElement('canvas'), g = c.getContext('2d', { willReadFrequently: true });
-    this.reading = true;
-    while (this.reading && this.stream) {
+    const run = this.run = {}, { detect, native } = await this.detector();
+    const c = native ? null : document.createElement('canvas'), g = c && c.getContext('2d', { willReadFrequently: true });
+    while (this.run === run && this.stream) {
       await new Promise(r => setTimeout(r, 160));
       const v = this.video, w = v.videoWidth, h = v.videoHeight;
-      if (!w || !h) continue;
-      const k = Math.min(1, 640 / Math.max(w, h)), cw = Math.round(w * k), chh = Math.round(h * k);
-      if (c.width !== cw || c.height !== chh) { c.width = cw; c.height = chh; }
-      g.drawImage(v, 0, 0, c.width, c.height);
+      if (!w || !h || this.run !== run) continue;
       let text = null;
-      try { text = await detect(c, g); } catch (e) {}
-      if (text && test(text)) { this.reading = false; return text; }
+      if (native) text = await detect(v).catch(() => null);   // the browser reads the video itself
+      else {
+        const k = Math.min(1, 640 / Math.max(w, h)), cw = Math.round(w * k), ch = Math.round(h * k);
+        if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
+        g.drawImage(v, 0, 0, cw, ch);
+        text = safeScan(detect, g.getImageData(0, 0, cw, ch));
+      }
+      if (text && this.run === run && test(text)) { this.run = null; return text; }
     }
     return null;
   }
+  // → { detect, native }: the browser's own QR reader where there is one, else jsQR (from the offline copy too)
   async detector() {
     if (this.detect) return this.detect;
     if ('BarcodeDetector' in window) {
       try {
         if ((await BarcodeDetector.getSupportedFormats()).includes('qr_code')) {
           const d = new BarcodeDetector({ formats: ['qr_code'] });
-          return this.detect = async c => (await d.detect(c))[0]?.rawValue || null;
+          return this.detect = { native: true, detect: async v => (await d.detect(v))[0]?.rawValue || null };
         }
       } catch (e) {}
     }
     const { scan } = await import(new URL('lib/qr-scan.js', root).href);
-    return this.detect = (c, g) => scan(g.getImageData(0, 0, c.width, c.height));
+    return this.detect = { native: false, detect: scan };
   }
   stop() {
-    this.reading = false; this.stopped = true;
+    this.run = null; this.stopped = true;
     if (this.stream) for (const t of this.stream.getTracks()) t.stop();
     this.stream = null; this.video.srcObject = null;
   }

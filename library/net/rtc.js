@@ -24,8 +24,14 @@ export const dcFresh = N => dcHear(N) && performance.now() - N.suspect > 1500;
 
 const signal = (N, m) => { if (N.linked) pubOn(N, Object.assign(m, { t: 'rtc', to: N.other })); };
 
+// the offering side opens both channels: 'fast' (unordered, no resends) and 'ctl' (ordered, reliable)
+export function openChannels(N, pc) {
+  wireDc(N, pc, pc.createDataChannel('fast', { ordered: false, maxRetransmits: 0 }));
+  wireDc(N, pc, pc.createDataChannel('ctl', { ordered: true }));
+}
+
 export function closeRtc(N) {
-  clearTimeout(N.rtcTimer);
+  clearTimeout(N.rtcTimer); N.rtcTimer = null;
   const pc = N.pc, a = N.dcF, b = N.dcC;
   N.pc = null; N.dcF = null; N.dcC = null; N.iceQ = []; N.rtcK = null; N.via = 'relay'; N.turn = null; N.cand = ''; N.iceRtt = null; N.rD = null; N.sD = []; N.slowDirect = false;
   try { if (a) a.close(); } catch (e) {}
@@ -75,8 +81,7 @@ export function startRtc(N) {
   if (!pc) return;
   N.rtcK = Date.now() % 1e9;
   // fast channel: no ordering, no retransmits — a lost packet does not hold up the next ones
-  wireDc(N, pc, pc.createDataChannel('fast', { ordered: false, maxRetransmits: 0 }));
-  wireDc(N, pc, pc.createDataChannel('ctl', { ordered: true }));
+  openChannels(N, pc);
   pc.createOffer().then(o => pc.setLocalDescription(o)).then(() => {
     if (N.pc === pc) signal(N, { k: N.rtcK, sdp: { type: 'offer', sdp: pc.localDescription.sdp } });
   }).catch(() => {});

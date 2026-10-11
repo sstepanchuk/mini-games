@@ -1,6 +1,6 @@
 // The library as an app on the phone: the service worker keeps every file for offline use (sw.js),
 // and the shelf tells how to install it ("Add to Home Screen" on iPhone, the install button elsewhere).
-import { $, root } from './dom.js';
+import { $, btn, root } from './dom.js';
 
 const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
@@ -25,10 +25,7 @@ export function installHint() {
   addEventListener('beforeinstallprompt', e => {
     e.preventDefault();
     box.replaceChildren('Ігротека може працювати як застосунок, навіть без інтернету. ');
-    const b = document.createElement('button');
-    b.className = 'btn ghost'; b.type = 'button'; b.textContent = 'Встановити';
-    b.onclick = () => { e.prompt(); e.userChoice.finally(() => { box.hidden = true; }); };
-    box.append(b);
+    box.append(btn('Встановити', () => { e.prompt(); e.userChoice.finally(() => { box.hidden = true; }); }, 'btn ghost'));
     box.hidden = false;
   });
   addEventListener('appinstalled', () => { box.hidden = true; });

@@ -6,17 +6,20 @@ export const safe = (fn, ...a) => { try { return fn(...a); } catch (e) { console
 export const btn = (text, onclick, className = 'btn') => el('button', { className, type: 'button', textContent: text, onclick });
 export const para = (text, className = '') => el('p', { className, textContent: text });
 
-// A dialog over everything. Escape, a tap outside it or close() closes it; onClose runs once.
-// Focus moves into it and comes back where it was when it closes.
+// A dialog over everything. Escape (the topmost dialog only), a tap outside it or close() closes it; onClose
+// runs once. Focus moves into it and comes back where it was when it closes; the page behind is inert meanwhile.
+const behind = () => [$('busy'), $('shelf'), $('stage')];
+const dialogs = () => $('layer').querySelectorAll('.backdrop');
 export function modal(onClose = () => {}) {
   const box = el('div', { className: 'dialog card', role: 'dialog', tabIndex: -1 }), back = el('div', { className: 'backdrop' }, box);
   box.setAttribute('aria-modal', 'true');
   const before = document.activeElement;
-  const onKey = e => { if (e.key === 'Escape') close(); };
+  const onKey = e => { if (e.key === 'Escape' && [...dialogs()].pop() === back) close(); };
   const close = () => {
     if (!back.isConnected) return;
     back.remove();
     removeEventListener('keydown', onKey);
+    if (!dialogs().length) for (const n of behind()) n.inert = false;
     if (before && before.isConnected && before.focus) before.focus();
     onClose();
   };
@@ -24,6 +27,7 @@ export function modal(onClose = () => {}) {
   back.addEventListener('click', e => { if (e.target === back) close(); });
   addEventListener('keydown', onKey);
   $('layer').append(back);
+  for (const n of behind()) n.inert = true;
   return { box, close, show: (...nodes) => box.replaceChildren(...nodes) };
 }
 

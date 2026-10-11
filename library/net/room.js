@@ -17,9 +17,9 @@ export function newRoom({ game, code = '', lostAfter = 60000, relay, close, bye 
     // brokers (brokers.js); seq starts from the clock, so numbers of a new connection never collide with what
     // the other player remembers from our previous one
     topic: '', clients: [], br: [], seq: Date.now(), last: new Map(), ready: false, kickAt: -1e9, kAt: 0,
-    heard: null, win: [], winAt: 0, peerBest: [], peerBestAt: -1e9, pubN: 0,
+    heard: null, win: [], winAt: 0, peerBest: [], peerBestAt: -1e9, pubN: 0, early: [],
     // who is who
-    role: null, other: null, linked: false, weak: false, byeAt: 0, lastSeen: 0, lastWatch: performance.now(), graceUntil: 0,
+    role: null, other: null, linked: false, weak: false, byeAt: 0, lastSeen: 0, lastWatch: 0, graceUntil: 0, failing: false,
     // paths, numbering and ping (link.js)
     via: 'relay', viaAt: 0, q: [], qTimer: null, pingAt: 0, pN: 0, nudged: 0,
     // direct link (rtc.js)
@@ -60,6 +60,8 @@ export function newRoom({ game, code = '', lostAfter = 60000, relay, close, bye 
       stop(N, 'qTimer', 'watchTimer');
       closeRtc(N);
       removeEventListener('pagehide', onPageHide);
+      document.removeEventListener('visibilitychange', onShow);
+      removeEventListener('pageshow', onShow);
     }
   };
   Object.assign(N, {
@@ -75,11 +77,15 @@ export function newRoom({ game, code = '', lostAfter = 60000, relay, close, bye 
     try { bye(N); } catch (e) {}
   };
   addEventListener('pagehide', onPageHide);
+  // back on screen (a background tab may have been throttled to a timer a second, too little to count as sleep)
+  const onShow = () => { if (!document.hidden) kick(N); };
+  document.addEventListener('visibilitychange', onShow);
+  addEventListener('pageshow', onShow);
   return { N, room };
 }
 
-// the watchdog, several times a second (link.js)
-export const startWatch = N => { N.watchTimer = setInterval(() => watch(N), 200); };
+// the watchdog, several times a second (link.js); the time before its first tick is not sleep
+export const startWatch = N => { stop(N, 'watchTimer'); N.lastWatch = performance.now(); N.watchTimer = setInterval(() => watch(N), 200); };
 
 // both players are here and the link works
 export function markLinked(N) {
@@ -90,7 +96,7 @@ export function markLinked(N) {
   N.emit('status', 'ready');
   refresh(N);
   N.emit('linked');
-  const early = N.early || [];                         // what arrived a moment before the link opened
+  const early = N.early;                               // what arrived a moment before the link opened
   N.early = [];
   for (const m of early) deliver(N, m, N.relay);
 }
