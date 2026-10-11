@@ -285,7 +285,7 @@ function channel(id, seats) {
       if (name === 'message' && inbox.length) queueMicrotask(() => { for (const [m, from] of inbox.splice(0)) c.emit('message', m, from); });
       return api;
     },
-    // to every other player, or { to: name }; { fast, batch } as in ../net/link.js
+    // to every other player, or { to: name }; { fast, latest } as in ../net/link.js
     send(msg, { to, ...opts } = {}) {
       if (!api.linked || !msg || typeof msg.t !== 'string') return;
       const o = c.others, out = { t: 'lib-g', v: id, m: msg };

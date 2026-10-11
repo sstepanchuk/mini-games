@@ -69,7 +69,7 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, close
     streaming: () => false,                            // the host streams state every frame (a direct link counts as dead sooner)
     pulse: null,                                       // (now) => object: extra fields for the pulse sent 5 times a second
     on(name, fn) { ev.on(name, fn); return room; },
-    // to everyone else, or { to: name }; also { fast, batch } (see link.js)
+    // to everyone else, or { to: name }; also { fast, latest } (see link.js)
     send(msg, { to, ...opts } = {}) {
       if (!msg || typeof msg.t !== 'string' || RESERVED.has(msg.t) || msg.t[0] === '_') throw new Error('room: a message needs a string t, not starting with _ and other than ' + [...RESERVED].join(', '));
       if (to !== name) sendRoom(N, msg, to, opts);
@@ -128,7 +128,7 @@ export function newPeer(N, id, name = '') {
     // brokers: whether we listen to their mailbox, which brokers bring their data first, which bring ours to them
     heard: false, win: [], peerBest: [], peerBestAt: -1e9,
     // paths, numbering and ping (link.js)
-    via: 'relay', viaAt: 0, q: [], qTimer: null, pingAt: 0, pN: 0, nudged: 0,
+    via: 'relay', viaAt: 0, q: [], qLatest: new Map(), relayAt: 0, qTimer: null, ackTimer: null, pingAt: 0, pN: 0, nudged: 0,
     // direct link (rtc.js)
     pc: null, dcF: null, dcC: null, dcSeen: 0, dcBorn: 0, iceQ: [], rtcK: null, rtcNext: 0, rtcTries: 0, rtcTimer: null,
     turn: null, cand: '', iceRtt: null, statsAt: 0, failing: false
@@ -144,8 +144,8 @@ export function renamePeer(N, P, id) {
   P.id = id;
 }
 export function closePeer(P) {
-  stop(P, 'qTimer');
-  P.q = [];
+  stop(P, 'qTimer'); stop(P, 'ackTimer');
+  P.q = []; P.qLatest.clear();
   closeRtc(P);
 }
 

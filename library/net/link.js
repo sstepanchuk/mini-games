@@ -13,6 +13,8 @@ import { bestBrokers, brokerDiag, kickBrokers, pubData, tendBrokers } from './br
 import { closeRtc, dcFresh, dcHear, dcLive, dcQuiet, probeLink, startRtc } from './rtc.js';
 import { holdOver, hostPeer, linkedPeers, weakChanged } from './room.js';
 
+const RELAY_EVERY = 33;                                // a "latest" stream goes through the brokers at most this often, ms
+const ACK_DELAY = 25;                                  // reliable messages that came: say so this soon (with the next ones)
 const OUTBOX_MAX = 5000;                               // reliable messages not yet acknowledged: more means they are gone
 const HOLD_MAX = 4096;                                 // messages that overtook a missing one, waiting for it
 const RESEND_PER_TICK = 64;
@@ -25,8 +27,10 @@ export function resetPaths(P) {
 }
 
 /* ---------- sending ---------- */
-// fast: unordered, may be lost (state, aim); batch: through the brokers, wait up to 45 ms for two more
-export function send(P, m, { fast = false, batch = false } = {}) {
+// fast: unordered, may be lost (state, aim). latest (with fast): each one makes the previous one of its stream
+// useless (a full state, say): through the brokers only the newest goes, at most every RELAY_EVERY ms — less
+// traffic, and nothing waits behind older ones. latest: true or a stream name.
+export function send(P, m, { fast = false, latest = false } = {}) {
   const N = P.N;
   if (N.closed || !P.linked) return;
   if (!fast) {
@@ -34,10 +38,10 @@ export function send(P, m, { fast = false, batch = false } = {}) {
     P.outbox.push({ m, at: performance.now(), n: 1 });
     if (P.outbox.length > OUTBOX_MAX) { queueMicrotask(() => { if (P.linked) N.peerGone(P); }); return; }   // they have not heard us for ages (not now: we may be in a loop over the links)
   }
-  transmit(P, m, fast, batch);
+  transmit(P, m, fast, fast && latest ? (latest === true ? '' : String(latest)) : null);
 }
 // by the path in use; while the direct link is not sure, through the brokers as well
-function transmit(P, m, fast, batch) {
+function transmit(P, m, fast, stream) {
   const N = P.N;
   if (!N.relay) { if (dcLive(P)) { try { (fast ? P.dcF : P.dcC).send(JSON.stringify(m)); } catch (e) {} } return; }   // nearby: the direct link is all there is
   if (dcLive(P) && P.via === 'p2p') {
@@ -45,9 +49,11 @@ function transmit(P, m, fast, batch) {
     if (dcFresh(P)) return;                            // the direct link is alive: that is enough
   }
   // through the brokers (no direct path, it went quiet, or it is slower)
-  P.q.push(m);
-  if (!batch || P.q.length >= 3) flushRelay(P);
-  else if (!P.qTimer) P.qTimer = setTimeout(() => flushRelay(P), 45);
+  if (stream === null) { P.q.push(m); flushRelay(P); return; }
+  P.qLatest.set(stream, m);                            // replaces an older one still waiting
+  const wait = RELAY_EVERY - (performance.now() - P.relayAt);
+  if (wait <= 0) flushRelay(P);
+  else if (!P.qTimer) P.qTimer = setTimeout(() => flushRelay(P), wait);
 }
 // The other side has everything up to `a`: those leave the outbox.
 function acked(P, a) {
@@ -65,7 +71,7 @@ function resend(P, now) {
   for (const e of P.outbox) {
     if (now - e.at < rto * Math.min(e.n, 4)) continue;
     e.at = now; e.n++;
-    transmit(P, e.m, false, false);
+    transmit(P, e.m, false, null);
     if (++k >= RESEND_PER_TICK) break;
   }
 }
@@ -73,6 +79,10 @@ function sendDirect(P, m) { if (dcLive(P)) { try { P.dcF.send(JSON.stringify(m))
 function sendRelay(P, m) { if (P.linked && P.N.relay) { P.q.push(m); flushRelay(P); } }
 export function flushRelay(P) {
   clearTimeout(P.qTimer); P.qTimer = null;
+  if (P.qLatest.size) {                                // the newest of each stream rides along
+    for (const m of P.qLatest.values()) P.q.push(m);
+    P.qLatest.clear(); P.relayAt = performance.now();
+  }
   if (!P.q.length || !P.N.relay) return;
   const d = P.q; P.q = [];
   if (!P.N.closed) pubData(P.N, P, { t: 'd', to: P.id, d });
@@ -92,6 +102,7 @@ export function deliver(P, m, viaRelay) {
     N.byeFrom(P, m.menu === 1);
     if (N.closed || !P.linked) return;
   }
+  ackSoon(P);                                          // (also for one that waits: they learn what we still miss)
   if (x > P.rxNext) { if (P.rxHold.size < HOLD_MAX) P.rxHold.set(x, m); return; }   // one before it is missing: it waits
   for (;;) {                                           // this one, and whatever was waiting behind it
     delete m._x;
@@ -103,10 +114,24 @@ export function deliver(P, m, viaRelay) {
   }
 }
 
-// the link's own fast messages: pulse and ping (p), ping answer (q); anything else fast is the game's
+// Say soon which reliable messages we have, instead of waiting for the next pulse (up to 190 ms): the sender's
+// outbox empties and nothing is sent again for nothing. One answer covers everything that came meanwhile.
+function ackSoon(P) {
+  if (P.ackTimer) return;
+  P.ackTimer = setTimeout(() => {
+    P.ackTimer = null;
+    if (!P.linked || P.N.closed) return;
+    const m = { t: 'ak', a: P.rxNext - 1 };
+    if (dcLive(P) && (!P.N.relay || dcFresh(P))) sendDirect(P, m); else sendRelay(P, m);
+  }, ACK_DELAY);
+}
+
+// the link's own fast messages: pulse and ping (p), ping answer (q), "I have your messages up to a" (ak);
+// anything else fast is the game's
 function signals(P, m, viaRelay, now) {
   const N = P.N;
   if (m.r === 1) P.suspect = now;                      // they say they cannot hear us directly
+  if (m.t === 'ak') { acked(P, m.a); return; }        // they have our reliable messages up to a
   if (m.t === 'p') {                                   // pulse and ping
     if (!Number.isFinite(m.ts)) return;
     const q = { t: 'q', ts: m.ts };
