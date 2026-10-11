@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import * as vault from '../library/crypto.js';
 
@@ -24,6 +25,7 @@ const file = (...p) => path.join(root, ...p);
 const write = (p, data) => { fs.mkdirSync(path.dirname(file(p)), { recursive: true }); fs.writeFileSync(file(p), data); };
 const kr = () => JSON.parse(fs.readFileSync(file('vault/keyring.json'), 'utf8'));
 const kidOf = p => vault.fileKid(fs.readFileSync(file(p)));
+const libKey = async password => { const k = kr(), who = await vault.signIn(k, password); return vault.importKey(await vault.libraryKey(k, who.person.id, who.priv)); };
 const game = (id, extra = {}) => {
   write(`games/${id}/game.json`, JSON.stringify({ title: 'Test ' + id, tagline: 't', description: 'd', image: 'preview.png', ...extra }));
   write(`games/${id}/index.html`, '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head><body><img src="dot.png"><script type="module" src="main.js"></script></body></html>');
@@ -67,9 +69,9 @@ test('the site is assembled from library/ and vault/, and works offline: every f
 });
 
 test('the game page is one self-contained module page with the library API', async () => {
-  const k = kr(), who = await vault.signIn(k, pw.bob);
-  const key = await vault.importKey(await vault.libraryKey(k, who.person.id, who.priv));
-  const html = vault.text(await vault.openFile(key, fs.readFileSync(file('vault/demo/game.bin')), vault.label.game('demo')));
+  const plain = await vault.openFile(await libKey(pw.bob), fs.readFileSync(file('vault/demo/game.bin')), vault.label.game('demo'));
+  assert.deepEqual([...plain.subarray(0, 2)], [0x1f, 0x8b]);                  // sealed gzipped
+  const html = await vault.gameText(plain);
   assert.match(html, /window\.ihroteka/);
   assert.match(html, /<script type="module">/);
   assert.doesNotMatch(html, /src="(?!data:)|href="(?!data:)/);              // every relative reference was inlined
@@ -94,6 +96,17 @@ test('unlock restores sources exactly and protects local changes', () => {
   must(['unlock', '--force'], pw.bob);
   assert.equal(fs.readFileSync(file('games/demo/main.js'), 'utf8'), before);
   assert.ok(!fs.existsSync(file('games/demo/extra.txt')));
+});
+
+test('unlock refuses an archive with paths outside the game folder', async () => {
+  const good = fs.readFileSync(file('vault/demo/source.bin')), key = await libKey(pw.bob);
+  const evil = zlib.gzipSync(JSON.stringify({ v: 1, files: { '../../escaped.txt': Buffer.from('x').toString('base64') } }));
+  fs.writeFileSync(file('vault/demo/source.bin'), await vault.sealFile(key, kr().kid, evil, vault.label.source('demo')));
+  const r = run(['unlock', '--force'], pw.bob);
+  fs.writeFileSync(file('vault/demo/source.bin'), good);
+  assert.ok(!r.ok);
+  assert.match(r.out, /unsafe path/);
+  assert.ok(!fs.existsSync(path.join(root, '..', 'escaped.txt')) && !fs.existsSync(file('escaped.txt')));
 });
 
 test('removing a person rotates the key; their password stops working', () => {
@@ -130,15 +143,30 @@ test('a new password replaces the keys, so the old one opens nothing', async () 
   const after = kr();
   assert.ok(!run(['unlock'], pw.bob).ok);
   assert.ok(run(['unlock'], fresh).ok);
-  // someone with the old keyring (git history) and the old password: their private key no longer opens the box
+  // someone with the old keyring (git history) and the old password: their private key no longer opens the box,
+  // and the old box holds a library key that no longer opens anything
   const old = await vault.signIn(before, pw.bob);
   await assert.rejects(vault.libraryKey(after, old.person.id, old.priv));
+  assert.notEqual(await vault.keyId(await vault.libraryKey(before, old.person.id, old.priv)), after.kid);
+  for (const p of ['vault/demo/game.bin', 'vault/demo/source.bin']) assert.equal(kidOf(p), after.kid);
   pw.bob = fresh;
+});
+
+test('a password can be typed through a pipe (asked, then repeated)', () => {
+  const next = 'pipe-typed-password-1';
+  must(['user', 'passwd'], pw.bob, next + '\n' + next + '\n');
+  assert.ok(run(['unlock'], next).ok);
+  pw.bob = next;
+  assert.ok(!run(['user', 'passwd'], pw.bob, next + '\n').ok);                 // no repeat: refused, nothing changed
+  assert.ok(run(['unlock'], next).ok);
 });
 
 test('check catches stale keys and unexpected files', () => {
   write('vault/demo/main.js', 'secret');
   assert.match(run(['check']).out, /main\.js: unexpected file/);
+  write('vault/demo/.notes', 'secret');                                        // hidden files too
+  assert.match(run(['check']).out, /\.notes: unexpected file/);
+  fs.rmSync(file('vault/demo/.notes'));
   assert.ok(!run(['site']).ok);                                              // nothing is published from a vault that fails the check
   fs.rmSync(file('vault/demo/main.js'));
   const good = fs.readFileSync(file('vault/demo/game.bin')), bad = Buffer.from(good); bad[2] ^= 1;

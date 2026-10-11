@@ -54,6 +54,9 @@ export function serve(what = 'games', port = '8000', host = '127.0.0.1') {
       res.end(e.message);
       console.error('✗ ' + e.message);
     });
+  }).on('error', e => {
+    console.error('✗ ' + (e.code === 'EADDRINUSE' ? 'Port ' + port + ' is busy: npm run dev -- <another port>' : e.message));
+    process.exit(1);
   }).listen(+port, host, () => {
     console.log('http://' + (host === '0.0.0.0' ? 'localhost' : host) + ':' + port + '/' + (host === '127.0.0.1' ? '' : '   (reachable from your network)'));
     if (games) for (const id of gameIds()) console.log('  ' + id + ': http://localhost:' + port + '/' + id + '/');

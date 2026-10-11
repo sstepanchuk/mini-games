@@ -18,6 +18,10 @@ export const random = n => globalThis.crypto.getRandomValues(new Uint8Array(n));
 export const b64 = u8 => btoa(Array.from(new Uint8Array(u8), b => String.fromCharCode(b)).join(''));
 const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 export const text = u8 => dec.decode(u8);
+// a game is sealed gzipped (a third of the size: ciphertext cannot be compressed later); older ones are plain
+export const gameText = u8 => u8[0] === 0x1f && u8[1] === 0x8b
+  ? new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'))).text()
+  : text(u8);
 
 // Associated data for every ciphertext: a file swapped in under another name will not decrypt.
 export const label = {
@@ -118,7 +122,8 @@ export async function libraryKey(keyring, id, priv) {
 }
 
 // New password = new key pair. Re-sealing the old private key would not help: the old entry stays in
-// git history, and the old password would still open it and, through it, the current box.
+// git history, and the old password would still open it. The old box in history holds the same library
+// key, so the tools also rotate the library key after this (see tools/cli.js: passwd).
 export async function replaceKeys(keyring, person, newPassword, libraryRaw) {
   const fresh = await newPerson(keyring, person.id, newPassword);
   person.pub = fresh.pub;

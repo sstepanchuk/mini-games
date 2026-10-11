@@ -122,7 +122,7 @@ async function openSealed(file, aad, game, blob = prefetch(file)) {
     let data;
     try { data = await blob; } catch (e) { throw fail(offline(e) ? MSG.offline : MSG.game, e); }
     if (vault.fileKid(data) === kr.kid) {
-      try { return vault.text(await vault.openFile(key, data, aad)); }
+      try { return await vault.gameText(await vault.openFile(key, data, aad)); }
       catch (e) { throw fail(MSG.game, e); }
     }
     if (retry) throw fail(MSG.updating, new Error(file + ': key id differs from keyring.json'));

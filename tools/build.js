@@ -160,11 +160,12 @@ export async function buildSite(out = P.site) {
 
 // the offline copy: sw.js lists every file of the site; its version is a hash of them all
 function serviceWorker(files) {
-  const names = Object.keys(files).sort(), hash = crypto.createHash('sha256');
+  const names = Object.keys(files).sort(), hash = crypto.createHash('sha256'), tpl = fs.readFileSync(path.join(P.app, 'sw.js'), 'utf8');
+  hash.update(tpl);                                    // a new worker gets a new version too
   for (const f of names) hash.update(f + '\0').update(files[f]);
   const fonts = [...fs.readFileSync(path.join(P.app, 'page.html'), 'utf8').matchAll(/href="(https:\/\/fonts\.googleapis\.com\/[^"]+)"/g)].map(m => m[1].replace(/&amp;/g, '&'));
   const pages = names.map(f => f.replace(/(^|\/)index\.html$/, '$1'));   // a page is stored under its address
-  return fs.readFileSync(path.join(P.app, 'sw.js'), 'utf8')
+  return tpl
     .replace('/* FILES */', pages.map(f => JSON.stringify(f)).join(','))
     .replace('/* FONTS */', [...new Set(fonts)].map(f => JSON.stringify(f)).join(','))
     .replace('/* VERSION */', hash.digest('hex').slice(0, 16));
@@ -176,9 +177,14 @@ export function checkVault() {
   let kr = null;
   try { kr = JSON.parse(fs.readFileSync(P.keyring, 'utf8')); } catch (e) { bad(rel(P.keyring) + ': ' + e.message); }
   if (kr) {
-    if (kr.v !== vault.KEYRING_V || !kr.kid || !kr.kdf?.salt || !(kr.kdf.iterations >= 100000)) bad('keyring.json: invalid header');
-    if (!kr.people?.length) bad('keyring.json: no people');
-    for (const p of kr.people || []) if (!(p.id && p.pub && p.priv && typeof p.name === 'string' && p.box?.epk && p.box?.ct)) bad('keyring.json: incomplete entry ' + (p.id || '?'));
+    if (kr.v !== vault.KEYRING_V || !/^[A-Za-z0-9+/]{11}=$/.test(kr.kid) || !kr.kdf?.salt || !(kr.kdf.iterations >= 100000)) bad('keyring.json: invalid header');
+    if (!Array.isArray(kr.people) || !kr.people.length) bad('keyring.json: no people');
+    const ids = new Set();
+    for (const p of Array.isArray(kr.people) ? kr.people : []) {
+      if (!(p.id && p.pub && p.priv && typeof p.name === 'string' && p.box?.epk && p.box?.ct)) bad('keyring.json: incomplete entry ' + (p.id || '?'));
+      if (ids.has(p.id)) bad('keyring.json: duplicate id ' + p.id);
+      ids.add(p.id);
+    }
   }
   const ids = vaultIds();
   if (!ids.length) bad('no games in vault/');
@@ -194,8 +200,8 @@ export function checkVault() {
       else if (kr && kid !== kr.kid) bad(rel(file) + ': sealed with an old library key (rebuild after git pull)');
     }
     // nothing else: anything more could be plaintext
-    for (const f of walk(vaultPath(id))) if (!['game.json', 'game.bin', 'source.bin', g && g.image].includes(f)) bad(rel(vaultPath(id, f)) + ': unexpected file (a game keeps only game.json, its cover, game.bin and source.bin)');
+    for (const f of walk(vaultPath(id), undefined, true)) if (!['game.json', 'game.bin', 'source.bin', g && g.image].includes(f)) bad(rel(vaultPath(id, f)) + ': unexpected file (a game keeps only game.json, its cover, game.bin and source.bin)');
   }
-  for (const f of walk(P.vault)) if (f !== 'keyring.json' && !ids.includes(f.split('/')[0])) bad('vault/' + f + ': unexpected file');
+  for (const f of walk(P.vault, undefined, true)) if (f !== 'keyring.json' && !ids.includes(f.split('/')[0])) bad('vault/' + f + ': unexpected file');
   return problems;
 }

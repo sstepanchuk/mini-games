@@ -44,6 +44,13 @@ export function writeAtomic(file, data) {
   fs.renameSync(file + '.tmp', file);
 }
 
+// → true if written
+export function writeIfChanged(file, data) {
+  if (exists(file) && fs.readFileSync(file).equals(Buffer.from(data))) return false;
+  writeAtomic(file, data);
+  return true;
+}
+
 // refuse to touch encrypted files with uncommitted changes (the only backup is git)
 export function requireClean(...dirs) {
   let out;
@@ -114,25 +121,32 @@ export async function writeSealed(file, plain, aad, lib, equal = same) {
   return true;
 }
 
-// New library key for everyone left in kr.people. Everything is decrypted first, so any failure happens
-// before a single write; then new files go to *.tmp and are renamed into place, the keyring last.
+// New library key for everyone left in kr.people. Everything is decrypted, re-sealed and written to *.tmp
+// first, the keyring too; only then is anything renamed into place. A failure before that leaves vault/ as it was.
 export async function rotate(kr, lib) {
   const files = [];
   for (const [file, aad] of sealedFiles()) files.push([file, aad, await readSealed(file, aad, lib)]);
   const raw = vault.newLibraryKey(), next = { raw, key: await vault.importKey(raw), kid: await vault.keyId(raw) };
-  for (const [file, aad, plain] of files) fs.writeFileSync(file + '.tmp', await vault.sealFile(next.key, next.kid, plain, aad));
-  for (const p of kr.people) p.box = await vault.boxFor(p, raw);
-  kr.kid = next.kid;
-  for (const [file] of files) fs.renameSync(file + '.tmp', file);
-  writeKeyring(kr);
+  const written = [];
+  try {
+    for (const [file, aad, plain] of files) { fs.writeFileSync(file + '.tmp', await vault.sealFile(next.key, next.kid, plain, aad)); written.push(file); }
+    for (const p of kr.people) p.box = await vault.boxFor(p, raw);
+    kr.kid = next.kid;
+    fs.writeFileSync(P.keyring + '.tmp', JSON.stringify(kr, null, 2) + '\n'); written.push(P.keyring);
+  } catch (e) {
+    for (const f of written) fs.rmSync(f + '.tmp', { force: true });
+    throw e;
+  }
+  for (const f of written) fs.renameSync(f + '.tmp', f);
   return next;
 }
 
 /* ---------- game sources: folder ⇄ one gzipped JSON archive (dotfiles are not included) ---------- */
-export function walk(dir, base = dir) {
+// all: also dotfiles and node_modules (checks of vault/ must see everything)
+export function walk(dir, base = dir, all = false) {
   return fs.readdirSync(dir, { withFileTypes: true })
-    .filter(e => !e.name.startsWith('.') && e.name !== 'node_modules')
-    .flatMap(e => e.isDirectory() ? walk(path.join(dir, e.name), base) : [path.relative(base, path.join(dir, e.name)).split(path.sep).join('/')])
+    .filter(e => all || (!e.name.startsWith('.') && e.name !== 'node_modules'))
+    .flatMap(e => e.isDirectory() ? walk(path.join(dir, e.name), base, all) : [path.relative(base, path.join(dir, e.name)).split(path.sep).join('/')])
     .sort();
 }
 const readFolder = dir => Object.fromEntries(walk(dir).map(f => [f, fs.readFileSync(path.join(dir, f)).toString('base64')]));
@@ -140,4 +154,8 @@ const packSource = dir => zlib.gzipSync(JSON.stringify({ v: 1, files: readFolder
 export const unpackSource = buf => JSON.parse(zlib.gunzipSync(buf)).files;
 // archives are compared by their files, not by gzip bytes (those differ between zlib versions)
 const sameFiles = (a, b) => { const x = unpackSource(a), y = unpackSource(b); return JSON.stringify(x) === JSON.stringify(y); };
+// a game's page, gzipped before sealing; compared by its text, and an old ungzipped file is replaced
+const gz = b => b[0] === 0x1f && b[1] === 0x8b;
+export const writeGame = (id, html, lib) => writeSealed(vaultPath(id, 'game.bin'), zlib.gzipSync(html, { level: 9 }), vault.label.game(id), lib,
+  (old, now) => gz(old) && same(zlib.gunzipSync(old), zlib.gunzipSync(now)));
 export const writeSource = (id, lib) => writeSealed(vaultPath(id, 'source.bin'), packSource(path.join(P.games, id)), vault.label.source(id), lib, sameFiles);

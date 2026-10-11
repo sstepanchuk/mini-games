@@ -11,15 +11,22 @@ import { serve } from './dev.js';
 const { P, rel, exists, problem } = repo;
 
 // Passwords are taken exactly as typed (no trimming), the same way the browser takes them.
-function ask(question, hidden) {
-  const tty = !!process.stdin.isTTY;
-  if (hidden && !tty) console.error('(input is not a terminal: the password will be visible; prefer VAULT_PASSWORD)');
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: tty });
-  if (hidden && tty) rl._writeToOutput = s => { if (s.startsWith(question)) process.stdout.write(question); };
+let piped = null;                                      // input that is not a terminal: its lines, read in turn
+async function ask(question, hidden) {
+  if (!process.stdin.isTTY) {
+    if (hidden) console.error('(input is not a terminal: the password will be visible; prefer VAULT_PASSWORD)');
+    process.stdout.write(question);
+    piped ??= readline.createInterface({ input: process.stdin })[Symbol.asyncIterator]();
+    const { value, done } = await piped.next();
+    if (done) problem('No input for: ' + question.trim());
+    return value.replace(/\r$/, '');
+  }
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+  if (hidden) rl._writeToOutput = s => { if (s.startsWith(question)) process.stdout.write(question); };
   return new Promise(resolve => rl.question(question, answer => {
     rl.close();
-    if (hidden && tty) process.stdout.write('\n');
-    resolve(answer.replace(/\r$/, ''));
+    if (hidden) process.stdout.write('\n');
+    resolve(answer);
   }));
 }
 const password = (q = 'Password: ') => process.env.VAULT_PASSWORD ?? ask(q, true);
@@ -30,6 +37,7 @@ const HELP = `Library commands
 
   npm run unlock [-- --force]    decrypt game sources into games/ (--force: overwrite local changes)
   npm run dev [-- site] [port]   the library with your games/ (or the built site/), on this computer only
+                                 (--lan: also to your network; with games/ that serves plaintext games)
   npm run build                  bundle and encrypt the games into vault/, then assemble site/
   npm run site                   assemble site/ from library/ and vault/ (no password; CI does this)
   npm run check                  validate vault/ (no password needed)
@@ -37,7 +45,7 @@ const HELP = `Library commands
   npm run user -- list           who has access
   npm run user -- add <name>     add a person (a password is generated and shown once)
   npm run user -- remove <name>  remove a person (rotates the library key, re-encrypts everything)
-  npm run user -- passwd         change your password (also gives you new keys)
+  npm run user -- passwd         change your password (new keys; rotates the library key)
 
   node tools/cli.js init <name> …        create a new library (once)
   node tools/cli.js remove-game <id>     take a game off the shelf and delete its files
@@ -50,6 +58,7 @@ const commands = {
   async init(...names) {
     if (exists(P.keyring)) problem('A library already exists: ' + rel(P.keyring));
     if (!names.length) problem('Give at least one name: node tools/cli.js init <name> …');
+    if (new Set(names).size !== names.length) problem('Every name must be different.');
     const kr = vault.newKeyring(), raw = vault.newLibraryKey();
     kr.kid = await vault.keyId(raw);
     console.log('New library. Passwords are shown only once, save them:\n');
@@ -67,6 +76,8 @@ const commands = {
     for (const id of repo.vaultIds()) {
       const dir = path.join(P.games, id);
       const files = repo.unpackSource(await repo.readSealed(repo.vaultPath(id, 'source.bin'), vault.label.source(id), lib));
+      // names come from the archive: none may point outside the game's folder
+      for (const f of Object.keys(files)) if (!path.resolve(dir, f).startsWith(path.resolve(dir) + path.sep)) problem(id + ': unsafe path in the archive: ' + f);
       const local = exists(dir) ? repo.walk(dir) : [];
       const changed = local.filter(f => !(f in files) || !repo.same(fs.readFileSync(path.join(dir, f)), Buffer.from(files[f], 'base64')));
       if (changed.length && !force) {
@@ -88,10 +99,10 @@ const commands = {
     for (const [id, g] of games) {
       const html = await bundleGame(id, g);
       const changed = [
-        await repo.writeSealed(repo.vaultPath(id, 'game.bin'), Buffer.from(html), vault.label.game(id), lib),
+        await repo.writeGame(id, html, lib),
         await repo.writeSource(id, lib),
-        writeIfChanged(repo.vaultPath(id, 'game.json'), JSON.stringify(g, null, 2) + '\n'),
-        writeIfChanged(repo.vaultPath(id, g.image), fs.readFileSync(path.join(P.games, id, g.image)))
+        repo.writeIfChanged(repo.vaultPath(id, 'game.json'), JSON.stringify(g, null, 2) + '\n'),
+        repo.writeIfChanged(repo.vaultPath(id, g.image), fs.readFileSync(path.join(P.games, id, g.image)))
       ].some(Boolean);
       for (const f of fs.readdirSync(repo.vaultPath(id))) if (f.endsWith('.png') && f !== g.image) fs.rmSync(repo.vaultPath(id, f));   // an old cover
       console.log('✓ ' + id + ': ' + (html.length / 1024).toFixed(0) + ' KB' + (changed ? '' : ' (unchanged)'));
@@ -131,9 +142,11 @@ const commands = {
       // the removed person may have kept the library key, so it is replaced and everything re-encrypted
       kr.people = kr.people.filter(p => !gone.includes(p));
       await repo.rotate(kr, lib);
+      await commands.site();
       console.log('✓ ' + name + ' no longer has access. Library key rotated, games re-encrypted — commit vault/.');
     } else if (sub === 'passwd') {
-      const { kr, me, raw } = await repo.open(await password('Current password: '));
+      repo.requireClean(P.vault);
+      const lib = await repo.open(await password('Current password: ')), { kr, me, raw } = lib;
       let pw = await ask('New password (empty to generate): ', true);
       if (!pw) console.log('New password: ' + (pw = repo.makePassword()));
       else {
@@ -142,9 +155,11 @@ const commands = {
       }
       const owner = await vault.signIn(kr, pw);
       if (owner && owner.person !== me) problem('Choose another password.');   // it already opens someone else's keys
+      // new keys, and a new library key: the old password still opens the old keyring in git history
       await vault.replaceKeys(kr, me, pw, raw);
-      repo.writeKeyring(kr);
-      console.log('✓ Password changed and your keys replaced. Commit vault/keyring.json.');
+      await repo.rotate(kr, lib);
+      await commands.site();
+      console.log('✓ Password changed, your keys replaced, library key rotated. Commit vault/.');
     } else problem('npm run user -- list | add <name> | remove <name> | passwd');
   },
 
@@ -156,13 +171,6 @@ const commands = {
 
   dev: (...args) => serve(args.includes('site') ? 'site' : 'games', args.find(a => /^\d+$/.test(a)) || '8000', args.includes('--lan') ? '0.0.0.0' : '127.0.0.1')
 };
-
-// → true if written
-function writeIfChanged(file, data) {
-  if (exists(file) && fs.readFileSync(file).equals(Buffer.from(data))) return false;
-  repo.writeAtomic(file, data);
-  return true;
-}
 
 const [cmd = 'help', ...rest] = process.argv.slice(2);
 const done = e => { console.error('✗ ' + (e instanceof repo.Problem ? e.message : e.stack || e)); process.exit(1); };
