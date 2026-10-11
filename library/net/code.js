@@ -3,10 +3,13 @@
 // few host candidates; the other side rebuilds a full SDP from them. Nothing secret is in the code: the
 // fingerprint makes the link end-to-end encrypted with exactly the device that showed it.
 //
+// The code also carries a room code: if the two devices cannot reach each other directly, they meet there over
+// the internet instead (when there is internet).
+//
 // Binary layout, then base32 (A–Z, 2–7: QR alphanumeric mode, the densest one for this):
-//   [version|kind] [game tag ×3] [ufrag] [pwd] [fingerprint ×32] [mid] [n] n × ([type] [address] [port ×2])
+//   [version|kind] [game tag ×3] [ufrag] [pwd] [fingerprint ×32] [mid] [n] n × ([type] [address] [port ×2]) [room]
 //   strings are [length][ASCII]; type 4 = IPv4 (4 bytes), 6 = IPv6 (16 bytes), 16 = mDNS name <uuid>.local (16 bytes)
-const VERSION = 1, MAX_CANDIDATES = 6;
+const VERSION = 2, MAX_CANDIDATES = 6;
 export const OFFER = 0, ANSWER = 1;
 
 // which game the code belongs to: a code shown by another game is refused instead of failing mysteriously
@@ -17,7 +20,7 @@ function gameTag(game) {
 }
 
 /* ---------- SDP → code ---------- */
-export function encode(sdp, kind, game) {
+export function encode(sdp, kind, game, room = '') {
   const line = re => (sdp.match(re) || [])[1];
   const ufrag = line(/^a=ice-ufrag:(\S+)/m), pwd = line(/^a=ice-pwd:(\S+)/m), mid = line(/^a=mid:(\S+)/m) || '0';
   const fp = line(/^a=fingerprint:sha-256 ([0-9A-Fa-f:]+)/m);
@@ -30,12 +33,16 @@ export function encode(sdp, kind, game) {
   const cands = candidates(sdp);
   out.push(cands.length);
   for (const c of cands) out.push(c.type, ...c.bytes, c.port >> 8, c.port & 255);
+  str(room);
   return base32(out);
 }
 
+// what a description offers to connect to, for reports: "IPv4 192.168.1.5:50000, mDNS"
+export const describe = sdp => candidates(sdp).map(c => c.type === 16 ? 'mDNS' : (c.type === 4 ? 'IPv4 ' : 'IPv6 ') + c.text + ':' + c.port).join(', ') || 'none';
+
 // Host candidates over UDP, the most useful first: private IPv4 (home Wi-Fi, an Android hotspot), then IPv6
 // (link-local IPv6 is the only way between devices on an iOS 18+ hotspot), then hidden mDNS names.
-function candidates(sdp) {
+export function candidates(sdp) {
   const seen = new Set(), list = [];
   for (const [, addr, port] of sdp.matchAll(/^a=candidate:\S+ 1 udp \d+ (\S+) (\d+) typ host/gim)) {
     const c = address(addr.toLowerCase());
@@ -55,9 +62,9 @@ function address(text) {
 }
 
 /* ---------- code → SDP ---------- */
-// → { kind, sdp }; throws a readable Error for anything that is not a code of this game
+// → { kind, sdp, room, candidates }; throws an Error for anything that is not a code of this game
 export function decode(code, game) {
-  const b = unbase32(code);
+  const b = unbase32(String(code).replace(/^.*#p=/, ''));   // also a link with the code after #p=
   let i = 0;
   const byte = () => { if (i >= b.length) throw new Error('short'); return b[i++]; };
   const take = n => { const s = b.slice(i, i + n); if (s.length < n) throw new Error('short'); i += n; return s; };
@@ -74,12 +81,13 @@ export function decode(code, game) {
     // standard host priority, decreasing in the order the other side ranked them
     cands.push('a=candidate:' + (k + 1) + ' 1 udp ' + (2122260223 - k * 256) + ' ' + addr + ' ' + port + ' typ host generation 0');
   }
-  if (!/^[\x21-\x7e]{4,256}$/.test(ufrag + pwd) || !/^[\w-]{1,32}$/.test(mid)) throw new Error('bad');
+  const room = str();
+  if (!/^[\x21-\x7e]{4,256}$/.test(ufrag + pwd) || !/^[\w-]{1,32}$/.test(mid) || !/^[a-z0-9]{0,12}$/.test(room)) throw new Error('bad');
   const sdp = ['v=0', 'o=- ' + Date.now() + ' 2 IN IP4 127.0.0.1', 's=-', 't=0 0', 'a=group:BUNDLE ' + mid, 'a=msid-semantic: WMS',
     'm=application 9 UDP/DTLS/SCTP webrtc-datachannel', 'c=IN IP4 0.0.0.0', ...cands, 'a=end-of-candidates',
     'a=ice-ufrag:' + ufrag, 'a=ice-pwd:' + pwd, 'a=ice-options:trickle', 'a=fingerprint:sha-256 ' + fp,
     'a=setup:' + (kind === OFFER ? 'actpass' : 'active'), 'a=mid:' + mid, 'a=sctp-port:5000', 'a=max-message-size:262144', ''].join('\r\n');
-  return { kind, sdp };
+  return { kind, sdp, room, candidates: n };
 }
 
 /* ---------- small helpers ---------- */

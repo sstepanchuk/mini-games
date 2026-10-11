@@ -14,8 +14,12 @@ and works offline. Hosted on GitHub Pages.
   a password and an ECDH P-256 key pair; the password unlocks their private key, which unlocks the library key.
   Removing someone rotates the library key and re-encrypts every game.
 - **Together.** "Грати разом" connects two players for the whole library: whatever one opens, the other's
-  library opens too. Over the internet: a link (public MQTT brokers find the friend; WebRTC goes direct when
-  it can). Nearby, no internet: two phones on the same Wi-Fi or hotspot show each other a QR code.
+  library opens too. Both devices show a QR code and read the other's with the camera (face to face), or the
+  friend reads it with the phone's own camera, or opens the link. Nobody chooses how: the devices try a direct
+  link over the local network (works with no internet at all) and, in the background, an internet room
+  (public MQTT brokers, WebRTC direct when it can); the first to connect wins. If a direct link is impossible,
+  the dialog says why (e.g. a phone sharing its hotspot cannot see that network in its browser) and offers a
+  report for debugging.
 - **Offline.** A service worker keeps one complete copy of the site per version; the shelf, the games and nearby
   play work without a network. On a phone it installs as an app.
 
