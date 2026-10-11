@@ -18,22 +18,17 @@ export function drawQr(canvas, text, px = 260) {
 // The camera, kept on for the whole pairing: while it runs, browsers also reveal this device's real local
 // addresses to WebRTC instead of hidden mDNS names, which makes a link between two phones more likely.
 export class Camera {
-  constructor(video) { this.video = video; this.stream = null; this.detect = null; this.stopped = false; this.started = null; }
-  // facing: 'user' (front) or 'environment' (back); → true if the camera runs (one request, however many callers)
-  start(facing = 'environment') {
-    this.facing = facing;
-    return this.started || (this.started = this.open(facing));
-  }
-  async open(facing) {
+  constructor(video) { this.video = video; this.stream = null; this.detect = null; this.stopped = false; }
+  async start() {
+    if (this.stream) return true;
     let stream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 1280 } }, audio: false });
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false });
     } catch (e) { return false; }                      // no camera, or not allowed: the code can still be pasted
     if (this.stopped) { for (const t of stream.getTracks()) t.stop(); return false; }   // closed while the camera was starting
     this.stream = stream;
     this.video.srcObject = this.stream;
     this.video.muted = true; this.video.playsInline = true;
-    this.video.classList.toggle('mirror', facing === 'user');   // the front camera is shown as a mirror, as people expect
     try { await this.video.play(); } catch (e) {}
     return true;
   }

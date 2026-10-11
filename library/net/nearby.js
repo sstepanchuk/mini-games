@@ -9,12 +9,10 @@
 //   'here'   this device has no network address to offer (e.g. it shares the hotspot: its browser cannot see that network)
 //   'there'  the other device has none
 //   'blocked' both have addresses but cannot reach each other (the network keeps devices apart)
-// room.pair.fallback is an internet room code both sides share: they can meet there instead.
 // room.pair.report() describes what happened, for bug reports.
 // The pairing screens (QR codes, camera) are the library's: app/invite.js.
 import { closeRtc, wireDc } from './rtc.js';
 import { ANSWER, OFFER, candidates, decode, describe, encode } from './code.js';
-import { newRoomCode } from './config.js';
 import { markLinked, newRoom, setRole, startWatch, stop } from './room.js';
 
 const GATHER_MS = 3000, CONNECT_MS = 20000;
@@ -29,7 +27,7 @@ export function joinNearby({ game, lostAfter }) {
   };
   const t0 = performance.now(), log = [navigator.userAgent];
   const note = text => log.push((performance.now() - t0 | 0) + ' ms  ' + text);
-  const pair = room.pair = { fallback: '', local: 0, remote: 0, reason: '', report: () => log.join('\n') };
+  const pair = room.pair = { local: 0, remote: 0, reason: '', report: () => log.join('\n') };
 
   const fresh = role => {
     closeRtc(N);
@@ -45,13 +43,12 @@ export function joinNearby({ game, lostAfter }) {
     const sdp = pc.localDescription.sdp;
     pair.local = candidates(sdp).length;
     note('our addresses: ' + describe(sdp));
-    return encode(sdp, kind, game, pair.fallback);
+    return encode(sdp, kind, game);
   };
   const theirs = (code, kind) => {
     const d = decode(code, game);
     if (d.kind !== kind) throw new Error('kind');
     pair.remote = d.candidates;
-    if (d.room) pair.fallback = d.room;
     note('their addresses: ' + describe(d.sdp));
     return d.sdp;
   };
@@ -61,9 +58,8 @@ export function joinNearby({ game, lostAfter }) {
     N.failTimer = setTimeout(() => { if (!N.linked && !N.closed) fail(N, N.pc, pair, note); }, ms);
   };
   Object.assign(pair, {
-    // host: a new offer → code to show (room: where to meet over the internet instead; a new one by default)
-    async offer(room = newRoomCode()) {
-      pair.fallback = room;
+    // host: a new offer → code to show
+    async offer() {
       const pc = fresh('host');
       wireDc(N, pc, pc.createDataChannel('fast', { ordered: false, maxRetransmits: 0 }));
       wireDc(N, pc, pc.createDataChannel('ctl', { ordered: true }));
@@ -71,9 +67,8 @@ export function joinNearby({ game, lostAfter }) {
       return ours(pc, OFFER);
     },
     // guest: the host's code → our answer's code to show (the link opens once the host has read it)
-    async answer(code, room) {
+    async answer(code) {
       const sdp = theirs(code, OFFER);
-      if (room) pair.fallback = room;
       const pc = fresh('guest');
       pc.ondatachannel = e => wireDc(N, pc, e.channel);
       await pc.setRemoteDescription({ type: 'offer', sdp });

@@ -8,10 +8,11 @@
      lib-here  { v: game id | null }           "my copy of this game is open and listening"
    The screens for all this are in invite.js; it follows the room through onChange.
    ===================================================================== */
-import { joinRoom, preload, validRoomCode } from '../net/index.js';
+import { joinNearby, joinRoom, preload, validRoomCode } from '../net/index.js';
 import { safe } from './dom.js';
 
 const LIB = 'ihroteka';                                  // the room namespace of the whole library
+const LAST = 'ihroteka-room';                            // the last internet room: the same link keeps working
 
 let shell = null;                                        // { current() → id | null, follow(id), invite() }
 let room = null;                                         // the room (see ../net), with .kind and .lastStatus
@@ -33,20 +34,19 @@ export const linked = () => !!room && room.linked;
 const inGame = () => linked() && !!ch && myHere === ch.id && peerHere === ch.id;
 const send = m => { if (linked()) room.send(m); };
 // the screens follow the room: fn(what) with what = linked | relinked | peer-gone | replaced | status | weak | stats | left
-export const onChange = fn => { listeners.add(fn); return () => listeners.delete(fn); };
+export const onChange = fn => listeners.add(fn);
 const changed = what => { for (const fn of listeners) safe(fn, what); };
 
 export function startInternet(code) {
   leave();
+  try { localStorage.setItem(LAST, code); } catch (e) {}
   setQuery(code);
   return wire(joinRoom({ game: LIB, code }), 'internet');
 }
-// a nearby room that pairing (pairing.js) has already linked becomes the library's room
-export function adopt(r) {
-  if (room === r) return;
+export const lastInternetCode = () => { const c = safe(() => localStorage.getItem(LAST)); return validRoomCode(c) ? c : null; };
+export function startNearby() {
   leave();
-  wire(r, r.kind || 'nearby');
-  if (r.linked) r.emitLinked();
+  return wire(joinNearby({ game: LIB }), 'nearby');
 }
 export function leave() {
   const r = room;
@@ -64,7 +64,6 @@ function wire(r, kind) {
   r.keepSeat = policy('keepSeat'); r.patient = policy('patient'); r.streaming = policy('streaming');
   r.pulse = now => { const g = inGame() && ch.pulseOut(now); return g ? { v: ch.id, g } : null; };
   const on = (name, fn) => r.on(name, (...a) => { if (room === r) { safe(fn, ...a); changed(name); } });
-  r.emitLinked = () => { hello(); update(); changed('linked'); };   // adopted already linked (see adopt)
   const hello = () => {                                  // a (new) link: who shows the way, and where we are
     seq = 0; peerHere = null;
     if (r.role === 'host') sendView(shell.current(), true);   // whoever invited shows the way

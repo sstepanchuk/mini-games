@@ -33,6 +33,30 @@ export function loadTransport() {
   return mqttLib;
 }
 
+// Is there internet, not just a network? navigator.onLine only knows about the network: on a hotspot without
+// mobile data, or a Wi-Fi without internet, it still says online. So: can a broker be reached? → true | false,
+// within ms (the first broker that answers decides; all of them failing decides at once).
+export function hasInternet(ms = 3000) {
+  if (navigator.onLine === false) return Promise.resolve(false);
+  return new Promise(done => {
+    let left = BROKERS.length;
+    const end = ok => {
+      clearTimeout(timer);
+      for (const s of sockets) if (s) { s.onopen = s.onerror = null; try { s.close(); } catch (e) {} }
+      done(ok);
+    };
+    const timer = setTimeout(() => end(false), ms);
+    const sockets = BROKERS.map(b => {
+      try {
+        const s = new WebSocket(b.url, 'mqtt');
+        s.onopen = () => end(true);
+        s.onerror = () => { if (--left === 0) end(false); };
+        return s;
+      } catch (e) { if (--left === 0) setTimeout(() => end(false)); return null; }
+    });
+  });
+}
+
 export function openBrokers(N) {
   N.br = BROKERS.map(() => ({ state: 'connecting', since: 0, fails: 0, timer: null }));
   N.clients = []; N.win = BROKERS.map(() => 0);

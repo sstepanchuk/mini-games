@@ -32,11 +32,9 @@ test('an answer is rebuilt as the active side', () => {
   assert.match(back, /a=setup:active/);
 });
 
-test('a code names the room to meet in over the internet, and is also read from a link', () => {
-  const code = encode(sdp(['a=candidate:1 1 udp 1 192.168.0.7 4000 typ host']), OFFER, 'ihroteka', 'abc123');
-  const d = decode('https://example.github.io/lib/?room=abc123#p=' + code, 'ihroteka');
-  assert.equal(d.room, 'abc123');
-  assert.equal(d.candidates, 1);
+test('a code says how many addresses it offers', () => {
+  const code = encode(sdp(['a=candidate:1 1 udp 1 192.168.0.7 4000 typ host']), OFFER, 'ihroteka');
+  assert.equal(decode(code, 'ihroteka').candidates, 1);
 });
 
 test('codes of other games and garbage are refused', () => {
