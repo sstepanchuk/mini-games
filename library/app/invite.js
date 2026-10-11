@@ -14,18 +14,30 @@ let dlg = null;                                          // the open dialog: { s
 
 export function initInvite(s) {
   shell = s;
+  s.elsewhere = elsewhere;
   $('together').addEventListener('click', () => openDialog());
   onChange(what => {
     const room = currentRoom();
     if (what === 'linked') toast(room.kind === 'nearby' ? 'Ви разом, поруч без інтернету' : 'Ви разом!');
     else if (what === 'join' && room && room.linked && room.players.length > 2) toast('До вас приєднався ще один гравець (' + room.players.length + ')');
     else if (what === 'leave' && room && room.linked) toast('Один гравець вийшов');
-    if (what === 'peer-gone') toast(room && room.kind === 'nearby' ? 'Зв’язок обірвався' : 'Друзі вийшли');
-    if (what === 'replaced') toast('Цю бібліотеку відкрито в іншій вкладці');
+    // (a moment later: when the room's host changes, everyone is back together in a second)
+    if (what === 'peer-gone') setTimeout(() => { if (!linked()) toast(room && room.kind === 'nearby' ? 'Зв’язок обірвався' : 'Друзі вийшли'); }, 3000);
+    if (what === 'replaced' || what === 'taken') toast('Гру перенесено в іншу вкладку');
     chip();
     if (dlg) refresh(what);
   });
   chip();
+}
+
+// This room's link was opened again while another tab of this browser holds it and runs the game for the others.
+function elsewhere(take, stay) {
+  const m = modal(stay);
+  m.show(el('h2', { textContent: 'Гра вже йде в іншій вкладці' }),
+    para('Ця кімната відкрита в іншій вкладці цього браузера, і гра з друзями йде там. Повернись до неї — тоді для друзів нічого не зміниться.'),
+    btn('Добре', () => m.close()),
+    btn('Грати тут', () => { m.close(); take(); }, 'btn ghost'),
+    para('«Грати тут» перенесе кімнату в цю вкладку, але поточна гра там закінчиться.', 'fine'));
 }
 
 /* ---------- the chip on the shelf ---------- */
@@ -153,7 +165,7 @@ function failed(pair) {
   dlg.show(el('h2', { textContent: 'Не вдалося з’єднатися' }),
     para(pair.reason === 'blocked' && pair.vpn ? WHY.vpn : WHY[pair.reason] || WHY.blocked),
     btn('Спробувати ще', () => room && room.linked ? hostPairing() : show('nearby')),
-    ...(dlg.online ? [btn('Через посилання', viaLink, 'btn ghost')] : []),
+    ...(dlg.online && !(room && room.linked) ? [btn('Через посилання', viaLink, 'btn ghost')] : []),
     btn('Скопіювати звіт для розробника', e => copy(report, e.target), 'btn ghost'),
     btn('Закрити', closeDialog, 'btn ghost'));
 }

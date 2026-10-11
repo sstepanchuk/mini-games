@@ -10,7 +10,7 @@
      lib-here  { v: game id | null }                 "my copy of this game is open and listening"
    The screens for all this are in invite.js; it follows the room through onChange.
    ===================================================================== */
-import { joinNearby, joinRoom, validRoomCode } from '../net/index.js';
+import { joinNearby, joinRoom, playerOf, tabId, validRoomCode } from '../net/index.js';
 import { safe } from './dom.js';
 
 const LIB = 'ihroteka';                                  // the room namespace of the whole library
@@ -28,8 +28,39 @@ const listeners = new Set();
 
 export function initTogether(s) {
   shell = s;
+  if (tabs) tabs.onmessage = e => onTab(e.data || {});
   const code = (new URLSearchParams(location.search).get('room') || '').toLowerCase();
-  if (validRoomCode(code)) startInternet(code);         // opened from a friend's link
+  if (validRoomCode(code)) openLink(code);              // opened from a link
+}
+
+/* ---------- tabs of this browser: one room, one tab ----------
+   Opening the room's link again (the game was only minimised) must not break the game for the others. If
+   another tab of this browser is in that room: a guest's seat simply moves to the new tab (the round goes on,
+   see net/internet.js); a host's game lives in its tab, so the player is asked first; a tab still alone gives
+   way at once. A frozen or closed tab does not answer: then the new one joins as usual. */
+const tabs = (() => { try { return new BroadcastChannel('ihroteka-tabs'); } catch (e) { return null; } })();
+const ME = playerOf(tabId);                              // this player (the same in every tab of this browser)
+function onTab(m) {
+  if (!room || room.kind !== 'internet' || m.code !== room.code || m.p !== ME) return;
+  if (m.q === 'room?') tabs.postMessage({ a: 'here', code: room.code, p: ME, role: room.role, linked: room.linked });
+  else if (m.q === 'take') { leave(); changed('taken'); }   // the player moved this room to another tab
+}
+// another tab of ours in this room? → { role, linked } or null
+function otherTab(code) {
+  return new Promise(done => {
+    if (!tabs) return done(null);
+    const ask = new BroadcastChannel('ihroteka-tabs');
+    const t = setTimeout(() => { ask.close(); done(null); }, 400);
+    ask.onmessage = e => { const m = e.data || {}; if (m.a === 'here' && m.code === code && m.p === ME) { clearTimeout(t); ask.close(); done(m); } };
+    ask.postMessage({ q: 'room?', code, p: ME });
+  });
+}
+async function openLink(code) {
+  const other = await otherTab(code);
+  if (!other || (other.role === 'guest' && other.linked)) return startInternet(code);   // a guest's seat moves here by itself
+  const take = () => { tabs.postMessage({ q: 'take', code, p: ME }); setTimeout(() => startInternet(code), 1200); };
+  if (other.role === 'host' && other.linked) shell.elsewhere(take, () => setQuery(null));   // the player decides
+  else take();
 }
 
 /* ---------- the room ---------- */
@@ -57,6 +88,7 @@ export function startNearby() {
 export function leave() {
   const r = room;
   room = null; here.clear();
+  if (ch) ch.relinking.clear();
   if (r) { r.leave(); setQuery(null); }
   update();
   changed('left');
@@ -71,16 +103,23 @@ function wire(r, kind) {
   r.keepSeat = policy('keepSeat'); r.patient = policy('patient'); r.streaming = policy('streaming');
   r.pulse = now => { const g = ch && ch.api.linked && ch.pulseOut(now); return g ? { v: ch.id, g } : null; };
   const on = (name, fn) => r.on(name, (...a) => { if (room === r) { safe(fn, ...a); changed(name); } });
-  // someone new (or a new tab of theirs): the host shows them the way, and everyone says where they are
+  // Someone new (or a new tab of theirs): everyone tells them the view as they know it (so whoever missed a change
+  // while away catches up: the newest, by the same order everywhere, wins) and where they are.
   const greet = p => {
-    if (r.role === 'host') send({ t: 'lib', v: shell.current(), s: seq, b: by === NOBODY ? r.me : by }, p);
+    send({ t: 'lib', v: shell.current(), s: seq, b: by === NOBODY ? r.me : by }, p);
     send({ t: 'lib-here', v: myHere }, p);
   };
   on('linked', () => { if (r.role === 'host') sendView(shell.current(), true); update(); });
   on('join', p => { greet(p); update(); });
   on('leave', p => { here.delete(p); if (ch) ch.relinking.delete(p); update(); });
-  on('relinked', p => { here.delete(p); if (ch) ch.relinking.add(p); greet(p); update(); });   // their new tab is coming
-  on('peer-gone', () => { here.clear(); update(); if (r.kind === 'nearby' && r.role !== 'host') queueMicrotask(leave); });   // nobody left to pass things on
+  on('relinked', p => {                                  // their new tab is coming: if they played, their seat waits for it
+    if (here.get(p) === myHere && myHere) { if (ch) ch.relinking.add(p); send({ t: 'lib-relinking', p }); }
+    here.delete(p); greet(p); update();
+  });
+  on('peer-gone', () => {
+    here.clear(); if (ch) ch.relinking.clear(); update();
+    if (r.kind === 'nearby') queueMicrotask(leave);      // nearby, a room cannot come back without pairing again
+  });
   on('replaced', () => queueMicrotask(leave));            // this library is open in another tab of ours
   on('status', st => { r.lastStatus = st; });
   on('weak', () => { if (ch) ch.weakNow(); });
@@ -98,6 +137,8 @@ function onLibMessage(m, from) {
       seq = m.s; by = m.b;
       if (m.v !== shell.current()) shell.follow(m.v);
     }
+  } else if (m.t === 'lib-relinking' && typeof m.p === 'string') {   // the host says a player's new tab is coming
+    if (ch && here.get(m.p) === ch.id) { ch.relinking.add(m.p); update(); }
   } else if (m.t === 'lib-here' && ID(m.v)) {
     here.set(from, m.v);
     if (ch && m.v === ch.id && ch.relinking.delete(from) && ch.seated.includes(from)) ch.emit('relinked', from);
@@ -230,7 +271,8 @@ function statsOf(ps) {
 function update() {
   if (!ch) return;
   recount(ch);
-  const now = ch.api.linked ? ch.seated : [], was = ch.was;
+  const now = ch.api.linked ? ch.seated : [], was = ch.was, seen = ch.seated.join() + '|' + ch.inGame.join();
+  if (seen !== ch.seen) { ch.seen = seen; if (now.join() === was.join()) ch.emit('players', ch.api.players); }   // also for those waiting
   if (now.join() === was.join()) return;
   ch.was = now;
   const hostChanged = now[0] !== was[0] || (ch.seats === 2 && now[1] !== was[1]);

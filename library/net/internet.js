@@ -3,20 +3,26 @@
 // simulation there); everyone after is a guest, linked to the host (room.js). Roles settle themselves: if two
 // think they are first, the one holding fewer players gives way, and between equals the "greater" id.
 //
-// Messages on the room topic: who (anyone here?), host (I hold the room; n: players with me), full,
-// hello (guest → host), hi (host → guest: linked), go (host → guest: join this other host instead),
-// moved (another tab of yours took your seat), bye (left; final if menu=1), rtc (direct link signalling),
-// d (game data through the brokers, in per-pair mailboxes).
+// Messages on the room topic: who (anyone here?), host (I hold the room; n: players with me; u: "I do not know
+// you", to a guest that thinks it is linked), full, hello (guest → host; k: a number per attempt), hi (host →
+// guest: linked; the same k), go (host → guest: join this other host instead), here (a guest whose host went
+// quiet: are we still together?), moved (another tab of yours took your seat), bye (left; final if menu=1),
+// rtc (direct link signalling), d (game data through the brokers, in per-pair mailboxes).
+// The host keeps announcing itself now and then even with guests, so two rooms that formed on one code (a
+// broker hiccup at the wrong moment) find each other and merge: the smaller one joins the bigger.
+// Tabs of one player sort themselves out in the library (app/together.js): here, a tab of ours never takes our
+// place while we are there; when the host's old tab went silent, a new one of the same player takes over.
 //
 // When the host leaves, the first guest on the roster becomes the host and the others join it: everyone knows
 // the roster, so they all agree without a word. If that fails (they left too), guests look around again.
 import { me, samePlayer, roomTopic } from './config.js';
 import { closeBrokers, loadTransport, mailbox, openBrokers, pubOn } from './brokers.js';
 import { closeRtc, onRtc } from './rtc.js';
-import { deliver, resetPaths, setWeak } from './link.js';
-import { closePeer, linkedPeers, markLinked, newPeer, newRoom, renamePeer, setRole, startWatch, stop, unlink, updateRoster } from './room.js';
+import { deliver, resetPaths, send, setWeak } from './link.js';
+import { closePeer, hostPeer, linkedPeers, markLinked, newPeer, newRoom, renamePeer, setRole, startWatch, stop, unlink, updateRoster } from './room.js';
 
-const BYE_GRACE = 5000, ABANDONED = 15000;           // when a seat may go to someone else (see seatFree)
+const BYE_GRACE = 5000, ABANDONED = 30000;           // when a seat may go to someone else (see seatFree)
+const ANNOUNCE = 2500, ANNOUNCE_LINKED = 4;            // the host says it is here every 2.5 s, every 10 s with guests
 
 /**
  * Join (or open) a room.
@@ -28,7 +34,8 @@ const BYE_GRACE = 5000, ABANDONED = 15000;           // when a seat may go to so
  */
 export function joinRoom({ game, code, max, lostAfter }) {
   const { N, room } = newRoom({ game, code, max, lostAfter, relay: true, close, bye: N => pubOn(N, { t: 'bye' }) });
-  Object.assign(N, { peerGone: P => peerGone(N, P), byeFrom: (P, final) => byeFrom(N, P, final), onUnlink: P => listen(N, P, false) });
+  Object.assign(N, { peerGone: P => peerGone(N, P), byeFrom: (P, final) => byeFrom(N, P, final), onUnlink: P => listen(N, P, false),
+    probe: (P, now) => probe(N, P, now), longSleep: () => longSleep(N) });
 
   // Browsers report a network change even when they only refined a speed estimate: react only when the
   // network type really changed (Wi-Fi ↔ mobile) or we have no connection anyway.
@@ -105,22 +112,27 @@ function onMessage(N, m, c) {
   const from = m.f, P = N.peers.get(from) || null;
   switch (m.t) {
     case 'who':                                        // someone came in and asks whether anyone is here
+      if (samePlayer(from, me)) break;                 // another tab of ours: not our business here (see the top)
       if (N.role === 'host') {
         const free = !!P || seats(N) || !!samePlayerPeer(N, from) || linkedPeers(N).some(seatFree);
         pub(N, free ? { t: 'host', n: count(N), to: from } : { t: 'full', to: from });
       } else if (N.role === 'guest' && N.linked && from !== N.host && samePlayer(from, N.host)) {
-        pub(N, { t: 'moved', to: N.host });            // the host's old tab should leave quietly
-        hostGone(N, from);                             // the host came back in a new tab: one of us takes over
+        // the host in a new tab: if the old one went silent, it is gone (one of us takes over and lets the new tab in);
+        // if the old one still talks, it is there and the player sorts out their own tabs
+        const H = hostPeer(N);
+        if (H && H.weak) { pub(N, { t: 'moved', to: N.host }); hostGone(N, from); }
       } else if (N.role === null && me < from) { becomeHost(N); pub(N, { t: 'host', n: 1, to: from }); }
       break;
     case 'host': {                                     // someone holds the room
       const n = Number.isInteger(m.n) && m.n > 0 ? m.n : 1;
-      if (N.role === 'guest' && from === N.host) {     // our host thinks we are not there: ask to join again
-        if (N.linked) becomeGuest(N, from);
-        break;
+      if (samePlayer(from, me)) break;                 // another tab of ours
+      if (N.role === 'guest' && from === N.host) {     // our host says it does not know us: ask to join again
+        if (N.linked && m.to === me && m.u) becomeGuest(N, from);
+        break;                                         // (its announcements to everyone change nothing)
       }
       if (N.role === 'guest' && N.linked) {
-        if (samePlayer(from, N.host)) hostGone(N, from);   // our host came back in a new tab
+        const H = hostPeer(N);
+        if (samePlayer(from, N.host) && H && H.weak) hostGone(N, from);   // our host came back in a new tab, the old one is silent
         break;                                         // (anyone else: our room stays as it is)
       }
       if (N.role === null || N.role === 'guest') becomeGuest(N, from);
@@ -138,19 +150,35 @@ function onMessage(N, m, c) {
       N.fullTimer = setTimeout(() => { if (!N.closed && !N.linked) discover(N); }, 2000);
       break;
     case 'hello': {                                    // a guest says hello
-      if (N.role !== 'host') break;
-      if (P && P.linked) { pub(N, { t: 'hi', to: from }); break; }
-      const same = samePlayerPeer(N, from), stale = !same && !seats(N) && linkedPeers(N).find(seatFree);
-      if (same || stale) relink(N, same || stale, from);   // the same player in a new tab, or someone taking a seat that was left
-      else if (seats(N)) { const G = P || newPeer(N, from); listen(N, G, true); pub(N, { t: 'hi', to: from }); linkUp(N, G); }
-      else pub(N, { t: 'full', to: from });
+      if (N.role !== 'host' || samePlayer(from, me)) break;
+      if (P && P.linked) {                             // linked already: the same attempt again (our hi was lost), or a new
+        if (m.k !== P.k) resync(N, P, m.k);           // one (they started over: so do we, or the numbering would not match)
+        pub(N, { t: 'hi', to: from, k: m.k });
+        break;
+      }
+      const same = samePlayerPeer(N, from);
+      if (same) { relink(N, same, from, m.k); break; } // the same player in a new tab: their seat, the round goes on
+      if (!seats(N)) {                                 // full: a seat left long ago (closed tab, long silence) goes to them
+        const stale = linkedPeers(N).find(seatFree);
+        if (!stale) { pub(N, { t: 'full', to: from }); break; }
+        pub(N, { t: 'bye', menu: 1, to: stale.id });
+        unlink(stale);
+      }
+      const G = P || newPeer(N, from);
+      G.k = m.k;
+      listen(N, G, true);
+      pub(N, { t: 'hi', to: from, k: m.k });
+      linkUp(N, G);
       break;
     }
     case 'hi':
-      if (N.role === 'guest' && N.host === from && P && !P.linked) linkUp(N, P);
+      if (N.role === 'guest' && N.host === from && P && !P.linked && (m.k === undefined || m.k === P.k)) linkUp(N, P);
+      break;
+    case 'here':                                       // a guest asks whether we are still together
+      if (!P || !P.linked) stranger(N, from);
       break;
     case 'go':                                         // our host gives way to another one: join it
-      if (N.role === 'guest' && from === N.host && typeof m.h === 'string' && m.h !== me) becomeGuest(N, m.h);
+      if (N.role === 'guest' && from === N.host && typeof m.h === 'string' && m.h !== me) becomeGuest(N, m.h, true);
       break;
     case 'moved':                                      // another tab of the same player took our seat
       if (P) leaveQuietly(N);
@@ -186,14 +214,14 @@ function stranger(N, from) {
   if (now - (told.get(from) || -1e9) < 2000) return;
   if (told.size > 32) told.clear();
   told.set(from, now);
-  if (N.role === 'host' && seats(N)) pub(N, { t: 'host', n: count(N), to: from });
+  if (N.role === 'host' && seats(N)) pub(N, { t: 'host', n: count(N), to: from, u: 1 });
   else if (N.role === 'host' || N.role === 'guest') pub(N, { t: 'bye', menu: 1, to: from });
 }
 
 // is anyone in the room? if nobody answers, we are first
 function discover(N) {
   stop(N, 'whoTimer', 'annTimer', 'helloTimer');
-  dropAll(N);
+  dropAll(N, true);
   setRole(N, null);
   pub(N, { t: 'who' });
   setTimeout(() => { if (!N.closed && N.role === null) pub(N, { t: 'who' }); }, 450);
@@ -202,20 +230,23 @@ function discover(N) {
 
 function becomeHost(N) {
   stop(N, 'whoTimer', 'annTimer', 'helloTimer');
-  if (N.role !== 'host') dropAll(N);
+  if (N.role !== 'host') dropAll(N, true);
   setRole(N, 'host');
   updateRoster(N);
   if (!N.linked) N.emit('status', 'waiting');
-  const ann = () => { if (!N.closed && N.role === 'host' && !N.linked) pub(N, { t: 'host', n: 1 }); };
+  let i = 0;                                           // alone: often, so friends find us; with guests: now and then (see the top)
+  const ann = () => { if (!N.closed && N.role === 'host' && (!N.linked || i++ % ANNOUNCE_LINKED === 0)) pub(N, { t: 'host', n: count(N) }); };
   ann();
-  N.annTimer = setInterval(ann, 2500);
+  N.annTimer = setInterval(ann, ANNOUNCE);
 }
 
-function becomeGuest(N, host) {
+// quiet: the host was told (go) or we choose it ourselves; otherwise whoever we were linked with hears that we left
+function becomeGuest(N, host, quiet = false) {
   stop(N, 'whoTimer', 'annTimer', 'helloTimer');
-  dropAll(N);
+  dropAll(N, !quiet, host);
   N.host = host;
   const H = newPeer(N, host);
+  H.k = Math.random() * 1e9 | 0;                       // this attempt: the host starts our link over when it sees a new one
   listen(N, H, true);                                  // at once: the host may speak a moment before its 'hi' arrives
   setRole(N, 'guest');
   N.emit('status', 'joining');
@@ -223,22 +254,49 @@ function becomeGuest(N, host) {
   const hello = () => {
     if (N.closed || H.linked || N.role !== 'guest' || N.host !== host) { clearInterval(N.helloTimer); return; }
     if (++tries > 6) { clearInterval(N.helloTimer); discover(N); return; }   // no answer: look around again
-    pub(N, { t: 'hello', to: host });
+    pub(N, { t: 'hello', to: host, k: H.k });
   };
   hello();
   N.helloTimer = setInterval(hello, 1200);
 }
 
 function linkUp(N, P) {                                // P and we hear each other
-  if (N.role === 'host') stop(N, 'annTimer');
-  else stop(N, 'helloTimer');
+  if (N.role !== 'host') stop(N, 'helloTimer');
   markLinked(P);
 }
 
-// two hosts on one code: ours joins the other, and our guests come along
+// two hosts on one code: ours joins the other, and our guests come along (told twice: one message may be lost;
+// one who misses both finds out by asking, see probe)
 function giveWay(N, other) {
-  for (const P of linkedPeers(N)) pub(N, { t: 'go', h: other, to: P.id });
-  becomeGuest(N, other);
+  const ids = linkedPeers(N).map(P => P.id), go = () => { for (const id of ids) pub(N, { t: 'go', h: other, to: id }); };
+  go(); setTimeout(go, 1000);
+  becomeGuest(N, other, true);
+}
+
+// A guest whose host went quiet asks now and then whether they are still together (the host may have let us
+// go after a long silence; it then asks us to say hello again, see stranger).
+function probe(N, P, now) {
+  if (N.role !== 'guest' || P.id !== N.host || !P.weak || now - (P.probeAt || 0) < 3000) return;
+  P.probeAt = now;
+  pub(N, { t: 'here', to: P.id });
+}
+
+// We were away (a phone locked, a tab frozen) for longer than anyone waits: the others have let us go. A guest
+// says hello to its host again; a host starts over and finds the room by its announcements (two hosts merge).
+function longSleep(N) {
+  if (N.role === 'guest' && N.host) becomeGuest(N, N.host);
+  else if (N.role === 'host' && N.linked) { dropAll(N, true); becomeHost(N); }
+}
+
+// the link with P starts over (they started over: a new hello attempt) — numbering, paths, the direct link
+function resync(N, P, k) {
+  P.k = k;
+  closePeer(P);
+  resetPaths(P);
+  P.byeAt = 0; P.lastSeen = performance.now();
+  N.emit('relinked', P.pid);                           // the game sends them the full picture again
+  N.refresh(P);
+  send(P, { t: '_r', ids: N.roster });                 // and the roster (unchanged, so updateRoster would not send it)
 }
 
 // Our host is gone (left, silent for too long, or reopened in a new tab: newTab). The first guest on the
@@ -263,8 +321,9 @@ function byeFrom(N, P, final) {
 
 // A guest came back in a new tab (or someone took a seat that was left). The round is not reset: the game sends
 // the new tab a full picture and goes on after a short countdown.
-function relink(N, P, from) {
+function relink(N, P, from, k) {
   pub(N, { t: 'moved', to: P.id });
+  P.k = k;
   listen(N, P, false);
   closePeer(P);
   renamePeer(N, P, from);
@@ -295,9 +354,12 @@ function peerGone(N, P) {
   if (N.role === 'host' && !N.linked) { becomeHost(N); N.emit('status', 'peer-left'); }   // announce again: the link stays valid
 }
 
-// forget every link (a new role is coming)
-function dropAll(N) {
-  for (const P of [...N.peers.values()]) unlink(P);
+// forget every link (a new role is coming); tell: let them know we left (but not `keep`, whom we go to)
+function dropAll(N, tell, keep) {
+  for (const P of [...N.peers.values()]) {
+    if (tell && P.id !== keep) pub(N, { t: 'bye', menu: 1, to: P.id });
+    unlink(P);
+  }
   N.peers.clear();
   N.host = null;
 }

@@ -32,7 +32,7 @@ export function startShell({ games: list, initial, loader, signOut, whenSignedIn
     whenSignedIn(() => { $('sign-out').hidden = false; });
   }
   addEventListener('popstate', () => {
-    const byPeer = following;
+    const byPeer = following || !!(queued && queued[1]);   // a friend's newer choice came meanwhile: the shelf on the way is not ours to announce
     backing = following = false;
     show(fromAddress(), byPeer);
     history.replaceState(history.state, '', address(current));   // the room in the address (?room=) is today's, not that entry's

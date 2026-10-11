@@ -32,7 +32,7 @@ export function send(P, m, { fast = false, batch = false } = {}) {
   if (!fast) {
     m = { ...m, _x: ++P.tx };                          // a copy: the same message may go to several players
     P.outbox.push({ m, at: performance.now(), n: 1 });
-    if (P.outbox.length > OUTBOX_MAX) { N.peerGone(P); return; }   // they have not heard us for ages
+    if (P.outbox.length > OUTBOX_MAX) { queueMicrotask(() => { if (P.linked) N.peerGone(P); }); return; }   // they have not heard us for ages (not now: we may be in a loop over the links)
   }
   transmit(P, m, fast, batch);
 }
@@ -87,20 +87,19 @@ export function deliver(P, m, viaRelay) {
   const x = m._x;
   if (x === undefined) { signals(P, m, viaRelay, now); return; }   // fast: pulses, ping answers, the game's own
   if (!Number.isInteger(x) || x < P.rxNext) return;   // a copy that came by the other path, or a resend we already have
-  if (m.t === 'bye') {                                 // they closed the tab (menu: left for good): at once, whatever is missing
-    if (P.byeX !== x) { P.byeX = x; N.byeFrom(P, m.menu === 1); }
-    return;
+  if (m.t === 'bye' && P.byeX !== x) {                 // they closed the tab (menu: left for good): at once, whatever is missing
+    P.byeX = x;                                        // (it still takes its place in the order below, or nothing after it would run)
+    N.byeFrom(P, m.menu === 1);
+    if (N.closed || !P.linked) return;
   }
   if (x > P.rxNext) { if (P.rxHold.size < HOLD_MAX) P.rxHold.set(x, m); return; }   // one before it is missing: it waits
   for (;;) {                                           // this one, and whatever was waiting behind it
     delete m._x;
     P.rxNext++;
-    N.arrive(P, m, true);
-    if (N.closed || !P.linked) return;
+    if (m.t !== 'bye') { N.arrive(P, m, true); if (N.closed || !P.linked) return; }
     m = P.rxHold.get(P.rxNext);
     if (!m) return;
     P.rxHold.delete(P.rxNext);
-    if (m.t === 'bye') { P.rxNext++; if (P.byeX !== m._x) { P.byeX = m._x; N.byeFrom(P, m.menu === 1); } return; }
   }
 }
 
@@ -194,12 +193,18 @@ export function diag(N) {
 // mobile) breaks both the direct link and the broker connections. So: a short silence pauses the game and
 // waits; brokers reconnect on their own; the direct link is rebuilt. Only a really long silence ends a link.
 export function watch(N) {
-  const now = performance.now(), slept = now - N.lastWatch > N.watchMs + 1300;
+  const now = performance.now(), gap = now - N.lastWatch, slept = gap > N.watchMs + 1300;
   N.lastWatch = now;
   if (N.closed) return;
   // Our own tab was asleep (phone locked, timers throttled): the silence was ours, not theirs.
-  // Give the connections a few seconds to come back before judging the others.
-  if (slept) { N.graceUntil = now + 5000; for (const P of N.peers.values()) P.lastSeen = now; kick(N); }
+  // Give the connections a few seconds to come back before judging the others. Away for longer than anyone
+  // waits: they have let us go, so we find our way back (internet.js: longSleep).
+  if (slept) {
+    N.graceUntil = now + 5000;
+    for (const P of N.peers.values()) P.lastSeen = now;
+    kick(N);
+    if (gap > N.lostAfter && N.longSleep) { N.longSleep(); return; }
+  }
   if (N.relay) tendBrokers(N, now);
   for (const P of linkedPeers(N)) watchPeer(P, now);
   if (N.closed) return;
@@ -209,6 +214,7 @@ export function watch(N) {
 
 function watchPeer(P, now) {
   const N = P.N;
+  if (N.probe) N.probe(P, now);
   if (dcLive(P) && now - P.statsAt > 2000) { P.statsAt = now; probeLink(P); }
   if (now - P.pingAt > 190) {
     P.pingAt = now; P.pN++;
