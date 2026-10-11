@@ -1,5 +1,6 @@
 // Turning games/<id>/ into a published game: manifest, library API, one-page bundle, public page; and site checks.
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import * as esbuild from 'esbuild';
 import * as vault from '../sdk/vault/index.js';
@@ -51,7 +52,7 @@ export function withLibraryApi(html, id, g) {
   return html.replace(at, m => m + '\n<script>' + api.trim() + '</script>');
 }
 
-/* ---------- shared libraries: import … from '@ihroteka/<name>' resolves to sdk/<name>/index.js ---------- */
+/* ---------- the SDK: import … from '@ihroteka/<name>' resolves to sdk/<name>/index.js ---------- */
 export const sdkModules = () => Object.fromEntries((exists(P.sdk) ? fs.readdirSync(P.sdk) : [])
   .filter(n => exists(path.join(P.sdk, n, 'index.js'))).map(n => ['@ihroteka/' + n, path.join(P.sdk, n, 'index.js')]));
 
@@ -102,34 +103,62 @@ export async function bundleGame(id, g) {
   return html;
 }
 
-/* ---------- public game page with the lock and the link preview ---------- */
+/* ---------- the site's pages: one template (sdk/shelf/page.html) for the shelf and every game ---------- */
+// {{key}} is replaced (HTML-escaped; bootArgs as is); a line starting with {{?key}} stays only when key is set
+export function page(vals) {
+  return fs.readFileSync(path.join(P.sdk, 'shelf', 'page.html'), 'utf8')
+    .replace(/^\{\{\?(\w+)\}\}(.*\n)/gm, (_, k, line) => vals[k] ? line : '')
+    .replace(/\{\{(\w+)\}\}/g, (_, k) => k in vals ? (k === 'bootArgs' ? vals[k] : esc(vals[k])) : problem('page.html: unknown field ' + k));
+}
+const LIBRARY = { title: 'Ігротека', description: 'Наша маленька бібліотека ігор. Вхід за паролем.', theme: '#e4e2f0' };
+
 export function gamePage(id, g) {
   const base = homepage();
   if (!/^https:\/\/[^/]+\/(.*\/)?$/.test(base.replace(/\/?$/, '/'))) problem('package.json "homepage" must be the absolute https URL of the site (link previews need it)');
-  const vals = {
-    title: g.title, description: g.description, image: g.image,
-    shareTitle: g.shareTitle || g.title, shareDescription: g.shareDescription || g.description, imageAlt: g.imageAlt || g.title,
-    imageUrl: base.replace(/\/?$/, '/') + id + '/' + g.image, emoji: g.emoji || '🎮', theme: g.theme || '#e4e2f0'
-  };
-  return fs.readFileSync(path.join(P.sdk, 'shelf', 'game.html'), 'utf8')
-    .replace('{{idJson}}', JSON.stringify(id))
-    .replace(/\{\{(\w+)\}\}/g, (_, k) => k in vals ? esc(vals[k]) : problem('Template: unknown field ' + k));
+  return page({
+    title: g.title, description: g.description, shareTitle: g.shareTitle || g.title, shareDescription: g.shareDescription || g.description,
+    imageUrl: base.replace(/\/?$/, '/') + id + '/' + g.image, imageAlt: g.imageAlt || g.title, emoji: g.emoji || '🎮', theme: g.theme || LIBRARY.theme,
+    base: '../', cover: g.image, icon: '', heading: g.title, lead: 'Гра з нашої Ігротеки. Введи свій пароль.', bootArgs: JSON.stringify({ game: id })
+  });
 }
 
-/* ---------- the site's own files, built from @ihroteka/shelf: path in docs/ → contents ---------- */
-export async function shelfFiles() {
-  const dir = path.join(P.sdk, 'shelf');
-  return {
-    'index.html': fs.readFileSync(path.join(dir, 'index.html'), 'utf8'),
-    'lib/ihroteka.js': await esbuildText(path.join(dir, 'index.js'), JS, 'sdk/shelf') + '\n',
-    'lib/ihroteka.css': await esbuildText(path.join(dir, 'style.css'), {}, 'sdk/shelf') + '\n'
+/* ---------- the library itself, built from sdk/shelf: path in docs/ → contents ---------- */
+const ICONS = ['icon-192.png', 'icon-512.png', 'maskable-512.png', 'apple-touch-icon.png'];
+export async function siteFiles() {
+  const dir = path.join(P.sdk, 'shelf'), js = (entry, banner) => esbuildText(path.join(dir, entry), { ...JS, ...(banner && { banner: { js: banner } }) }, 'sdk/shelf');
+  const files = {
+    'index.html': page({ ...LIBRARY, shareTitle: LIBRARY.title, shareDescription: LIBRARY.description, imageUrl: '', imageAlt: '', emoji: '🎲',
+      base: './', cover: '', icon: '🔒', heading: LIBRARY.title, lead: 'Наша маленька бібліотека ігор. Введи свій пароль.', bootArgs: '{}' }),
+    'lib/ihroteka.js': await js('index.js') + '\n',
+    'lib/ihroteka.css': await esbuildText(path.join(dir, 'style.css'), {}, 'sdk/shelf') + '\n',
+    'lib/qr-scan.js': await js('scan.js', '/*! jsQR © Cosmo Wolfe, Apache-2.0 */') + '\n',
+    'manifest.webmanifest': JSON.stringify({
+      name: LIBRARY.title, short_name: LIBRARY.title, description: LIBRARY.description, lang: 'uk', id: './', start_url: './', scope: './',
+      display: 'standalone', background_color: LIBRARY.theme, theme_color: LIBRARY.theme,
+      icons: [{ src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+        { src: 'icons/maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }]
+    }, null, 2) + '\n'
   };
+  for (const f of ICONS) files['icons/' + f] = fs.readFileSync(path.join(dir, 'icons', f));
+  return files;
+}
+
+/* ---------- the offline copy: sw.js lists every published file; its version is a hash of them all ---------- */
+export function serviceWorker() {
+  const files = walk(P.site).filter(f => f !== 'sw.js'), hash = crypto.createHash('sha256');
+  for (const f of files) hash.update(f + '\0').update(fs.readFileSync(sitePath(f)));
+  const fonts = [...fs.readFileSync(path.join(P.sdk, 'shelf', 'page.html'), 'utf8').matchAll(/href="(https:\/\/fonts\.googleapis\.com\/[^"]+)"/g)].map(m => m[1].replace(/&amp;/g, '&'));
+  const pages = files.map(f => f.replace(/(^|\/)index\.html$/, '$1'));   // a page is stored under its address
+  return fs.readFileSync(path.join(P.sdk, 'shelf', 'sw.js'), 'utf8')
+    .replace('/* FILES */', pages.map(f => JSON.stringify(f)).join(','))
+    .replace('/* FONTS */', [...new Set(fonts)].map(f => JSON.stringify(f)).join(','))
+    .replace('/* VERSION */', hash.digest('hex').slice(0, 16));
 }
 
 /* ---------- password-free site validation (also run by CI) → { problems, games, people } ---------- */
 export async function checkSite() {
-  const shelf = await shelfFiles();
-  const SITE_FILES = new Set(['keyring.json', 'library.bin', ...Object.keys(shelf)]);
+  const shelf = await siteFiles();
+  const SITE_FILES = new Set(['keyring.json', 'library.bin', 'sw.js', ...Object.keys(shelf)]);
   const problems = [], bad = msg => problems.push(msg);
   let kr = null;
   try { kr = JSON.parse(fs.readFileSync(P.keyring, 'utf8')); } catch (e) { bad(rel(P.keyring) + ': ' + e.message); }
@@ -147,8 +176,10 @@ export async function checkSite() {
   };
   for (const [f, data] of Object.entries(shelf)) {
     if (!exists(sitePath(f))) bad('missing docs/' + f);
-    else if (fs.readFileSync(sitePath(f), 'utf8') !== data) bad('docs/' + f + ' is out of date with sdk/shelf (npm run build)');
+    else if (!fs.readFileSync(sitePath(f)).equals(Buffer.from(data))) bad('docs/' + f + ' is out of date with sdk/shelf (npm run build)');
   }
+  if (!exists(sitePath('sw.js'))) bad('missing docs/sw.js');
+  else if (fs.readFileSync(sitePath('sw.js'), 'utf8') !== serviceWorker()) bad('docs/sw.js does not list the published files (npm run build)');
   sealedWithCurrentKey(sitePath('library.bin'), 'shelf');
   const games = siteGames();
   if (!games.length) bad('no games in docs/');
@@ -158,7 +189,7 @@ export async function checkSite() {
     const page = sitePath(id, 'index.html');
     if (!exists(page)) { bad('missing docs/' + id + '/index.html'); continue; }
     const html = fs.readFileSync(page, 'utf8'), img = html.match(/class="cover" src="([^"]+)"/)?.[1];
-    if (!html.includes('bootGame(')) bad('docs/' + id + '/index.html is not a library game page');
+    if (!html.includes('boot({"game":' + JSON.stringify(id))) bad('docs/' + id + '/index.html is not a library game page');
     if (/\{\{\w+\}\}/.test(html)) bad('docs/' + id + '/index.html: unfilled template');
     if (!img || !exists(sitePath(id, img))) bad('docs/' + id + ': missing image ' + (img || ''));
   }

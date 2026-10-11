@@ -22,6 +22,7 @@ export function resetPaths(N) {
 export function send(N, m, { fast = false, batch = false } = {}) {
   if (N.closed || !N.linked) return;
   if (!fast) m._x = ++N.tx;
+  if (!N.relay) { if (dcLive(N)) { try { (fast ? N.dcF : N.dcC).send(JSON.stringify(m)); } catch (e) {} } return; }   // nearby: the direct link is all there is
   if (dcLive(N) && N.via === 'p2p') {
     try { (fast ? N.dcF : N.dcC).send(JSON.stringify(m)); } catch (e) {}
     if (dcFresh(N)) return;                            // the direct link is alive: that is enough
@@ -32,7 +33,7 @@ export function send(N, m, { fast = false, batch = false } = {}) {
   else if (!N.qTimer) N.qTimer = setTimeout(() => flushRelay(N), 45);
 }
 function sendDirect(N, m) { if (dcLive(N)) { try { N.dcF.send(JSON.stringify(m)); } catch (e) {} } }
-function sendRelay(N, m) { if (N.linked) { N.q.push(m); flushRelay(N); } }
+function sendRelay(N, m) { if (N.linked && N.relay) { N.q.push(m); flushRelay(N); } }
 export function flushRelay(N) {
   clearTimeout(N.qTimer); N.qTimer = null;
   if (!N.q.length || !N.other) return;
@@ -45,7 +46,7 @@ export function deliver(N, m, viaRelay) {
   if (N.closed || !N.linked || !m || typeof m !== 'object' || typeof m.t !== 'string') return;
   const now = performance.now();
   N.lastSeen = now;
-  if (m.t === 'bye') { N.byeFrom(false); return; }     // the other player closed the tab
+  if (m.t === 'bye') { N.byeFrom(m.menu === 1); return; }   // the other player closed the tab (menu: left for good)
   let isNew = true;                                    // has this not already come by the other path?
   const x = m._x;
   if (x === undefined) {                               // fast: the game filters its own; here only the pulse
@@ -102,6 +103,7 @@ export function lag(N) {
 }
 
 function pickRoute(N) {
+  if (!N.relay) return 'p2p';
   if (!dcFresh(N)) return 'relay';                     // no direct path, or it went quiet
   if (N.rD == null || N.rR == null) return 'p2p';
   if (N.slowDirect) { if (N.rD <= N.rR + 10) N.slowDirect = false; }      // back to direct as soon as it is not worse
@@ -124,6 +126,8 @@ export function refresh(N) {
 export function diag(N) {
   const f = v => v == null ? '—' : Math.round(v) + ' ms';
   const used = N.via === 'p2p' ? (N.turn ? 'direct link through a TURN relay' : N.turn === false ? 'direct' : 'direct link') : 'brokers';
+  if (!N.relay) return ['path: nearby, ' + used, 'ping: ' + f(N.rD) + ' (browser: ' + f(N.iceRtt) + '), candidates: ' + (N.cand || '—'),
+    'role: ' + (N.role || '—') + ', direct link open: ' + (dcLive(N) ? 'yes' : 'no')].join('\n');
   return ['path: ' + used + (N.slowDirect ? ' (direct link exists but is slower)' : ''),
     'direct ping: ' + f(N.rD) + ' (browser: ' + f(N.iceRtt) + '), candidates: ' + (N.cand || '—'),
     'broker ping: ' + f(N.rR),
@@ -146,7 +150,7 @@ export function watch(N) {
   // Our own tab was asleep (phone locked, timers throttled): the silence was ours, not theirs.
   // Give the connections a few seconds to come back before judging the other player.
   if (slept) { N.graceUntil = now + 5000; if (N.linked) N.lastSeen = now; kick(N); }
-  tendBrokers(N, now);
+  if (N.relay) tendBrokers(N, now);
   if (N.linked && dcLive(N) && now - N.statsAt > 2000) { N.statsAt = now; probeLink(N); }
   if (!N.linked) return;
   if (now - N.pingAt > 190) {
@@ -162,8 +166,9 @@ export function watch(N) {
   if (N.byeAt && now - N.byeAt > 20000) { N.peerGone(); return; }   // closed the tab and did not come back
   if (quiet > (N.patient() ? 90000 : N.lostAfter)) { N.peerGone(); return; }
   // a direct link that went quiet for long is closed; the guest then tries to build a new one
-  if (dcLive(N) && now - (N.dcSeen || N.dcBorn) > 4000) closeRtc(N);
-  if (N.role === 'guest' && !N.pc && !N.weak && now >= N.rtcNext) {
+  // (not nearby: there the direct link cannot be rebuilt without the players)
+  if (N.relay && dcLive(N) && now - (N.dcSeen || N.dcBorn) > 4000) closeRtc(N);
+  if (N.relay && N.role === 'guest' && !N.pc && !N.weak && now >= N.rtcNext) {
     N.rtcNext = now + [4000, 8000, 15000, 30000][Math.min(N.rtcTries, 3)];
     N.rtcTries++;
     startRtc(N);
@@ -182,7 +187,7 @@ export function setWeak(N, v) {
 
 // network changed, page came back, or silence: check the brokers now; the guest also retries the direct link soon
 export function kick(N) {
-  if (N.closed || !kickBrokers(N)) return;
+  if (N.closed || !N.relay || !kickBrokers(N)) return;
   if (N.linked && N.role === 'guest') N.rtcNext = Math.min(N.rtcNext, performance.now() + 1500);
 }
 
@@ -192,6 +197,7 @@ function pingMsg(N, now) {
   if (rt != null) m.rt = Math.round(rt);               // our measured ping: the other player shows it too
   const extra = N.pulse && N.pulse(now);               // the game's own fields (see room.pulse)
   if (extra) m.g = extra;
+  if (!N.relay) return m;
   if (dcLive(N) && !dcHear(N)) m.r = 1;                // "I can't hear you directly": both sides then also use the brokers
   if (!dcFresh(N)) { const w = bestBrokers(N); if (w.length) m.w = w; }   // which brokers bring your data to me first
   return m;
@@ -199,7 +205,7 @@ function pingMsg(N, now) {
 
 // The direct link went quiet: speak up through the brokers right away instead of waiting for the next pulse.
 export function keepDirectAlive(N, now) {
-  if (N.linked && !N.closed && dcLive(N) && !dcFresh(N) && now - N.nudged > 400) {
+  if (N.relay && N.linked && !N.closed && dcLive(N) && !dcFresh(N) && now - N.nudged > 400) {
     N.nudged = now; N.pingAt = now;
     const p = pingMsg(N, now); sendDirect(N, p); sendRelay(N, p);
   }

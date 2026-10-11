@@ -2,14 +2,14 @@
 <html lang="uk">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#e4e2f0">
 <meta name="robots" content="noindex">
 <title>Два дракони</title>
 <meta name="description" content="Гра на двох: збирай шматочки, рости й обжени іншого дракона. Відкрий посилання й натисни «Почати гру». Нічого встановлювати не треба.">
-<!-- Link preview for Telegram and other messengers. This page is public; the game itself is encrypted. -->
+<!-- Link preview for Telegram and other messengers. This page is public; the games themselves are encrypted. -->
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="Два дракони">
+<meta property="og:site_name" content="Ігротека">
 <meta property="og:locale" content="uk_UA">
 <meta property="og:title" content="Заходь, зіграємо в «Два дракони»">
 <meta property="og:description" content="Гра на двох: збирай шматочки, рости й обжени іншого дракона. Відкрий посилання й натисни «Почати гру». Нічого встановлювати не треба.">
@@ -19,10 +19,13 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Рожевий і синій дракони мчать до жовтого шматочка">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Заходь, зіграємо в «Два дракони»">
-<meta name="twitter:description" content="Гра на двох: збирай шматочки, рости й обжени іншого дракона. Відкрий посилання й натисни «Почати гру». Нічого встановлювати не треба.">
 <meta name="twitter:image" content="https://sstepanchuk.github.io/mini-games/dragons/preview.png">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐉</text></svg>">
+<link rel="manifest" href="../manifest.webmanifest">
+<link rel="apple-touch-icon" href="../icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Ігротека">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;700&family=Unbounded:wght@500;800&display=swap" rel="stylesheet">
@@ -37,20 +40,36 @@
     <p class="lead">Гра з нашої Ігротеки. Введи свій пароль.</p>
     <input type="text" name="username" value="Ігротека" autocomplete="username" hidden>
     <input type="password" id="pw" autocomplete="current-password" placeholder="Пароль" aria-label="Пароль" required>
-    <button class="btn" type="submit">Грати</button>
+    <button class="btn" type="submit">Відкрити</button>
     <p class="err" id="err" role="alert"></p>
   </form>
-  <p class="busy" id="busy">Відкриваю гру…</p>
+  <p class="busy" id="busy">Відмикаю…</p>
   <a class="btn ghost" href="../">Усі ігри</a>
-  <noscript><p class="err">Без JavaScript гра не відкриється.</p></noscript>
+  <noscript><p class="err">Без JavaScript бібліотека не відкриється.</p></noscript>
 </main>
+
+<section class="shelf" id="shelf" hidden>
+  <div class="shelf-head">
+    <h1 class="title">Ігротека</h1>
+    <button class="chip" id="together" type="button">Грати разом</button>
+  </div>
+  <div class="games" id="games"></div>
+  <p class="fine" id="install" hidden></p>
+  <button class="btn ghost" id="sign-out" type="button" title="Пристрій забуде твій ключ">Вийти</button>
+</section>
+
+<section class="stage" id="stage" hidden>
+  <div class="stage-note" id="stage-note"><p id="stage-text"></p><button class="btn ghost" id="stage-back" type="button" hidden>До бібліотеки</button></div>
+</section>
+<div id="layer"></div>
+
 <script>
-  // the lock is a module: if this browser cannot run it, say so instead of spinning forever
+  // the library is a module: if this browser cannot run it, say so instead of spinning forever
   setTimeout(function () { if (!window.__ihrotekaBooted) document.getElementById('busy').textContent = 'Цей браузер застарий для бібліотеки. Онови його або відкрий в іншому.'; }, 8000);
 </script>
 <script type="module">
-  import { bootGame } from '../lib/ihroteka.js';
-  bootGame("dragons");
+  import { boot } from '../lib/ihroteka.js';
+  boot({"game":"dragons"});
 </script>
 </body>
 </html>

@@ -48,7 +48,7 @@ function newPc(N) {
   return pc;
 }
 
-function wireDc(N, pc, dc) {
+export function wireDc(N, pc, dc) {
   const key = dc.label === 'fast' ? 'dcF' : 'dcC';
   dc.onopen = () => {
     if (N.closed || N.pc !== pc) return;
@@ -57,13 +57,15 @@ function wireDc(N, pc, dc) {
     flushRelay(N);
     N.dcBorn = performance.now();
     N.dcSeen = 0; N.rtcTries = 0;                      // it becomes "alive" when the first message arrives through it
+    if (N.onDirect) N.onDirect(true);
     N.refresh();
   };
-  dc.onclose = () => { if (N.pc === pc) { closeRtc(N); N.refresh(); } };
+  dc.onclose = () => { if (N.pc === pc) { closeRtc(N); if (N.onDirect) N.onDirect(false); N.refresh(); } };
   dc.onmessage = e => {
     if (N.closed || N.pc !== pc) return;
     N.dcSeen = performance.now();
     let x; try { x = JSON.parse(e.data); } catch (err) { return; }
+    if (!N.linked && N.early) { if (N.early.length < 64) N.early.push(x); return; }   // the other side was a moment faster
     try { deliver(N, x, false); } catch (err) { console.error(err); }   // one bad message must not break the channel
   };
 }

@@ -51,6 +51,21 @@ test('init, build and check', () => {
   for (const p of ['docs/library.bin', 'docs/demo/game.bin', 'vault/demo.bin']) assert.equal(kidOf(p), kr().kid);
 });
 
+test('the site works offline: every published file is in the service worker, under its address', () => {
+  const sw = fs.readFileSync(file('docs/sw.js'), 'utf8');
+  for (const f of ['""', '"demo/"', '"demo/game.bin"', '"keyring.json"', '"library.bin"', '"lib/ihroteka.js"', '"lib/qr-scan.js"', '"manifest.webmanifest"', '"icons/icon-512.png"']) assert.ok(sw.includes(f), f);
+  assert.ok(!sw.includes('"sw.js"') && !sw.includes('index.html'));
+  assert.match(sw, /fonts\.googleapis\.com/);
+  assert.equal(JSON.parse(fs.readFileSync(file('docs/manifest.webmanifest'), 'utf8')).display, 'standalone');
+  assert.match(fs.readFileSync(file('docs/demo/index.html'), 'utf8'), /boot\(\{"game":"demo"\}\)/);
+  // a changed published file without a rebuilt worker is caught
+  const page = fs.readFileSync(file('docs/demo/index.html'));
+  fs.writeFileSync(file('docs/demo/index.html'), Buffer.concat([page, Buffer.from(' ')]));
+  assert.match(run(['check']).out, /sw\.js does not list the published files/);
+  fs.writeFileSync(file('docs/demo/index.html'), page);
+  must(['check']);
+});
+
 test('the game page is one self-contained module page with the library API', async () => {
   const k = kr(), who = await vault.signIn(k, pw.bob);
   const key = await vault.importKey(await vault.libraryKey(k, who.person.id, who.priv));
@@ -170,9 +185,11 @@ test('dev server stays inside its folder and survives bad requests', async () =>
     fs.mkdirSync(file('games-backup'), { recursive: true }); fs.writeFileSync(file('games-backup/x'), 'x');
     assert.equal(await get('/..%2fgames-backup/x'), 403);
     assert.equal(await get('/%E0%A4%A'), 400);
+    assert.equal(await get('/'), 200);                                        // the library, around the games
     assert.equal(await get('/demo/'), 200);
-    assert.equal(await get('/@ihroteka/net/index.js'), 200);                  // shared libraries, through the import map
-    assert.equal(await get('/@ihroteka/..%2f..%2fpackage.json'), 403);
-    assert.equal(await get('/'), 200);
+    assert.equal(await get('/demo/?frame'), 200);                              // the game itself, inside the library's frame
+    assert.equal(await get('/lib/ihroteka.js'), 200);
+    assert.equal(await get('/@ihroteka/net/index.js'), 200);                  // the SDK, through the import map
+    assert.equal(await get('/@ihroteka/..%2f..%2fpackage.json'), 404);
   } finally { server.kill(); }
 });

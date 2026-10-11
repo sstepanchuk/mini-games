@@ -5,7 +5,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import * as vault from '../sdk/vault/index.js';
 import * as repo from './repo.js';
-import { readManifest, bundleGame, gamePage, checkSite, shelfFiles } from './build.js';
+import { readManifest, bundleGame, gamePage, checkSite, siteFiles, serviceWorker } from './build.js';
 import { serve } from './dev.js';
 
 const { P, rel, exists, problem } = repo;
@@ -88,7 +88,7 @@ const commands = {
     if (!ids.length) problem('No games in games/.');
     const games = ids.map(id => [id, readManifest(id)]);                 // validate everything before asking for the password
     const lib = await signIn();
-    for (const [f, data] of Object.entries(await shelfFiles())) repo.writeAtomic(repo.sitePath(f), data);
+    for (const [f, data] of Object.entries(await siteFiles())) writeIfChanged(repo.sitePath(f), data);
     for (const [id, g] of games) {
       const html = await bundleGame(id, g);
       const changed = [
@@ -161,7 +161,13 @@ const commands = {
   dev: (...args) => serve(args.includes('docs') ? 'docs' : 'games', args.find(a => /^\d+$/.test(a)) || '8000', args.includes('--lan') ? '0.0.0.0' : '127.0.0.1')
 };
 
+// every command that changes docs/ also refreshes the offline copy's file list (sw.js)
+const WRITES = new Set(['init', 'build', 'remove-game', 'user']);
+const writeIfChanged = (file, data) => { if (!exists(file) || !fs.readFileSync(file).equals(Buffer.from(data))) repo.writeAtomic(file, data); };
+
 const [cmd = 'help', ...rest] = process.argv.slice(2);
 const done = e => { console.error('✗ ' + (e instanceof repo.Problem ? e.message : e.stack || e)); process.exit(1); };
 if (!Object.hasOwn(commands, cmd)) done(new repo.Problem('Unknown command: ' + cmd + '. See: node tools/cli.js help'));
-else try { Promise.resolve(commands[cmd](...rest)).catch(done); } catch (e) { done(e); }
+else Promise.resolve().then(() => commands[cmd](...rest))
+  .then(() => { if (WRITES.has(cmd) && exists(repo.sitePath('index.html'))) writeIfChanged(repo.sitePath('sw.js'), serviceWorker()); })
+  .catch(done);
