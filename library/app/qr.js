@@ -18,12 +18,15 @@ export function drawQr(canvas, text, px = 260) {
 // The camera, kept on for the whole pairing: while it runs, browsers also reveal this device's real local
 // addresses to WebRTC instead of hidden mDNS names, which makes a link between two phones more likely.
 export class Camera {
-  constructor(video) { this.video = video; this.stream = null; this.detect = null; }
+  constructor(video) { this.video = video; this.stream = null; this.detect = null; this.stopped = false; }
   async start() {
     if (this.stream) return true;
+    let stream;
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false });
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false });
     } catch (e) { return false; }                      // no camera, or not allowed: the code can still be pasted
+    if (this.stopped) { for (const t of stream.getTracks()) t.stop(); return false; }   // closed while the camera was starting
+    this.stream = stream;
     this.video.srcObject = this.stream;
     this.video.muted = true; this.video.playsInline = true;
     try { await this.video.play(); } catch (e) {}
@@ -38,8 +41,8 @@ export class Camera {
       await new Promise(r => setTimeout(r, 160));
       const v = this.video, w = v.videoWidth, h = v.videoHeight;
       if (!w || !h) continue;
-      const k = Math.min(1, 640 / Math.max(w, h));
-      c.width = Math.round(w * k); c.height = Math.round(h * k);
+      const k = Math.min(1, 640 / Math.max(w, h)), cw = Math.round(w * k), chh = Math.round(h * k);
+      if (c.width !== cw || c.height !== chh) { c.width = cw; c.height = chh; }
       g.drawImage(v, 0, 0, c.width, c.height);
       let text = null;
       try { text = await detect(c, g); } catch (e) {}
@@ -61,7 +64,7 @@ export class Camera {
     return this.detect = (c, g) => scan(g.getImageData(0, 0, c.width, c.height));
   }
   stop() {
-    this.reading = false;
+    this.reading = false; this.stopped = true;
     if (this.stream) for (const t of this.stream.getTracks()) t.stop();
     this.stream = null; this.video.srcObject = null;
   }

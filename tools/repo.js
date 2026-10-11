@@ -11,7 +11,7 @@ export class Problem extends Error {}
 export const problem = msg => { throw new Problem(msg); };
 
 // IHROTEKA_ROOT lets tests run the tools against a scratch copy of the repository
-export const ROOT = path.resolve(process.env.IHROTEKA_ROOT || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
+const ROOT = path.resolve(process.env.IHROTEKA_ROOT || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
 const TOOLS = path.dirname(fileURLToPath(import.meta.url));
 export const P = {
   games: path.join(ROOT, 'games'),       // plaintext sources (local only)
@@ -93,7 +93,7 @@ export function checkNewPassword(pw) {
 
 /* ---------- sealed files ---------- */
 // every sealed file with its label
-export function sealedFiles() {
+function sealedFiles() {
   const out = [];
   for (const id of siteGames()) out.push([sitePath(id, 'game.bin'), vault.label.game(id)]);
   for (const id of sourceIds()) out.push([sourcePath(id), vault.label.source(id)]);
@@ -139,7 +139,7 @@ export function walk(dir, base = dir) {
     .sort();
 }
 const readFolder = dir => Object.fromEntries(walk(dir).map(f => [f, fs.readFileSync(path.join(dir, f)).toString('base64')]));
-export const packSource = dir => zlib.gzipSync(JSON.stringify({ v: 1, files: readFolder(dir) }), { level: 9 });
+const packSource = dir => zlib.gzipSync(JSON.stringify({ v: 1, files: readFolder(dir) }), { level: 9 });
 export const unpackSource = buf => JSON.parse(zlib.gunzipSync(buf)).files;
 // archives are compared by their files, not by gzip bytes (those differ between zlib versions)
 const sameFiles = (a, b) => { const x = unpackSource(a), y = unpackSource(b); return JSON.stringify(x) === JSON.stringify(y); };

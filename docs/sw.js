@@ -4,7 +4,7 @@
    Everything stored is what the site publishes anyway: encrypted files and public pages. */
 const FILES = ["dragons/game.bin","dragons/","dragons/preview.png","icons/apple-touch-icon.png","icons/icon-192.png","icons/icon-512.png","icons/maskable-512.png","","keyring.json","lib/ihroteka.css","lib/ihroteka.js","lib/qr-scan.js","library.json","manifest.webmanifest"];                            // relative to the site root; '' and '<id>/' are the pages
 const FONTS = ["https://fonts.googleapis.com/css2?family=Onest:wght@400;500;700&family=Unbounded:wght@500;800&display=swap"];                            // font stylesheets the pages use (stored with their font files)
-const VERSION = 'ad5580678b2b831c';
+const VERSION = '7246a112099deef1';
 const CACHE = 'ihroteka-' + VERSION, FONT_CACHE = 'ihroteka-fonts';
 const BASE = new URL('./', self.location).href;
 

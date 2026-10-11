@@ -7,7 +7,7 @@ import { $, root } from './dom.js';
 import { installHint, keepFiles, registerWorker } from './install.js';
 import { openGame, openShelf, preloadGame, signOut, whenSignedIn } from './lock.js';
 import { startShell } from './shell.js';
-import { together } from './together.js';
+import { current } from './together.js';
 
 /**
  * game  the game this page belongs to (its public page), if any
@@ -21,7 +21,7 @@ export async function boot({ game, dev } = {}) {
       return;
     }
     // a new version of the library arrived: reload when it disturbs nobody (on the shelf, alone, no dialog)
-    registerWorker({ onUpdate: () => { if (!document.querySelector('.frame, .backdrop') && !together()) location.reload(); } });
+    registerWorker({ onUpdate: () => { if (!document.querySelector('.frame, .backdrop') && !current()) location.reload(); } });
     if (game) preloadGame(game);                       // the game starts downloading at once
     const games = await openShelf();
     startShell({ games, initial: game, loader: async g => ({ srcdoc: await openGame(g) }), signOut, whenSignedIn });

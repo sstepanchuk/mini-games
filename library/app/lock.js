@@ -4,7 +4,7 @@
    ===================================================================== */
 import * as vault from '../crypto.js';
 import * as device from './device.js';
-import { $, el, root } from './dom.js';
+import { btn, el, modal, para, root } from './dom.js';
 
 const MSG = {
   offline: 'Не вдалося завантажити. Перевір інтернет і спробуй ще.',
@@ -88,23 +88,12 @@ async function askKey(game = {}) {
 // "this game is locked": a password, or cancel (rejects with error.cancelled)
 function passwordDialog(game) {
   return new Promise((resolve, reject) => {
+    let done = false;
+    const m = modal(() => { if (!done) { const e = new Error('cancelled'); e.cancelled = true; reject(e); } });
     const pw = el('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Пароль', required: true });
     pw.setAttribute('aria-label', 'Пароль');
-    const err = el('p', { className: 'err', role: 'alert' }), go = el('button', { className: 'btn', type: 'submit', textContent: 'Відкрити' });
+    const err = para('', 'err'), go = el('button', { className: 'btn', type: 'submit', textContent: 'Відкрити' });
     const form = el('form', {}, el('input', { type: 'text', name: 'username', value: 'Ігротека', autocomplete: 'username', hidden: true }), pw, go, err);
-    const box = el('div', { className: 'dialog card', role: 'dialog' },
-      ...(game.image ? [el('img', { className: 'cover', src: new URL(game.id + '/' + game.image, root).href, alt: '' })] : []),
-      el('h2', { textContent: game.title || 'Ігротека' }),
-      el('p', { textContent: 'Ігри в Ігротеці відкриваються за паролем. Цей пристрій його запам’ятає.' }),
-      form, el('button', { className: 'btn ghost', type: 'button', textContent: 'Скасувати', onclick: () => close(true) }));
-    box.setAttribute('aria-modal', 'true');
-    const back = el('div', { className: 'backdrop' }, box);
-    const onEsc = e => { if (e.key === 'Escape') close(true); };
-    const close = cancelled => {
-      back.remove();
-      removeEventListener('keydown', onEsc);
-      if (cancelled) { const e = new Error('cancelled'); e.cancelled = true; reject(e); }
-    };
     form.addEventListener('submit', async e => {
       e.preventDefault();
       if (!pw.value) return;
@@ -112,12 +101,14 @@ function passwordDialog(game) {
       let key = null;
       try { key = await passwordKey(pw.value); } catch (x) { err.textContent = offline(x) ? MSG.failed : MSG.broken; }
       go.disabled = false; go.textContent = 'Відкрити';
-      if (key) { close(false); resolve(key); return; }
+      if (key) { done = true; m.close(); resolve(key); return; }
       if (!err.textContent) err.textContent = MSG.wrong;
       pw.select();
     });
-    addEventListener('keydown', onEsc);
-    $('layer').append(back);
+    m.show(...(game.image ? [el('img', { className: 'cover', src: new URL(game.id + '/' + game.image, root).href, alt: '' })] : []),
+      el('h2', { textContent: game.title || 'Ігротека' }),
+      para('Ігри в Ігротеці відкриваються за паролем. Цей пристрій його запам’ятає.'),
+      form, btn('Скасувати', () => m.close(), 'btn ghost'));
     pw.focus();
   });
 }

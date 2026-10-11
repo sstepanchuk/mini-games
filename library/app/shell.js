@@ -4,7 +4,8 @@
    (together.js) lives on from game to game. Addresses stay real: <root> is the shelf, <root><id>/ a game.
    ===================================================================== */
 import { $, el, root, safe } from './dom.js';
-import { attachGame, chipClick, detachGame, initTogether, leave, query, state, viewChanged } from './together.js';
+import { initInvite, openDialog } from './invite.js';
+import { attachGame, detachGame, initTogether, leave, query, state, viewChanged } from './together.js';
 
 let games = [], current, frame = null, load = null, following = false;   // current: the open game id, null on the shelf (undefined before the first view)
 
@@ -21,7 +22,6 @@ export function startShell({ games: list, initial, loader, signOut, whenSignedIn
   // the game's page asks for the library API (see game-api.js)
   window.__ihroteka = { attach: (win, info) => win === frame?.contentWindow ? api(info) : undefined, state };
   $('games').replaceChildren(...games.map(card));
-  $('together').addEventListener('click', chipClick);
   $('stage-back').addEventListener('click', () => go(null));
   if (signOut) {
     $('sign-out').addEventListener('click', async () => { leave(); await signOut(); $('sign-out').hidden = true; });
@@ -29,7 +29,9 @@ export function startShell({ games: list, initial, loader, signOut, whenSignedIn
   }
   addEventListener('popstate', () => { const byPeer = following; following = false; show(fromAddress(), true, byPeer); });
   $('busy').hidden = true;
-  initTogether({ current: () => current ?? null, follow: id => go(id, true) });
+  const views = { current: () => current ?? null, follow: id => go(id, true), invite: openDialog };
+  initInvite(views);
+  initTogether(views);
   show(initial && find(initial) ? initial : null, true);
 }
 

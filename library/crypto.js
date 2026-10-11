@@ -16,7 +16,7 @@ const enc = new TextEncoder(), dec = new TextDecoder();
 
 export const random = n => globalThis.crypto.getRandomValues(new Uint8Array(n));
 export const b64 = u8 => btoa(Array.from(new Uint8Array(u8), b => String.fromCharCode(b)).join(''));
-export const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 export const text = u8 => dec.decode(u8);
 
 // Associated data for every ciphertext: a file swapped in under another name will not decrypt.
@@ -28,7 +28,7 @@ export const label = {
 };
 
 /* ---------- AES-GCM: [12-byte iv][ciphertext + tag] ---------- */
-export async function seal(key, data, aad) {
+async function seal(key, data, aad) {
   const iv = random(12);
   const ct = await subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(aad) }, key, typeof data === 'string' ? enc.encode(data) : data);
   const out = new Uint8Array(12 + ct.byteLength);
@@ -36,7 +36,7 @@ export async function seal(key, data, aad) {
   out.set(new Uint8Array(ct), 12);
   return out;
 }
-export async function unseal(key, blob, aad) {
+async function unseal(key, blob, aad) {
   const u = new Uint8Array(blob);
   return new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: u.subarray(0, 12), additionalData: enc.encode(aad) }, key, u.subarray(12)));
 }
