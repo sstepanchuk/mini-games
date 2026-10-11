@@ -100,15 +100,19 @@ room.on('linked', () => …)            // we play with someone now (also fires 
     .on('join', name => …)            // one more player (games for more than two; in a game for two,
     .on('leave', name => …)           //   another partner is 'peer-gone' and then 'linked' again)
     .on('players', names => …)        // who plays now, in seat order
-    .on('weak', v => …)               // a player dropped out or went quiet / is back: pause and wait
+    .on('weak', v => …)               // a player dropped out, went quiet or is opening the game in a new tab / is back: pause
     .on('peer-gone', () => …)         // the round is over: our partner left for good, or the runner did
-    .on('relinked', name => …)        // a player is back in a new tab or device: send them the full state
+    .on('relinked', name => …)        // a player's copy of the game is new (a new tab or device) or its link started over:
+                                      //   send them the full state
     .on('role', r => …)               // the round now runs in another copy: 'host' (ours) or 'guest'
-    .on('resume', snap => …);         // we run the round now: go on from its last snapshot
+    .on('resume', snap => …)          // we run the round now: go on from its last snapshot
+    .on('shared', (key, value) => …); // a shared value changed (below)
 room.me, room.players, room.waiting   // names: us, who plays (in seat order), who waits for a seat
 room.role, room.host                  // 'host' (our copy runs the round), 'guest', or null (waiting); whose copy runs it
 room.away(name)                       // a player who dropped out (their place is kept): for how long, ms
 room.snapshot(state)                  // (the runner, about once a second) the round as it is, JSON-able; null: no round
+room.shared('mode'), room.share('mode', 'race')   // what the game's players share: the same for everyone, whoever
+                                      //   passes it on and whoever reloads (a chosen mode, a series score…)
 room.send({ t: 'move', … });                  // to everyone who plays; reliable: exactly once, in order, even across an outage
 room.send({ t: 'pos', … }, { fast: true });   // may be lost or reordered: number it yourself
 room.send({ t: 'card', … }, { to: name });    // to one player

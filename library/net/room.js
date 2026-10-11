@@ -233,7 +233,7 @@ function tell(N) {
   for (const a of after) {
     const b = before.find(x => x.n === a.n);
     if (!b) { if (a.n !== N.name) N.emit('join', a.n); continue; }
-    if (b.s !== a.s && a.n !== N.name) N.emit('relinked', a.n);
+    if (b.s !== a.s && a.n !== N.name) N.emit('relinked', a.n, true);   // (true: a new session — a new tab or device)
     if (b.away !== a.away) N.emit('away', a.n, a.away);
   }
   if (before.map(x => x.n).join('\n') !== after.map(x => x.n).join('\n')) N.emit('players', after.map(x => x.n));

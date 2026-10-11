@@ -327,7 +327,7 @@ function resync(N, P, k) {
   closePeer(P);
   resetPaths(P);
   P.lastSeen = performance.now();
-  N.emit('relinked', P.name);                          // the game sends them the full picture again
+  N.emit('relinked', P.name, false);                   // the game sends them the full picture again (the same tab)
   N.refresh(P);
   N.sent = '';                                         // and the players (unchanged, so presence would not send them)
   presence(N);

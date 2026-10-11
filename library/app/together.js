@@ -31,6 +31,9 @@ let myHere = null;                                       // the game we have ope
 let ch = null;                                           // the open game's channel (ihroteka.room)
 let replaced = null;                                     // { kind, code, name }: this player went on in another tab
 const snaps = new Map();                                 // game → { s, c }: the latest snapshot of a round
+const loading = new Map();                               // name → since when: back in a new tab or device, its game not open yet
+const stale = new Set();                                 // names whose new tab did not open their game for as long as a place is kept
+const GKEY = /^[\w-]{1,40}$/;                            // a game's shared key (see channel: shared, share)
 const listeners = new Set();
 
 export function initTogether(s) {
@@ -75,7 +78,7 @@ export function comeBack() {
 }
 export function leave() {
   const r = room;
-  room = null; st = null; snaps.clear();
+  room = null; st = null; snaps.clear(); loading.clear(); stale.clear();
   if (r) { r.leave(); setQuery(null); }
   update();
   changed('left');
@@ -88,7 +91,7 @@ export const state = () => ({ kind: room && room.kind, role: room && room.role, 
   game: ch && { players: ch.seated, linked: ch.api.linked, role: ch.api.role, host: ch.api.host, waiting: ch.api.waiting } });
 
 function wire(r, kind) {
-  room = r; r.kind = kind; st = roomState(r.me); snaps.clear(); replaced = null;
+  room = r; r.kind = kind; st = roomState(r.me); snaps.clear(); loading.clear(); stale.clear(); replaced = null;
   // Which game we have open. A new tab of a player who is in a game says nothing yet: it follows the room into
   // that game in a moment, and a "not in the game" meanwhile would end the round for everyone (see staleHere).
   if (myHere) st.set('here:' + r.me, myHere);           // (the room's view: whoever opened the room shows the way)
@@ -102,12 +105,19 @@ function wire(r, kind) {
     for (const [v, s] of snaps) send({ t: 'lib-snap', v, s: s.s, c: s.c }, p);
   };
   on('linked', () => {
-    if (r.role === 'host' && st.get('view') === undefined) share(st.set('view', shell.current()));
+    if (r.role === 'host' && st.get('view') === undefined) publish(st.set('view', shell.current()));
     for (const p of r.players) if (p !== r.me) greet(p);
     update();
   });
   on('join', p => { greet(p); update(); });
-  on('relinked', p => { greet(p); update(); if (ch && ch.seated.includes(p)) ch.emit('relinked', p); });
+  // Back in a new tab or device: until their game is open there again, the game waits for them (see 'here' below).
+  // The same tab after its link started over: its game is still there, it only needs the full picture again.
+  on('relinked', (p, fresh) => {
+    greet(p);
+    if (fresh && st.get('here:' + p)) loading.set(p, performance.now());
+    update();
+    if (!fresh && ch && ch.others.includes(p) && !loading.has(p)) ch.emit('relinked', p);
+  });
   on('leave', update);
   on('away', update);
   on('peer-gone', () => {
@@ -129,16 +139,24 @@ function wire(r, kind) {
 }
 
 // a change of ours to the shared state: to everyone
-const share = entry => send({ t: 'lib-state', e: [entry] });
+const publish = entry => send({ t: 'lib-state', e: [entry] });
 
 function onLibMessage(m, from) {
   if (m.t === 'lib-state' && Array.isArray(m.e)) {
     // a player's own key only from them (or passed on as they wrote it)
-    const ok = m.e.filter(([k, e]) => typeof k === 'string' && e && (!k.startsWith('here:') || e.a === k.slice(5)) && (k === 'view' || k.startsWith('auth:') ? ID(e.v) || NAME.test(e.v) : true));
+    const ok = m.e.filter(([k, e]) => typeof k === 'string' && e && (!k.startsWith('here:') || e.a === k.slice(5)) && (!k.startsWith('g:') || /^g:[a-z0-9-]{1,40}:[\w-]{1,40}$/.test(k)) && (k === 'view' || k.startsWith('auth:') ? ID(e.v) || NAME.test(e.v) : true));
     const keys = st.merge(ok);
     if (keys.includes('view')) { const v = st.get('view'); if (ID(v) && v !== shell.current()) shell.follow(v); }
     if (keys.includes('here:' + room.me)) staleHere(st.get('view'));
+    // a player back in a new tab has a game open there now: that copy of the game needs the full picture
+    for (const k of keys) if (k.startsWith('here:')) stale.delete(k.slice(5));
+    const back = keys.filter(k => k.startsWith('here:') && loading.delete(k.slice(5))).map(k => k.slice(5));
     if (keys.length) update();
+    if (ch) {
+      for (const p of back) if (ch.others.includes(p) && st.get('here:' + p) === ch.id) ch.emit('relinked', p);
+      const pre = 'g:' + ch.id + ':';
+      for (const k of keys) if (k.startsWith(pre)) ch.emit('shared', k.slice(pre.length), st.get(k));
+    }
   } else if (m.t === 'lib-snap' && ID(m.v) && m.v && Number.isFinite(m.c)) {
     st.seen(m.c);
     const cur = snaps.get(m.v);
@@ -152,14 +170,14 @@ function onLibMessage(m, from) {
 
 // the shell switched to another view: on its own (tell the others) or following someone
 export function viewChanged(id, byPeer) {
-  if (!byPeer && room) share(st.set('view', id));
+  if (!byPeer && room) publish(st.set('view', id));
   if (room) staleHere(id);
 }
 // What the others know of us may come from our previous tab (a game we no longer have open): once we are not
 // on our way into that game, we set it right.
 function staleHere(next) {
   const k = 'here:' + room.me, h = st.get(k);
-  if (!myHere && h && h !== next) share(st.set(k, null));
+  if (!myHere && h && h !== next) publish(st.set(k, null));
 }
 
 /* ---------- the address bar: an internet room stays in the link (?room=), so a reload rejoins ---------- */
@@ -174,7 +192,7 @@ export function attachGame(id) {
   detachGame();
   ch = channel(id, Math.max(1, shell.seats(id)));
   myHere = id;
-  if (room) share(st.set('here:' + room.me, id));
+  if (room) publish(st.set('here:' + room.me, id));
   queueMicrotask(update);
   return ch.api;
 }
@@ -182,16 +200,18 @@ export function detachGame() {
   if (!ch) return;
   ch.dispose();
   ch = null; myHere = null;
-  if (room) share(st.set('here:' + room.me, null));
+  if (room) publish(st.set('here:' + room.me, null));
 }
 
 // who has this game open, in the room's order (whoever came first, first); a player who dropped out keeps
 // their place here too
 function inGameOf(c) {
   if (!room || myHere !== c.id) return [];
-  return room.players.filter(p => p === room.me || st.get('here:' + p) === c.id);
+  return room.players.filter(p => p === room.me || (st.get('here:' + p) === c.id && !stale.has(p)));
 }
-const away = p => !!room && p !== room.me && room.away(p) > 0;
+// dropped out (their place is kept), or back in a new tab or device whose game is not open yet: for how long, ms
+const awayMs = p => !room || p === room.me ? 0 : room.away(p) || (loading.has(p) ? Math.max(1, performance.now() - loading.get(p)) : 0);
+const away = p => awayMs(p) > 0;
 // Whose copy runs the round: the one the shared state names, if they play; else the first who plays.
 function runnerOf(c) {
   const r = st && st.get('auth:' + c.id);
@@ -205,11 +225,12 @@ let onlineSince = 0;
 function watchRunner() {
   const now = performance.now();
   onlineSince = room && room.online ? onlineSince || now : 0;
+  for (const [p, t] of loading) if (now - t > HOLD) { loading.delete(p); stale.add(p); update(); }
   if (!ch || !room || !ch.api.linked) return;
   const r = runnerOf(ch);
-  if (!r || r === room.me || room.away(r) < AUTH_WAIT) return;
+  if (!r || r === room.me || awayMs(r) < AUTH_WAIT) return;
   if ((!onlineSince || now - onlineSince < AUTH_WAIT) && room.players.every(p => p === room.me || away(p))) return;
-  if (ch.seated.find(p => !away(p)) === room.me) { share(st.set('auth:' + ch.id, room.me)); update(); }
+  if (ch.seated.find(p => !away(p)) === room.me) { publish(st.set('auth:' + ch.id, room.me)); update(); }
 }
 
 function channel(id, seats) {
@@ -249,7 +270,7 @@ function channel(id, seats) {
     get role() { return !api.seated ? null : runnerOf(c) === room.me ? 'host' : 'guest'; },
     get linked() { return c.others.length > 0; },      // we have a seat, and someone else plays too
     get weak() { return c.weak; },                     // a player is away or went quiet: pause and wait
-    away: p => room && c.seated.includes(p) ? room.away(p) : 0,   // a player who dropped out: for how long, ms
+    away: p => c.seated.includes(p) ? awayMs(p) : 0,   // a player who dropped out (or whose game is not open yet): for how long, ms
     get direct() { return api.linked && c.others.every(p => room.stats(p).direct); },
     get nearby() { return !!room && room.nearby; },
     // the game's policies (see ../net/room.js): streaming, pulse
@@ -271,6 +292,18 @@ function channel(id, seats) {
       if (to !== undefined) { if (o.includes(to)) room.send(out, { to, ...opts }); }
       else if (o.length === room.players.length - 1) room.send(out, opts);   // everyone else plays: one message for all
       else for (const p of o) room.send(out, { to: p, ...opts });
+    },
+    // What the game's players share, the same for everyone whoever passes it on (the room's state, see
+    // roomstate.js): a key → a JSON-able value. A change reaches everyone (us too) as the event 'shared' (key, value);
+    // when two change one key at once, everyone keeps the same one of them.
+    shared: k => st && GKEY.test(k) ? st.get('g:' + id + ':' + k) : undefined,
+    share(k, v) {
+      if (!st || !api.seated || !GKEY.test(k)) return;
+      let x;
+      try { x = JSON.stringify(v === undefined ? null : v); } catch (e) { return; }
+      if (x.length > 8000) return;
+      publish(st.set('g:' + id + ':' + k, JSON.parse(x)));
+      c.emit('shared', k, JSON.parse(x));
     },
     // The round as it is now, from the copy that runs it (a plain JSON-able value; null: no round any more).
     // Every player keeps the latest, so the round can go on elsewhere (see the top).
@@ -340,14 +373,14 @@ function update() {
     if (before && role && c.api.linked) c.emit('role', role);
     c.maybeResume();
   }
-  const weak = c.api.linked && c.others.some(p => room.stats(p).weak);
+  const weak = c.api.linked && c.others.some(p => room.stats(p).weak || loading.has(p));
   if (weak !== c.weak) { c.weak = weak; c.emit('weak', weak); }
 }
 
 // for the screens: the players we wait for in the open game (dropped out, their seat kept) → [{ name, left ms }]
 export function waitingFor() {
   if (!ch || !room || !ch.api.linked) return [];
-  return ch.others.filter(away).map(p => ({ name: p, left: Math.max(0, HOLD - room.away(p)) }));
+  return ch.others.filter(away).map(p => ({ name: p, left: Math.max(0, HOLD - awayMs(p)) }));
 }
 // nobody waits for this player any longer: their place goes
 export const release = p => { if (room) room.release(p); };
