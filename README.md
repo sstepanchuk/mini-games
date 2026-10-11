@@ -115,13 +115,33 @@ room.shared('mode'), room.share('mode', 'race')   // what the game's players sha
                                       //   passes it on and whoever reloads (a chosen mode, a series score…)
 room.send({ t: 'move', … });                  // to everyone who plays; reliable: exactly once, in order, even across an outage
 room.send({ t: 'pos', … }, { fast: true });   // may be lost or reordered: number it yourself
+room.send({ t: 's', … }, { fast: true, latest: 's' })   // each one makes the previous one of stream 's' useless (a full
+                                              //   state): through the brokers only the newest goes, ≤ 30 a second
 room.send({ t: 'card', … }, { to: name });    // to one player
 ```
 
-Seats follow the room's order, not who runs the round: a game draws "player 1" for `room.players[0]` whoever
-its host is. Whose copy runs a round is shared by the whole room; it changes only when that copy has been gone
-for 10 s (the first player still here takes over and gets `resume` with the latest snapshot; everyone else gets
-`role`), or when that player comes back and the round already went on elsewhere.
+Seats come from the room's order (`room.players`), not from who runs the round. Whose copy runs a round is
+shared by the whole room; it changes only when that copy has been gone for 10 s (the first player still here takes
+over and gets `resume` with the latest snapshot; everyone else gets `role`), or when that player comes back and
+the round already went on elsewhere.
+
+### A multiplayer game on it, the way Two Dragons does it
+
+- **One copy runs the round** (`room.role === 'host'`): it steps the game at a fixed rate and sends the whole
+  state to the others with `{ fast: true, latest: 's' }`. Make each state self-contained (or repeat the last few
+  changes in it), so a lost one costs nothing. The others send only their input (`fast`, numbered, repeated in
+  `room.pulse`), and commands that must arrive (start, quit) as plain reliable messages.
+- **Write who plays what into the round** when it starts (names per seat) and read your seat from there: the
+  room's order may change on a shaky network, a round's seats must not.
+- **Snapshot the round** about once a second (`room.snapshot`) from the runner; on `resume`, go on from it; on
+  `role` → 'guest', drop your copy and ask for the full state.
+- **Pause on `weak`**, and send the full state on `relinked` and to a guest who asks.
+- **Show the others a little ahead**: predict both players to the moment your own input will reach the round
+  (`room.lag()` is the one-way delay), and when a new state corrects the prediction, let the difference fade
+  over ~0.1 s instead of jumping. The runner delays its own input and picture by `room.lag()`, so the round
+  feels the same for everyone.
+- **Keep settings in `room.share`** (the chosen mode, a series score): everyone sees the same, through reloads.
+- **Quitting mid-round ends it for everyone** (send a reliable message, the runner tells the rest).
 
 Messages are plain objects with a string `t` (not starting with `_`). Also: `pulse` (with who) `stats` and `tick`
 events; `room.lag(name?)`, `room.stats(name?)` (one player, or the slowest), `room.diag()`, `room.nearby`,
