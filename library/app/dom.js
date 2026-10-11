@@ -7,16 +7,20 @@ export const btn = (text, onclick, className = 'btn') => el('button', { classNam
 export const para = (text, className = '') => el('p', { className, textContent: text });
 
 // A dialog over everything. Escape, a tap outside it or close() closes it; onClose runs once.
+// Focus moves into it and comes back where it was when it closes.
 export function modal(onClose = () => {}) {
-  const box = el('div', { className: 'dialog card', role: 'dialog' }), back = el('div', { className: 'backdrop' }, box);
+  const box = el('div', { className: 'dialog card', role: 'dialog', tabIndex: -1 }), back = el('div', { className: 'backdrop' }, box);
   box.setAttribute('aria-modal', 'true');
+  const before = document.activeElement;
   const onKey = e => { if (e.key === 'Escape') close(); };
   const close = () => {
     if (!back.isConnected) return;
     back.remove();
     removeEventListener('keydown', onKey);
+    if (before && before.isConnected && before.focus) before.focus();
     onClose();
   };
+  queueMicrotask(() => { if (!box.contains(document.activeElement)) box.focus(); });
   back.addEventListener('click', e => { if (e.target === back) close(); });
   addEventListener('keydown', onKey);
   $('layer').append(back);

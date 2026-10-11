@@ -27,10 +27,11 @@ library/   everything that runs in the browser
   net/       two-player rooms: internet (MQTT + WebRTC) and nearby (QR-paired WebRTC)
   crypto.js  keyring and sealed files (browser and Node)
   game-api.js  window.ihroteka, injected into every game
-tools/     cli.js (commands) · repo.js (keys, sealed files) · build.js (bundling, checks) · dev.js (local server)
+tools/     cli.js (commands) · repo.js (keys, sealed files) · build.js (bundling, site, checks) · dev.js (local server)
+vault/     what the repository keeps: keyring.json, and per game game.json, its cover,
+           game.bin (the built game, encrypted) and source.bin (its sources, encrypted)
 games/     plaintext game sources (local only, git-ignored)
-vault/     the same sources, encrypted
-docs/      the published site — build output, never edited by hand
+site/      the site, assembled from library/ and vault/ (git-ignored; CI assembles it on every push)
 ```
 
 ## Usage
@@ -39,14 +40,17 @@ docs/      the published site — build output, never edited by hand
 npm install
 npm run unlock              # decrypt game sources into games/
 npm run dev                 # the library with your plaintext games at localhost:8000
-npm run build               # bundle and encrypt the games, update docs/ and vault/
-npm run check               # validate docs/ (runs in CI before every deploy)
-npm test
+npm run build               # bundle and encrypt the games into vault/, then assemble site/
+npm run site                # assemble site/ from library/ and vault/ (no password)
+npm run dev -- site         # serve the assembled site/
+npm run check               # validate vault/ (no password)
+npm run lint && npm test
 
 npm run user -- list | add <name> | remove <name> | passwd
 ```
 
-Set `VAULT_PASSWORD` to skip the prompt.
+Set `VAULT_PASSWORD` to skip the prompt. A change to `library/` needs no password at all: commit it, and CI
+assembles the site again.
 
 ## Adding a game
 
@@ -58,7 +62,7 @@ games/<id>/          <id> becomes the URL: /<id>/
   preview.png        1200×630, used on the shelf and in link previews
 ```
 
-Then `npm run build`, commit, push. The build inlines everything into one page: start with `<!doctype html>`,
+Then `npm run build`, commit `vault/`, push. The build inlines everything into one page: start with `<!doctype html>`,
 keep assets next to `index.html` (relative links to anything that is not a style, module script or media file
 fail the build).
 
@@ -103,4 +107,5 @@ Messages are plain objects with a string `t`. Also: `pulse`, `stats` and `tick` 
 - Play together is not encrypted beyond WebRTC's own DTLS; through the brokers, messages are plain. Room topics are hashed.
   The MQTT client comes from a CDN, pinned to one version and checked with Subresource Integrity.
 
-**Deploy:** every push to `main` is checked and published by GitHub Actions (Settings → Pages → Source: *GitHub Actions*).
+**Deploy:** on every push to `main`, GitHub Actions lints, tests and checks, assembles `site/` and publishes it
+(Settings → Pages → Source: *GitHub Actions*).

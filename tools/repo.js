@@ -14,10 +14,10 @@ export const problem = msg => { throw new Problem(msg); };
 const ROOT = path.resolve(process.env.IHROTEKA_ROOT || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
 const TOOLS = path.dirname(fileURLToPath(import.meta.url));
 export const P = {
-  games: path.join(ROOT, 'games'),       // plaintext sources (local only)
-  site: path.join(ROOT, 'docs'),         // published site
-  vault: path.join(ROOT, 'vault'),       // encrypted sources
-  keyring: path.join(ROOT, 'docs', 'keyring.json'),
+  games: path.join(ROOT, 'games'),       // plaintext game sources (local only)
+  vault: path.join(ROOT, 'vault'),       // what the repository keeps: the keyring and the games (encrypted where it matters)
+  site: path.join(ROOT, 'site'),         // the site, assembled from library/ and vault/ (not kept in git)
+  keyring: path.join(ROOT, 'vault', 'keyring.json'),
   app: path.join(TOOLS, '..', 'library', 'app'),       // the library page
   gameApi: path.join(TOOLS, '..', 'library', 'game-api.js')
 };
@@ -31,11 +31,11 @@ export const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 't
 export const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 export const homepage = () => JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).homepage || '';
 
-export const gameIds = () => exists(P.games) ? fs.readdirSync(P.games).filter(id => exists(path.join(P.games, id, 'game.json'))).sort() : [];
-export const sourceIds = () => exists(P.vault) ? fs.readdirSync(P.vault).filter(f => f.endsWith('.bin')).map(f => f.slice(0, -4)).sort() : [];
-export const siteGames = () => exists(P.site) ? fs.readdirSync(P.site).filter(d => exists(path.join(P.site, d, 'game.bin'))).sort() : [];
-export const sitePath = (...p) => path.join(P.site, ...p);
-export const sourcePath = id => path.join(P.vault, id + '.bin');
+// games/<id>/ (plaintext, local) and vault/<id>/ (game.json, cover, game.bin, source.bin)
+const dirs = (dir, has) => exists(dir) ? fs.readdirSync(dir).filter(d => exists(path.join(dir, d, has))).sort() : [];
+export const gameIds = () => dirs(P.games, 'game.json');
+export const vaultIds = () => dirs(P.vault, 'game.json');
+export const vaultPath = (id, ...f) => path.join(P.vault, id, ...f);
 
 // write next to the target, then rename: a crash never leaves a half-written file
 export function writeAtomic(file, data) {
@@ -94,10 +94,7 @@ export function checkNewPassword(pw) {
 /* ---------- sealed files ---------- */
 // every sealed file with its label
 function sealedFiles() {
-  const out = [];
-  for (const id of siteGames()) out.push([sitePath(id, 'game.bin'), vault.label.game(id)]);
-  for (const id of sourceIds()) out.push([sourcePath(id), vault.label.source(id)]);
-  return out;
+  return vaultIds().flatMap(id => [[vaultPath(id, 'game.bin'), vault.label.game(id)], [vaultPath(id, 'source.bin'), vault.label.source(id)]]);
 }
 export function readSealed(file, aad, { key, kid }) {
   const blob = fs.readFileSync(file);
@@ -143,4 +140,4 @@ const packSource = dir => zlib.gzipSync(JSON.stringify({ v: 1, files: readFolder
 export const unpackSource = buf => JSON.parse(zlib.gunzipSync(buf)).files;
 // archives are compared by their files, not by gzip bytes (those differ between zlib versions)
 const sameFiles = (a, b) => { const x = unpackSource(a), y = unpackSource(b); return JSON.stringify(x) === JSON.stringify(y); };
-export const writeSource = (id, lib) => writeSealed(sourcePath(id), packSource(path.join(P.games, id)), vault.label.source(id), lib, sameFiles);
+export const writeSource = (id, lib) => writeSealed(vaultPath(id, 'source.bin'), packSource(path.join(P.games, id)), vault.label.source(id), lib, sameFiles);

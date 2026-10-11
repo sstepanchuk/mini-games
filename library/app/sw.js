@@ -1,4 +1,4 @@
-/* The library offline. Built into docs/sw.js with the list of every published file and a version (a hash of
+/* The library offline. Built into site/sw.js with the list of every published file and a version (a hash of
    them all). Each version is one complete, consistent copy: the keyring always matches the sealed files next to
    it. A new version is downloaded whole in the background and replaces the old one only when complete.
    Everything stored is what the site publishes anyway: encrypted files and public pages. */
@@ -30,11 +30,15 @@ self.addEventListener('fetch', e => {
 });
 
 // The site's own files come from this version's copy. A page address (with ?room=… or not) is its page;
-// anything not in the copy goes to the network.
+// anything not in the copy goes to the network, and a page that is not there either (unknown, or no network)
+// opens the library.
 async function local(req, url) {
-  let path = url.href.slice(BASE.length).split(/[?#]/)[0].replace(/(^|\/)index\.html$/, '$1');
-  const hit = await (await caches.open(CACHE)).match(BASE + path);
-  return hit || fetch(req);
+  const path = url.href.slice(BASE.length).split(/[?#]/)[0].replace(/(^|\/)index\.html$/, '$1');
+  const cache = await caches.open(CACHE), hit = await cache.match(BASE + path);
+  if (hit) return hit;
+  const shelf = () => req.mode === 'navigate' ? Response.redirect(BASE, 302) : null;
+  try { const res = await fetch(req); return (res.status === 404 && shelf()) || res; }
+  catch (e) { const page = shelf(); if (page) return page; throw e; }
 }
 
 async function font(req) {

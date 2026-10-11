@@ -1,4 +1,6 @@
-# plaintext game sources stay local; the repository only holds the encrypted vault/
+# plaintext game sources stay local; the repository keeps them encrypted in vault/
 games/
+# the site is assembled from library/ and vault/ (npm run site; CI does it on every push)
+site/
 node_modules/
 .DS_Store

@@ -5,7 +5,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import * as vault from '../library/crypto.js';
 import * as repo from './repo.js';
-import { readManifest, bundleGame, gamePage, checkSite, siteFiles, serviceWorker } from './build.js';
+import { readManifest, bundleGame, buildSite, checkVault } from './build.js';
 import { serve } from './dev.js';
 
 const { P, rel, exists, problem } = repo;
@@ -25,16 +25,14 @@ function ask(question, hidden) {
 const password = (q = 'Password: ') => process.env.VAULT_PASSWORD ?? ask(q, true);
 const signIn = async () => repo.open(await password());
 
-// the list of games on the shelf (public: titles and covers are on the game pages anyway)
-const shelfFile = () => repo.sitePath('library.json');
-const writeShelf = games => writeIfChanged(shelfFile(), JSON.stringify(games.map(([id, g]) => ({ id, title: g.title, tagline: g.tagline, image: g.image, emoji: g.emoji })), null, 2) + '\n');
 
 const HELP = `Library commands
 
   npm run unlock [-- --force]    decrypt game sources into games/ (--force: overwrite local changes)
-  npm run dev [-- docs] [port]   local server for games/ (or the built site in docs/), on this computer only
-  npm run build                  bundle and encrypt the games, update docs/ and vault/
-  npm run check                  validate docs/ before publishing (no password needed)
+  npm run dev [-- site] [port]   the library with your games/ (or the built site/), on this computer only
+  npm run build                  bundle and encrypt the games into vault/, then assemble site/
+  npm run site                   assemble site/ from library/ and vault/ (no password; CI does this)
+  npm run check                  validate vault/ (no password needed)
 
   npm run user -- list           who has access
   npm run user -- add <name>     add a person (a password is generated and shown once)
@@ -66,9 +64,9 @@ const commands = {
 
   async unlock(...flags) {
     const lib = await signIn(), force = flags.includes('--force');
-    for (const id of repo.sourceIds()) {
+    for (const id of repo.vaultIds()) {
       const dir = path.join(P.games, id);
-      const files = repo.unpackSource(await repo.readSealed(repo.sourcePath(id), vault.label.source(id), lib));
+      const files = repo.unpackSource(await repo.readSealed(repo.vaultPath(id, 'source.bin'), vault.label.source(id), lib));
       const local = exists(dir) ? repo.walk(dir) : [];
       const changed = local.filter(f => !(f in files) || !repo.same(fs.readFileSync(path.join(dir, f)), Buffer.from(files[f], 'base64')));
       if (changed.length && !force) {
@@ -82,31 +80,34 @@ const commands = {
   },
 
   async build() {
-    const ids = repo.gameIds(), missing = repo.sourceIds().filter(id => !ids.includes(id));
+    const ids = repo.gameIds(), missing = repo.vaultIds().filter(id => !ids.includes(id));
     if (missing.length) problem('games/' + missing.join(', games/') + ' missing. Run npm run unlock, or remove the game: node tools/cli.js remove-game ' + missing[0]);
     if (!ids.length) problem('No games in games/.');
     const games = ids.map(id => [id, readManifest(id)]);                 // validate everything before asking for the password
     const lib = await signIn();
-    for (const [f, data] of Object.entries(await siteFiles())) writeIfChanged(repo.sitePath(f), data);
     for (const [id, g] of games) {
       const html = await bundleGame(id, g);
       const changed = [
-        await repo.writeSealed(repo.sitePath(id, 'game.bin'), Buffer.from(html), vault.label.game(id), lib),
-        await repo.writeSource(id, lib)
+        await repo.writeSealed(repo.vaultPath(id, 'game.bin'), Buffer.from(html), vault.label.game(id), lib),
+        await repo.writeSource(id, lib),
+        writeIfChanged(repo.vaultPath(id, 'game.json'), JSON.stringify(g, null, 2) + '\n'),
+        writeIfChanged(repo.vaultPath(id, g.image), fs.readFileSync(path.join(P.games, id, g.image)))
       ].some(Boolean);
-      for (const f of fs.readdirSync(repo.sitePath(id))) if (f.endsWith('.png') && f !== g.image) fs.rmSync(repo.sitePath(id, f));   // an old cover
-      fs.copyFileSync(path.join(P.games, id, g.image), repo.sitePath(id, g.image));
-      repo.writeAtomic(repo.sitePath(id, 'index.html'), gamePage(id, g));
+      for (const f of fs.readdirSync(repo.vaultPath(id))) if (f.endsWith('.png') && f !== g.image) fs.rmSync(repo.vaultPath(id, f));   // an old cover
       console.log('✓ ' + id + ': ' + (html.length / 1024).toFixed(0) + ' KB' + (changed ? '' : ' (unchanged)'));
     }
-    writeShelf(games);
+    await commands.site();
+  },
+
+  async site() {
+    const n = await buildSite();
+    console.log('✓ site/ assembled: ' + n + ' game(s)');
   },
 
   async 'remove-game'(id) {
-    if (!id || !repo.siteGames().includes(id)) problem('No such game in docs/: ' + id);
-    writeShelf(JSON.parse(fs.readFileSync(shelfFile(), 'utf8')).filter(g => g.id !== id).map(g => [g.id, g]));
-    for (const p of [repo.sitePath(id), repo.sourcePath(id), path.join(P.games, id)]) fs.rmSync(p, { recursive: true, force: true });
-    console.log('✓ ' + id + ' removed. Commit docs/ and vault/.');
+    if (!id || !repo.vaultIds().includes(id)) problem('No such game in vault/: ' + id);
+    for (const p of [repo.vaultPath(id), path.join(P.games, id)]) fs.rmSync(p, { recursive: true, force: true });
+    console.log('✓ ' + id + ' removed. Commit vault/.');
   },
 
   async user(sub, ...args) {
@@ -122,7 +123,7 @@ const commands = {
       repo.writeKeyring(kr);
       console.log('✓ ' + name + ' has access. Password (shown once): ' + pw);
     } else if (sub === 'remove') {
-      repo.requireClean(P.site, P.vault);
+      repo.requireClean(P.vault);
       const lib = await signIn(), { kr, me } = lib;
       const gone = kr.people.filter(p => p.name === name);
       if (!gone.length) problem('No such name. See: npm run user -- list');
@@ -130,7 +131,7 @@ const commands = {
       // the removed person may have kept the library key, so it is replaced and everything re-encrypted
       kr.people = kr.people.filter(p => !gone.includes(p));
       await repo.rotate(kr, lib);
-      console.log('✓ ' + name + ' no longer has access. Library key rotated, files re-encrypted — commit docs/ and vault/.');
+      console.log('✓ ' + name + ' no longer has access. Library key rotated, games re-encrypted — commit vault/.');
     } else if (sub === 'passwd') {
       const { kr, me, raw } = await repo.open(await password('Current password: '));
       let pw = await ask('New password (empty to generate): ', true);
@@ -143,26 +144,27 @@ const commands = {
       if (owner && owner.person !== me) problem('Choose another password.');   // it already opens someone else's keys
       await vault.replaceKeys(kr, me, pw, raw);
       repo.writeKeyring(kr);
-      console.log('✓ Password changed and your keys replaced. Commit docs/keyring.json.');
+      console.log('✓ Password changed and your keys replaced. Commit vault/keyring.json.');
     } else problem('npm run user -- list | add <name> | remove <name> | passwd');
   },
 
-  async check() {
-    const { problems, games, people } = await checkSite();
+  check() {
+    const problems = checkVault();
     if (problems.length) { problems.forEach(p => console.error('✗ ' + p)); process.exit(1); }
-    console.log('✓ docs/ is valid: ' + games + ' game(s), ' + people + ' people');
+    console.log('✓ vault/ is valid: ' + repo.vaultIds().length + ' game(s), ' + repo.readKeyring().people.length + ' people');
   },
 
-  dev: (...args) => serve(args.includes('docs') ? 'docs' : 'games', args.find(a => /^\d+$/.test(a)) || '8000', args.includes('--lan') ? '0.0.0.0' : '127.0.0.1')
+  dev: (...args) => serve(args.includes('site') ? 'site' : 'games', args.find(a => /^\d+$/.test(a)) || '8000', args.includes('--lan') ? '0.0.0.0' : '127.0.0.1')
 };
 
-// every command that changes docs/ also refreshes the offline copy's file list (sw.js)
-const WRITES = new Set(['init', 'build', 'remove-game', 'user']);
-const writeIfChanged = (file, data) => { if (!exists(file) || !fs.readFileSync(file).equals(Buffer.from(data))) repo.writeAtomic(file, data); };
+// → true if written
+function writeIfChanged(file, data) {
+  if (exists(file) && fs.readFileSync(file).equals(Buffer.from(data))) return false;
+  repo.writeAtomic(file, data);
+  return true;
+}
 
 const [cmd = 'help', ...rest] = process.argv.slice(2);
 const done = e => { console.error('✗ ' + (e instanceof repo.Problem ? e.message : e.stack || e)); process.exit(1); };
 if (!Object.hasOwn(commands, cmd)) done(new repo.Problem('Unknown command: ' + cmd + '. See: node tools/cli.js help'));
-else Promise.resolve().then(() => commands[cmd](...rest))
-  .then(() => { if (WRITES.has(cmd) && exists(repo.sitePath('index.html'))) writeIfChanged(repo.sitePath('sw.js'), serviceWorker()); })
-  .catch(done);
+else Promise.resolve().then(() => commands[cmd](...rest)).catch(done);

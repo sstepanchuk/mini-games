@@ -22,8 +22,8 @@ function shelfHtml(game) {
 }
 
 export function serve(what = 'games', port = '8000', host = '127.0.0.1') {
-  const games = what !== 'docs', dir = games ? P.games : P.site;
-  if (!exists(dir)) problem('No ' + rel(dir) + (games ? ' (run npm run unlock first)' : ''));
+  const games = what !== 'site', dir = games ? P.games : P.site;
+  if (!exists(dir)) problem('No ' + rel(dir) + (games ? ' (run npm run unlock first)' : ' (run npm run site first)'));
 
   const respond = async (req, res) => {
     const send = (code, type, body) => res.writeHead(code, { 'Content-Type': text(type), 'Cache-Control': 'no-store' }).end(body);

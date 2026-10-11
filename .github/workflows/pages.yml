@@ -30,12 +30,15 @@ jobs:
           if git ls-files --error-unmatch games >/dev/null 2>&1; then
             echo "::error::games/ must never be committed (plaintext sources)"; exit 1
           fi
+      - run: npm run lint
       - run: npm test
       - run: npm run check
+      - name: Assemble the site from library/ and vault/
+        run: npm run site
       - uses: actions/upload-pages-artifact@v4
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         with:
-          path: docs
+          path: site
 
   deploy:
     name: Deploy

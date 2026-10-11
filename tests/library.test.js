@@ -12,7 +12,8 @@ import * as vault from '../library/crypto.js';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(REPO, 'tools', 'cli.js');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
-let root, pw = {};
+let root;
+const pw = {};
 
 const run = (args, password, input) => {
   const r = spawnSync(process.execPath, [CLI, ...args], { env: { ...process.env, IHROTEKA_ROOT: root, VAULT_PASSWORD: password }, encoding: 'utf8', input });
@@ -21,7 +22,7 @@ const run = (args, password, input) => {
 const must = (args, password, input) => { const r = run(args, password, input); assert.ok(r.ok, r.out); return r.out; };
 const file = (...p) => path.join(root, ...p);
 const write = (p, data) => { fs.mkdirSync(path.dirname(file(p)), { recursive: true }); fs.writeFileSync(file(p), data); };
-const kr = () => JSON.parse(fs.readFileSync(file('docs/keyring.json'), 'utf8'));
+const kr = () => JSON.parse(fs.readFileSync(file('vault/keyring.json'), 'utf8'));
 const kidOf = p => vault.fileKid(fs.readFileSync(file(p)));
 const game = (id, extra = {}) => {
   write(`games/${id}/game.json`, JSON.stringify({ title: 'Test ' + id, tagline: 't', description: 'd', image: 'preview.png', ...extra }));
@@ -48,28 +49,27 @@ test('init, build and check', () => {
   assert.match(must(['build'], pw.alice), /demo/);
   assert.match(must(['check']), /valid: 1 game/);
   assert.match(must(['build'], pw.alice), /unchanged/);                       // nothing changed → nothing rewritten
-  for (const p of ['docs/demo/game.bin', 'vault/demo.bin']) assert.equal(kidOf(p), kr().kid);
+  for (const p of ['vault/demo/game.bin', 'vault/demo/source.bin']) assert.equal(kidOf(p), kr().kid);
 });
 
-test('the site works offline: every published file is in the service worker, under its address', () => {
-  const sw = fs.readFileSync(file('docs/sw.js'), 'utf8');
+test('the site is assembled from library/ and vault/, and works offline: every file is in the service worker', () => {
+  const sw = fs.readFileSync(file('site/sw.js'), 'utf8');
   for (const f of ['""', '"demo/"', '"demo/game.bin"', '"keyring.json"', '"library.json"', '"lib/ihroteka.js"', '"lib/qr-scan.js"', '"manifest.webmanifest"', '"icons/icon-512.png"']) assert.ok(sw.includes(f), f);
   assert.ok(!sw.includes('"sw.js"') && !sw.includes('index.html'));
   assert.match(sw, /fonts\.googleapis\.com/);
-  assert.equal(JSON.parse(fs.readFileSync(file('docs/manifest.webmanifest'), 'utf8')).display, 'standalone');
-  assert.match(fs.readFileSync(file('docs/demo/index.html'), 'utf8'), /boot\(\{"game":"demo"\}\)/);
-  // a changed published file without a rebuilt worker is caught
-  const page = fs.readFileSync(file('docs/demo/index.html'));
-  fs.writeFileSync(file('docs/demo/index.html'), Buffer.concat([page, Buffer.from(' ')]));
-  assert.match(run(['check']).out, /sw\.js does not list the published files/);
-  fs.writeFileSync(file('docs/demo/index.html'), page);
-  must(['check']);
+  assert.equal(JSON.parse(fs.readFileSync(file('site/manifest.webmanifest'), 'utf8')).display, 'standalone');
+  assert.match(fs.readFileSync(file('site/demo/index.html'), 'utf8'), /boot\(\{"game":"demo"\}\)/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file('site/library.json'), 'utf8')).map(g => g.id), ['demo']);
+  // no password needed, and the same vault gives the same site
+  const before = fs.readFileSync(file('site/sw.js'));
+  must(['site']);
+  assert.ok(fs.readFileSync(file('site/sw.js')).equals(before));
 });
 
 test('the game page is one self-contained module page with the library API', async () => {
   const k = kr(), who = await vault.signIn(k, pw.bob);
   const key = await vault.importKey(await vault.libraryKey(k, who.person.id, who.priv));
-  const html = vault.text(await vault.openFile(key, fs.readFileSync(file('docs/demo/game.bin')), vault.label.game('demo')));
+  const html = vault.text(await vault.openFile(key, fs.readFileSync(file('vault/demo/game.bin')), vault.label.game('demo')));
   assert.match(html, /window\.ihroteka/);
   assert.match(html, /<script type="module">/);
   assert.doesNotMatch(html, /src="(?!data:)|href="(?!data:)/);              // every relative reference was inlined
@@ -101,7 +101,7 @@ test('removing a person rotates the key; their password stops working', () => {
   const oldKid = kr().kid;
   must(['user', 'remove', 'carol'], pw.alice);
   assert.notEqual(kr().kid, oldKid);
-  for (const p of ['docs/demo/game.bin', 'vault/demo.bin']) assert.equal(kidOf(p), kr().kid);
+  for (const p of ['vault/demo/game.bin', 'vault/demo/source.bin']) assert.equal(kidOf(p), kr().kid);
   assert.ok(!run(['unlock'], pwCarol).ok);
   assert.match(must(['user', 'list']), /alice/);                             // names are public: no password needed
   assert.doesNotMatch(must(['user', 'list']), /carol/);
@@ -111,16 +111,16 @@ test('removing a person rotates the key; their password stops working', () => {
 });
 
 test('a failed rotation writes nothing', () => {
-  const k = kr(), stale = fs.readFileSync(file('vault/demo.bin'));
+  const k = kr(), stale = fs.readFileSync(file('vault/demo/source.bin'));
   const bad = Buffer.from(stale); bad[1] ^= 0xff;                              // pretend a file was sealed with another key
-  fs.writeFileSync(file('vault/demo.bin'), bad);
-  const game = fs.readFileSync(file('docs/demo/game.bin'));
+  fs.writeFileSync(file('vault/demo/source.bin'), bad);
+  const game = fs.readFileSync(file('vault/demo/game.bin'));
   const r = run(['user', 'remove', 'bob'], pw.alice);
   assert.ok(!r.ok);
   assert.match(r.out, /another library key/);
   assert.deepEqual(kr(), k);
-  assert.ok(fs.readFileSync(file('docs/demo/game.bin')).equals(game));
-  fs.writeFileSync(file('vault/demo.bin'), stale);
+  assert.ok(fs.readFileSync(file('vault/demo/game.bin')).equals(game));
+  fs.writeFileSync(file('vault/demo/source.bin'), stale);
 });
 
 test('a new password replaces the keys, so the old one opens nothing', async () => {
@@ -137,17 +137,14 @@ test('a new password replaces the keys, so the old one opens nothing', async () 
 });
 
 test('check catches stale keys and unexpected files', () => {
-  const css = fs.readFileSync(file('docs/lib/ihroteka.css'));
-  write('docs/lib/ihroteka.css', 'body{}');
-  assert.match(run(['check']).out, /ihroteka\.css is out of date/);
-  fs.writeFileSync(file('docs/lib/ihroteka.css'), css);
-  write('docs/demo/leak.js', 'secret');
-  assert.match(run(['check']).out, /leak\.js: unexpected file/);
-  fs.rmSync(file('docs/demo/leak.js'));
-  const good = fs.readFileSync(file('docs/demo/game.bin')), bad = Buffer.from(good); bad[2] ^= 1;
-  fs.writeFileSync(file('docs/demo/game.bin'), bad);
+  write('vault/demo/main.js', 'secret');
+  assert.match(run(['check']).out, /main\.js: unexpected file/);
+  assert.ok(!run(['site']).ok);                                              // nothing is published from a vault that fails the check
+  fs.rmSync(file('vault/demo/main.js'));
+  const good = fs.readFileSync(file('vault/demo/game.bin')), bad = Buffer.from(good); bad[2] ^= 1;
+  fs.writeFileSync(file('vault/demo/game.bin'), bad);
   assert.match(run(['check']).out, /old library key/);
-  fs.writeFileSync(file('docs/demo/game.bin'), good);
+  fs.writeFileSync(file('vault/demo/game.bin'), good);
   assert.ok(run(['check']).ok);
 });
 
@@ -172,7 +169,7 @@ test('remove-game takes a game off the shelf', () => {
   must(['build'], pw.alice);
   assert.match(must(['check']), /2 game/);
   must(['remove-game', 'extra'], pw.alice);
-  assert.ok(!fs.existsSync(file('docs/extra')) && !fs.existsSync(file('vault/extra.bin')));
+  assert.ok(!fs.existsSync(file('vault/extra')) && !fs.existsSync(file('games/extra')));
   assert.match(must(['check']), /1 game/);
 });
 

@@ -1,7 +1,7 @@
 /* =====================================================================
    The library page: the shelf and the open game (shell.js), the password for the games (lock.js),
    playing together (together.js), working offline as an app (install.js, sw.js).
-   Built into docs/lib/ihroteka.js; every page of the site starts it with boot().
+   Built into site/lib/ihroteka.js; every page of the site starts it with boot().
    ===================================================================== */
 import { $, root } from './dom.js';
 import { installHint, keepFiles, registerWorker } from './install.js';

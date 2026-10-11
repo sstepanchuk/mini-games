@@ -1,14 +1,15 @@
-// Turning games/<id>/ into a published game: manifest, library API, one-page bundle, public page; and site checks.
+// Games into the vault (manifest, library API, one-page bundle), the vault into the site, and checks — no password needed
+// for anything here but bundling a game.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import * as esbuild from 'esbuild';
 import * as vault from '../library/crypto.js';
-import { P, MIME, rel, esc, exists, problem, homepage, sourceIds, siteGames, sitePath, sourcePath, walk } from './repo.js';
+import { P, MIME, rel, esc, exists, problem, homepage, vaultIds, vaultPath, walk, writeAtomic } from './repo.js';
 
 const RESERVED = new Set(['lib']);                     // top-level names the site itself uses
 
-/* ---------- manifest: games/<id>/game.json ---------- */
+/* ---------- manifest: game.json (in games/<id>/, and as kept in vault/<id>/) ---------- */
 const FIELDS = {
   title: 'name on the shelf and in the link preview',
   tagline: 'one line under the title on the shelf',
@@ -25,9 +26,9 @@ const FORMAT = {
   emoji: v => [...v].length <= 4 && !/[\x00-\x7f]/.test(v),
   theme: v => /^#[0-9a-f]{3,8}$/i.test(v)
 };
-export function readManifest(id) {
-  const dir = path.join(P.games, id), file = rel(path.join(dir, 'game.json'));
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(id) || RESERVED.has(id)) problem('games/' + id + ': the folder name becomes the URL, so use lowercase letters, digits and dashes (and not ' + [...RESERVED].join(', ') + ')');
+export function readManifest(id, dir = path.join(P.games, id)) {
+  const file = rel(path.join(dir, 'game.json'));
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(id) || RESERVED.has(id)) problem(rel(dir) + ': the folder name becomes the URL, so use lowercase letters, digits and dashes (and not ' + [...RESERVED].join(', ') + ')');
   let g;
   try { g = JSON.parse(fs.readFileSync(path.join(dir, 'game.json'), 'utf8').replace(/^\uFEFF/, '')); }
   catch (e) { problem(file + ': ' + e.message); }
@@ -38,7 +39,7 @@ export function readManifest(id) {
     if (typeof g[k] !== 'string' || !g[k].trim()) problem(file + ': "' + k + '" must be a non-empty string (' + about.replace('?', '') + ')');
     if (FORMAT[k] && !FORMAT[k](g[k])) problem(file + ': "' + k + '" has an unexpected value (' + about.replace('?', '') + ')');
   }
-  for (const f of ['index.html', g.image]) if (!exists(path.join(dir, f))) problem('games/' + id + '/' + f + ' not found');
+  for (const f of dir.startsWith(P.games) ? ['index.html', g.image] : [g.image]) if (!exists(path.join(dir, f))) problem(rel(path.join(dir, f)) + ' not found');
   return g;
 }
 
@@ -118,43 +119,59 @@ export function gamePage(id, g) {
   });
 }
 
-/* ---------- the library itself, built from library/app: path in docs/ → contents ---------- */
+/* ---------- the site: library/app + vault/ → site/ (CI does this on every push) ---------- */
 const ICONS = ['icon-192.png', 'icon-512.png', 'maskable-512.png', 'apple-touch-icon.png'];
-export async function siteFiles() {
+async function libraryFiles() {
   const dir = P.app, js = (entry, banner) => esbuildText(path.join(dir, entry), { ...JS, ...(banner && { banner: { js: banner } }) }, 'library/app');
   const files = {
     'index.html': page({ ...LIBRARY, shareTitle: LIBRARY.title, shareDescription: LIBRARY.description, imageUrl: '', imageAlt: '', emoji: '🎲',
       base: './', bootArgs: '{}' }),
-    'lib/ihroteka.js': await js('index.js') + '\n',
-    'lib/ihroteka.css': await esbuildText(path.join(dir, 'style.css'), {}, 'library/app') + '\n',
-    'lib/qr-scan.js': await js('scan.js', '/*! jsQR © Cosmo Wolfe, Apache-2.0 */') + '\n',
+    'lib/ihroteka.js': await js('index.js'),
+    'lib/ihroteka.css': await esbuildText(path.join(dir, 'style.css'), {}, 'library/app'),
+    'lib/qr-scan.js': await js('scan.js', '/*! jsQR © Cosmo Wolfe, Apache-2.0 */'),
     'manifest.webmanifest': JSON.stringify({
       name: LIBRARY.title, short_name: LIBRARY.title, description: LIBRARY.description, lang: 'uk', id: './', start_url: './', scope: './',
       display: 'standalone', background_color: LIBRARY.theme, theme_color: LIBRARY.theme,
       icons: [{ src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
         { src: 'icons/maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }]
-    }, null, 2) + '\n'
+    })
   };
   for (const f of ICONS) files['icons/' + f] = fs.readFileSync(path.join(dir, 'icons', f));
   return files;
 }
 
-/* ---------- the offline copy: sw.js lists every published file; its version is a hash of them all ---------- */
-export function serviceWorker() {
-  const files = walk(P.site).filter(f => f !== 'sw.js'), hash = crypto.createHash('sha256');
-  for (const f of files) hash.update(f + '\0').update(fs.readFileSync(sitePath(f)));
+// → number of games; the folder is written from scratch
+export async function buildSite(out = P.site) {
+  const problems = checkVault();
+  if (problems.length) problem(problems.join('\n'));
+  const files = await libraryFiles(), games = vaultIds().map(id => [id, readManifest(id, vaultPath(id))]);
+  files['keyring.json'] = fs.readFileSync(P.keyring);
+  files['library.json'] = JSON.stringify(games.map(([id, g]) => ({ id, title: g.title, tagline: g.tagline, image: g.image, emoji: g.emoji })));
+  for (const [id, g] of games) {
+    files[id + '/index.html'] = gamePage(id, g);
+    files[id + '/game.bin'] = fs.readFileSync(vaultPath(id, 'game.bin'));
+    files[id + '/' + g.image] = fs.readFileSync(vaultPath(id, g.image));
+  }
+  files['sw.js'] = serviceWorker(files);
+  fs.rmSync(out, { recursive: true, force: true });
+  for (const [f, data] of Object.entries(files)) writeAtomic(path.join(out, f), data);
+  return games.length;
+}
+
+// the offline copy: sw.js lists every file of the site; its version is a hash of them all
+function serviceWorker(files) {
+  const names = Object.keys(files).sort(), hash = crypto.createHash('sha256');
+  for (const f of names) hash.update(f + '\0').update(files[f]);
   const fonts = [...fs.readFileSync(path.join(P.app, 'page.html'), 'utf8').matchAll(/href="(https:\/\/fonts\.googleapis\.com\/[^"]+)"/g)].map(m => m[1].replace(/&amp;/g, '&'));
-  const pages = files.map(f => f.replace(/(^|\/)index\.html$/, '$1'));   // a page is stored under its address
+  const pages = names.map(f => f.replace(/(^|\/)index\.html$/, '$1'));   // a page is stored under its address
   return fs.readFileSync(path.join(P.app, 'sw.js'), 'utf8')
     .replace('/* FILES */', pages.map(f => JSON.stringify(f)).join(','))
     .replace('/* FONTS */', [...new Set(fonts)].map(f => JSON.stringify(f)).join(','))
     .replace('/* VERSION */', hash.digest('hex').slice(0, 16));
 }
 
-/* ---------- password-free site validation (also run by CI) → { problems, games, people } ---------- */
-export async function checkSite() {
-  const shelf = await siteFiles();
-  const SITE_FILES = new Set(['keyring.json', 'library.json', 'sw.js', ...Object.keys(shelf)]);
+/* ---------- password-free check of vault/ (also run by CI) → [problem, …] ---------- */
+export function checkVault() {
   const problems = [], bad = msg => problems.push(msg);
   let kr = null;
   try { kr = JSON.parse(fs.readFileSync(P.keyring, 'utf8')); } catch (e) { bad(rel(P.keyring) + ': ' + e.message); }
@@ -163,37 +180,22 @@ export async function checkSite() {
     if (!kr.people?.length) bad('keyring.json: no people');
     for (const p of kr.people || []) if (!(p.id && p.pub && p.priv && typeof p.name === 'string' && p.box?.epk && p.box?.ct)) bad('keyring.json: incomplete entry ' + (p.id || '?'));
   }
-  // every sealed file must be sealed with the current library key
-  const sealedWithCurrentKey = (file, label) => {
-    if (!exists(file)) return bad('missing ' + rel(file));
-    const kid = vault.fileKid(fs.readFileSync(file));
-    if (!kid) bad(rel(file) + ': not a sealed file');
-    else if (kr && kid !== kr.kid) bad(rel(file) + ': sealed with an old library key (' + label + ' — rebuild after git pull)');
-  };
-  for (const [f, data] of Object.entries(shelf)) {
-    if (!exists(sitePath(f))) bad('missing docs/' + f);
-    else if (!fs.readFileSync(sitePath(f)).equals(Buffer.from(data))) bad('docs/' + f + ' is out of date with library/app (npm run build)');
+  const ids = vaultIds();
+  if (!ids.length) bad('no games in vault/');
+  for (const id of ids) {
+    let g = null;
+    try { g = readManifest(id, vaultPath(id)); } catch (e) { bad(e.message); }
+    // both sealed files, with the current library key (a stale one means: rebuild after git pull)
+    for (const f of ['game.bin', 'source.bin']) {
+      const file = vaultPath(id, f);
+      if (!exists(file)) { bad('missing ' + rel(file)); continue; }
+      const kid = vault.fileKid(fs.readFileSync(file));
+      if (!kid) bad(rel(file) + ': not a sealed file');
+      else if (kr && kid !== kr.kid) bad(rel(file) + ': sealed with an old library key (rebuild after git pull)');
+    }
+    // nothing else: anything more could be plaintext
+    for (const f of walk(vaultPath(id))) if (!['game.json', 'game.bin', 'source.bin', g && g.image].includes(f)) bad(rel(vaultPath(id, f)) + ': unexpected file (a game keeps only game.json, its cover, game.bin and source.bin)');
   }
-  if (!exists(sitePath('sw.js'))) bad('missing docs/sw.js');
-  else if (fs.readFileSync(sitePath('sw.js'), 'utf8') !== serviceWorker()) bad('docs/sw.js does not list the published files (npm run build)');
-  let list = [];
-  try { list = JSON.parse(fs.readFileSync(sitePath('library.json'), 'utf8')); } catch (e) { bad('docs/library.json: ' + e.message); }
-  const games = siteGames();
-  if (!games.length) bad('no games in docs/');
-  if (list.map(g => g.id).sort().join() !== games.join()) bad('docs/library.json does not list exactly the games in docs/ (npm run build)');
-  for (const id of games) {
-    sealedWithCurrentKey(sitePath(id, 'game.bin'), id);
-    sealedWithCurrentKey(sourcePath(id), id + ' sources');
-    const page = sitePath(id, 'index.html');
-    if (!exists(page)) { bad('missing docs/' + id + '/index.html'); continue; }
-    const html = fs.readFileSync(page, 'utf8'), img = list.find(g => g.id === id)?.image;
-    if (!html.includes('boot({"game":' + JSON.stringify(id))) bad('docs/' + id + '/index.html is not a library game page');
-    if (/\{\{\w+\}\}/.test(html)) bad('docs/' + id + '/index.html: unfilled template');
-    if (!img || !exists(sitePath(id, img))) bad('docs/' + id + ': missing image ' + (img || ''));
-  }
-  for (const id of sourceIds()) if (!games.includes(id)) bad('vault/' + id + '.bin exists but docs/ has no such game');
-  // only known files may be published: anything else could be a plaintext leak
-  const allowed = f => SITE_FILES.has(f) || (/^([\w-]+)\/(index\.html|game\.bin|[\w-]+\.png)$/.test(f) && games.includes(f.split('/')[0]));
-  for (const f of walk(P.site)) if (!allowed(f)) bad('docs/' + f + ': unexpected file (only game pages, sealed files and cover images are published)');
-  return { problems, games: games.length, people: kr?.people?.length || 0 };
+  for (const f of walk(P.vault)) if (f !== 'keyring.json' && !ids.includes(f.split('/')[0])) bad('vault/' + f + ': unexpected file');
+  return problems;
 }
