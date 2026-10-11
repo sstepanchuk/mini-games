@@ -14,13 +14,16 @@ and works offline. Hosted on GitHub Pages.
   a password and an ECDH P-256 key pair; the password unlocks their private key, which unlocks the library key.
   Removing someone rotates the library key and re-encrypts every game.
 - **Together.** "Грати разом" connects up to 8 players for the whole library: whatever one opens, everyone's
-  library opens too. The dialog first checks by itself whether there is internet (whether a broker answers:
-  `navigator.onLine` also says yes on a hotspot without data). With internet there are two ways: a link (public
-  MQTT brokers find the friend; WebRTC goes direct when it can), or nearby. Without it, only nearby: two devices
-  on the same Wi-Fi or hotspot, one shows a QR code and the other scans it, then the other way round (the
-  first one adds more players the same way). If a
-  nearby link is impossible, the dialog says why (e.g. a phone sharing its hotspot cannot see that network in
-  its browser) and offers a report for debugging.
+  library opens too. A player is the name they type on entering a room: the same name from another tab, browser
+  or device takes that player's place (the old one steps aside and can take it back with «Повернути сюди»). A
+  player who drops out keeps their place for 3 minutes; meanwhile the game pauses and the others see who they wait
+  for, the time left and «Не чекати». If the copy of the game that runs a round is gone for 10 s, the round goes
+  on in another player's copy from its last snapshot. The dialog first checks by itself whether there is internet
+  (whether a broker answers: `navigator.onLine` also says yes on a hotspot without data). With internet there are
+  two ways: a link (public MQTT brokers find the friend; WebRTC goes direct when it can), or nearby. Without it,
+  only nearby: two devices on the same Wi-Fi or hotspot, one shows a QR code and the other scans it, then the
+  other way round (the first one adds more players the same way). If a nearby link is impossible, the dialog says
+  why (e.g. a phone sharing its hotspot cannot see that network in its browser) and offers a report for debugging.
 - **Offline.** A service worker keeps one complete copy of the site per version; the shelf, the games and nearby
   play work without a network. On a phone it installs as an app.
 
@@ -78,45 +81,57 @@ The library runs each game in a frame and gives it `window.ihroteka` before the 
 (`undefined` when a game page is opened on its own, so treat it as optional):
 
 ```js
-ihroteka.version     // 3
+ihroteka.version     // 4
 ihroteka.game        // { id, title, players: { min, max } }   (game.json "players": "2", "2-4", …)
 ihroteka.home()      // back to the shelf
 ihroteka.invite()    // the library's "play together" dialog
 ihroteka.room        // the other players (below)
 ```
 
-A room holds up to 8 players. A game gets as many seats as its `players` says (2 when not given): the first
-players to have it open play, in the room's order; anyone else who opens it waits for a seat (`room.waiting`)
-and gets one as soon as a player leaves. `ihroteka.room` is linked while we have a seat and someone else does too:
+A room holds up to 8 players, each known by name. A game gets as many seats as its `players` says (2 when not
+given): the first players to have it open play, in the room's order; anyone else who opens it waits for a seat
+(`room.waiting`) and gets one as soon as a player leaves. `ihroteka.room` is linked while we have a seat and
+someone else does too:
 
 ```js
 const room = ihroteka.room;
 room.on('linked', () => …)            // we play with someone now (also fires for a listener added later)
-    .on('message', (m, from) => …)    // what another player sent, and who
-    .on('join', id => …)              // one more player (games for more than two; in a game for two,
-    .on('leave', id => …)             //   another partner is 'peer-gone' and then 'linked' again)
-    .on('players', ids => …)          // who plays now, the game's host first
-    .on('weak', quiet => …)           // someone went quiet / came back: pause and wait
-    .on('peer-gone', () => …)         // the round is over: our partner left, or the game's host did
-    .on('relinked', id => …);         // a player reopened the game in a new tab: send them the full state
-room.me, room.players, room.waiting   // player ids: us, who plays (the host first), who waits for a seat
-room.role                             // 'host' (the first player: usually runs the game), 'guest', or null (waiting)
+    .on('message', (m, from) => …)    // what another player sent, and who (a name)
+    .on('join', name => …)            // one more player (games for more than two; in a game for two,
+    .on('leave', name => …)           //   another partner is 'peer-gone' and then 'linked' again)
+    .on('players', names => …)        // who plays now, in seat order
+    .on('weak', v => …)               // a player dropped out or went quiet / is back: pause and wait
+    .on('peer-gone', () => …)         // the round is over: our partner left for good, or the runner did
+    .on('relinked', name => …)        // a player is back in a new tab or device: send them the full state
+    .on('role', r => …)               // the round now runs in another copy: 'host' (ours) or 'guest'
+    .on('resume', snap => …);         // we run the round now: go on from its last snapshot
+room.me, room.players, room.waiting   // names: us, who plays (in seat order), who waits for a seat
+room.role, room.host                  // 'host' (our copy runs the round), 'guest', or null (waiting); whose copy runs it
+room.away(name)                       // a player who dropped out (their place is kept): for how long, ms
+room.snapshot(state)                  // (the runner, about once a second) the round as it is, JSON-able; null: no round
 room.send({ t: 'move', … });                  // to everyone who plays; reliable: exactly once, in order, even across an outage
 room.send({ t: 'pos', … }, { fast: true });   // may be lost or reordered: number it yourself
-room.send({ t: 'card', … }, { to: id });      // to one player
+room.send({ t: 'card', … }, { to: name });    // to one player
 ```
 
+Seats follow the room's order, not who runs the round: a game draws "player 1" for `room.players[0]` whoever
+its host is. Whose copy runs a round is shared by the whole room; it changes only when that copy has been gone
+for 10 s (the first player still here takes over and gets `resume` with the latest snapshot; everyone else gets
+`role`), or when that player comes back and the round already went on elsewhere.
+
 Messages are plain objects with a string `t` (not starting with `_`). Also: `pulse` (with who) `stats` and `tick`
-events; `room.lag(id?)`, `room.stats(id?)` (one player, or the slowest), `room.diag()`, `room.nearby`,
-`room.direct`, `room.seats`, `room.seated`; and policies a game may set: `room.keepSeat`, `room.patient`,
-`room.streaming`, `room.pulse` (see `library/net/room.js`).
+events; `room.lag(name?)`, `room.stats(name?)` (one player, or the slowest), `room.diag()`, `room.nearby`,
+`room.direct`, `room.seats`, `room.seated`; and policies a game may set: `room.streaming`, `room.pulse` (see
+`library/net/room.js`).
 
 Under it, a room is a star: everyone is linked to the room's host, which passes on what guests send. Reliable
 messages stay in the sender's outbox until acknowledged and go again by whatever path works (direct, or the
 brokers), so a network switch or a minute offline loses nothing; a player who goes quiet pauses the game for
-everyone after 1.5 s, and a silence the other path does not explain (a busy phone) never drops the direct link. If the host
-leaves an internet room, the first guest on the roster takes over and the others follow without a word. Nearby
-(no internet), the host pairs with each guest in turn; the guests hear each other through it.
+everyone after 1.5 s, and a silence the other path does not explain (a busy phone) never drops the direct link.
+A player who drops out keeps their place for 3 minutes (or until someone presses «Не чекати»). If the room's
+host is gone for 10 s, the first player still here takes over and the others follow; when the old host comes
+back, it joins as a guest. Nearby (no internet), the host pairs with each guest in turn; the guests hear each
+other through it.
 
 ## Security notes
 

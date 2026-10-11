@@ -1,21 +1,23 @@
 /* =====================================================================
    The screens of playing together (together.js holds the room): the chip on the shelf, notes at the
-   bottom of the screen, and the "Грати разом" dialog. It first checks for internet by itself: with internet
-   there are two ways (a link, or nearby with QR codes), without it only nearby. Once together, more players
-   can be added the same way (up to the room's limit).
+   bottom of the screen, the "Грати разом" dialog, the name a player comes in with, and the note over a game
+   while it waits for a player who dropped out. The dialog asks for the name, then checks for internet by itself:
+   with internet there are two ways (a link, or nearby with QR codes), without it only nearby. Once together,
+   more players can be added the same way (up to the room's limit).
    ===================================================================== */
 import { hasInternet, newRoomCode, preload } from '../net/index.js';
 import { $, btn, copy, el, modal, para, toast } from './dom.js';
 import { Camera, drawQr } from './qr.js';
-import { currentRoom, lastInternetCode, leave, linked, onChange, startInternet, startNearby } from './together.js';
+import { comeBack, currentRoom, elsewhere, lastInternetCode, lastName, leave, linked, onChange, release, startInternet, startNearby, validName, waitingFor } from './together.js';
 
 let shell = null;                                        // { address() → this view's address, with the room }
-let dlg = null;                                          // the open dialog: { screen, show, close, camera, scan, online, adding }
+let dlg = null;                                          // the open dialog: { screen, show, close, camera, scan, online, adding, name }
 
 export function initInvite(s) {
   shell = s;
-  s.elsewhere = elsewhere;
+  s.askName = askName;
   $('together').addEventListener('click', () => openDialog());
+  setInterval(waitNote, 1000);
   onChange(what => {
     const room = currentRoom();
     if (what === 'linked') toast(room.kind === 'nearby' ? 'Ви разом, поруч без інтернету' : 'Ви разом!');
@@ -23,21 +25,50 @@ export function initInvite(s) {
     else if (what === 'leave' && room && room.linked) toast('Один гравець вийшов');
     // (a moment later: when the room's host changes, everyone is back together in a second)
     if (what === 'peer-gone') setTimeout(() => { if (!linked()) toast(room && room.kind === 'nearby' ? 'Зв’язок обірвався' : 'Друзі вийшли'); }, 3000);
-    if (what === 'replaced' || what === 'taken') toast('Гру перенесено в іншу вкладку');
+    if (what === 'replaced') queueMicrotask(goneElsewhere);
+    if (what === 'away' || what === 'leave' || what === 'left' || what === 'peer-gone') waitNote();
     chip();
     if (dlg) refresh(what);
   });
   chip();
 }
 
-// This room's link was opened again while another tab of this browser holds it and runs the game for the others.
-function elsewhere(take, stay) {
-  const m = modal(stay);
-  m.show(el('h2', { textContent: 'Гра вже йде в іншій вкладці' }),
-    para('Ця кімната відкрита в іншій вкладці цього браузера, і гра з друзями йде там. Повернись до неї — тоді для друзів нічого не зміниться.'),
-    btn('Добре', () => m.close()),
-    btn('Грати тут', () => { m.close(); take(); }, 'btn ghost'),
-    para('«Грати тут» перенесе кімнату в цю вкладку, але поточна гра там закінчиться.', 'fine'));
+// The name a player comes in with (every time; the last one is filled in). onName(name), or onCancel().
+function askName(onName, onCancel = () => {}) {
+  let done = false;
+  const m = modal(() => { if (!done) onCancel(); });
+  const input = nameInput(), go = e => { e.preventDefault(); if (!validName(input.value.trim())) return input.focus(); done = true; m.close(); onName(input.value.trim()); };
+  m.show(el('h2', { textContent: 'Як тебе звати?' }),
+    para('Під цим іменем тебе бачитимуть друзі. Якщо відпадеш, зайди знову з тим самим іменем — і повернешся на своє місце.', 'fine'),
+    el('form', { className: 'row', onsubmit: go }, input, Object.assign(btn('Увійти', null), { type: 'submit' })),
+    btn('Скасувати', () => m.close(), 'btn ghost'));
+  queueMicrotask(() => input.select());
+}
+const nameInput = () => el('input', { className: 'link', value: lastName(), maxLength: 24, placeholder: 'Твоє ім’я', autocomplete: 'nickname', spellcheck: false, enterKeyHint: 'go' });
+
+// This player went on in another tab or on another device (the same name came in there).
+function goneElsewhere() {
+  const r = elsewhere();
+  if (!r) return;
+  const m = modal();
+  m.show(el('h2', { textContent: 'Ти граєш деінде' }),
+    para('«' + r.name + '» щойно зайшов у кімнату з іншої вкладки або з іншого пристрою, тож гра продовжується там.'),
+    ...(r.kind === 'internet' ? [btn('Повернути сюди', () => { m.close(); comeBack(); })] : []),
+    btn('Закрити', () => m.close(), 'btn ghost'));
+}
+
+/* ---------- over a game: who we wait for ---------- */
+// A player who dropped out keeps their seat for a while: the game pauses, and this says who we wait for and how
+// much longer, with a way to stop waiting (their seat goes; the game goes on without them, if it can).
+function waitNote() {
+  const list = waitingFor(), stage = $('stage');
+  let box = $('waiting');
+  if (!list.length || stage.hidden) { if (box) box.remove(); return; }
+  if (!box) { box = el('div', { id: 'waiting', className: 'waiting card', role: 'status' }); stage.append(box); }
+  const mmss = ms => { const s = Math.ceil(ms / 1000); return (s / 60 | 0) + ':' + String(s % 60).padStart(2, '0'); };
+  box.replaceChildren(...list.flatMap(({ name, left }) => [
+    para('Чекаємо на ' + name + '… ' + mmss(left)),
+    btn('Не чекати', () => { release(name); box.remove(); }, 'btn ghost')]));
 }
 
 /* ---------- the chip on the shelf ---------- */
@@ -72,7 +103,10 @@ export function openDialog() {
   });
   if (linked()) return show('together');
   if (currentRoom() && currentRoom().kind === 'internet') return show('link');
-  // is there internet (see hasInternet)? with it: two ways; without it: straight to nearby
+  show('name');
+}
+// is there internet (see hasInternet)? with it: two ways; without it: straight to nearby
+function check() {
   const d = dlg;
   d.screen = 'check';
   d.show(el('h2', { textContent: 'Грати разом' }), para('Перевіряю інтернет…', 'busy'), btn('Скасувати', closeDialog, 'btn ghost'));
@@ -90,7 +124,7 @@ function refresh(what) {
     setTimeout(() => { if (dlg === d && d.screen === 'together') closeDialog(); }, 900);
     return;
   }
-  if (d.screen === 'together') { if (!linked()) closeDialog(); else if (what === 'join' || what === 'leave') show('together'); else d.state.textContent = stateText(room); }
+  if (d.screen === 'together') { if (!linked()) closeDialog(); else if (what === 'join' || what === 'leave' || what === 'away') show('together'); else d.state.textContent = stateText(room); }
   else if (d.screen === 'link') { if (!room || room.kind !== 'internet') show('menu'); else if (what === 'status') d.state.textContent = STATUS[room.lastStatus] || ''; }
   else if (room && room.kind === 'nearby' && room.lastStatus === 'failed' && what === 'status') failed(room.pair);
 }
@@ -103,12 +137,19 @@ function addPlayer() {
   else hostPairing();
 }
 // a room over the internet, under the same code as last time (the link sent earlier keeps working)
-const viaLink = () => { startInternet(lastInternetCode() || newRoomCode()); show('link'); };
+const viaLink = () => { startInternet(lastInternetCode() || newRoomCode(), dlg.name); show('link'); };
 
 function show(screen) {
   dlg.screen = screen;
   const room = currentRoom(), close = btn('Закрити', closeDialog, 'btn ghost');
-  if (screen === 'menu') {
+  if (screen === 'name') {
+    const input = nameInput(), go = e => { e.preventDefault(); const n = input.value.trim(); if (!validName(n)) return input.focus(); dlg.name = n; check(); };
+    dlg.show(el('h2', { textContent: 'Грати разом' }),
+      para('Як тебе звати? Під цим іменем тебе бачитимуть друзі; якщо відпадеш, зайди знову з тим самим іменем — і повернешся на своє місце.'),
+      el('form', { className: 'row', onsubmit: go }, input, Object.assign(btn('Далі', null), { type: 'submit' })),
+      close);
+    queueMicrotask(() => input.select());
+  } else if (screen === 'menu') {
     dlg.show(el('h2', { textContent: 'Грати разом' }),
       para('Ви будете разом у всій бібліотеці: що відкриє один, те відкриється й у другого.'),
       option('1', 'Через посилання', 'Друг може бути де завгодно: надішли посилання або покажи QR-код', viaLink),
@@ -138,6 +179,7 @@ function show(screen) {
     const n = room.players.length, space = n < room.max;
     dlg.state = para(stateText(room), 'fine');
     dlg.show(el('h2', { textContent: n > 2 ? 'Вас ' + n : 'Ви граєте разом' }),
+      el('ul', { className: 'players' }, ...room.players.map(p => el('li', { textContent: p + (p === room.me ? ' (ти)' : room.away(p) ? ' — відпав, місце чекає' : '') }))),
       para(room.kind === 'nearby' ? 'Поруч, без інтернету.' : 'Через посилання.' + (room.stats().direct ? ' Пристрої з’єднані напряму.' : '')),
       dlg.state,
       ...(!space ? [para('Кімната повна: ' + room.max + ' гравців.', 'fine')]
@@ -182,7 +224,7 @@ async function pairing() {
   const d = dlg;
   if (!d.camera || d.camera.stopped) d.camera = new Camera(el('video', { className: 'scan' }));
   await d.camera.start();
-  return dlg === d ? { cam: d.camera, room: startNearby(), live: () => dlg === d } : null;
+  return dlg === d ? { cam: d.camera, room: startNearby(d.name), live: () => dlg === d } : null;
 }
 
 // "1 · show the code": our offer, then scan the friend's answer

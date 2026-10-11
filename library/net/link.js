@@ -11,7 +11,7 @@
 import { BROKERS } from './config.js';
 import { bestBrokers, brokerDiag, kickBrokers, pubData, tendBrokers } from './brokers.js';
 import { closeRtc, dcFresh, dcHear, dcLive, dcQuiet, probeLink, startRtc } from './rtc.js';
-import { hostPeer, linkedPeers, weakChanged } from './room.js';
+import { holdOver, hostPeer, linkedPeers, weakChanged } from './room.js';
 
 const OUTBOX_MAX = 5000;                               // reliable messages not yet acknowledged: more means they are gone
 const HOLD_MAX = 4096;                                 // messages that overtook a missing one, waiting for it
@@ -20,7 +20,7 @@ const RESEND_PER_TICK = 64;
 // a new link with this player (or the same person in a new tab): measurements and numbering start over
 export function resetPaths(P) {
   P.tx = 0; P.outbox = []; P.rxNext = 1; P.rxHold = new Map(); P.byeX = 0;
-  P.pts = -1; P.byePts = -1; P.suspect = -1e9;
+  P.pts = -1; P.suspect = -1e9;
   P.rD = P.rR = null; P.sD = []; P.sR = []; P.qD = P.qR = -1; P.slowDirect = false; P.peerRtt = null; P.aliveAt = 0;
 }
 
@@ -87,7 +87,7 @@ export function deliver(P, m, viaRelay) {
   const x = m._x;
   if (x === undefined) { signals(P, m, viaRelay, now); return; }   // fast: pulses, ping answers, the game's own
   if (!Number.isInteger(x) || x < P.rxNext) return;   // a copy that came by the other path, or a resend we already have
-  if (m.t === 'bye' && P.byeX !== x) {                 // they closed the tab (menu: left for good): at once, whatever is missing
+  if (m.t === 'bye' && P.byeX !== x) {                 // their tab closed (menu: they left for good): at once, whatever is missing
     P.byeX = x;                                        // (it still takes its place in the order below, or nothing after it would run)
     N.byeFrom(P, m.menu === 1);
     if (N.closed || !P.linked) return;
@@ -115,10 +115,9 @@ function signals(P, m, viaRelay, now) {
     if (m.ts <= P.pts) return;                         // the copy from the other path was already counted
     P.pts = m.ts;
     if (viaRelay) P.aliveAt = now;                     // a pulse the direct link has not brought: they are there
-    if (P.byeAt && m.ts > P.byePts) P.byeAt = 0;       // a new pulse after a goodbye: they are back (not a late packet)
     if (typeof m.rt === 'number' && m.rt >= 0 && m.rt < 5000) P.peerRtt = m.rt;
     if (Array.isArray(m.w)) { P.peerBest = m.w.filter(i => Number.isInteger(i) && i >= 0 && i < BROKERS.length).slice(0, 2); P.peerBestAt = now; }
-    if (m.g && typeof m.g === 'object') N.emit('pulse', m.g, P.pid);
+    if (m.g && typeof m.g === 'object') N.emit('pulse', m.g, P.name);
     return;
   }
   if (m.t === 'q') {
@@ -176,11 +175,11 @@ export function refresh(P) {
 // Detailed connection state for bug reports (not shown to players).
 export function diag(N) {
   const f = v => v == null ? '—' : Math.round(v) + ' ms';
-  const head = ['room: ' + (N.relay ? 'internet' : 'nearby') + ', role: ' + (N.role || '—') + ', players: ' + N.roster.length + ' of ' + N.max];
+  const head = ['room: ' + (N.relay ? 'internet' : 'nearby') + ', role: ' + (N.role || '—') + ', players: ' + N.members.map(m => m.n + (m.a ? ' (away)' : '')).join(', ') + ' (at most ' + N.max + ')'];
   if (N.relay) head.push('brokers: ' + brokerDiag(N));
   return head.concat(linkedPeers(N).map(P => {
     const used = P.via === 'p2p' ? (P.turn ? 'direct link through a TURN relay' : P.turn === false ? 'direct' : 'direct link') : 'brokers';
-    const lines = ['— ' + P.pid + ': ' + used + (P.slowDirect ? ' (direct link exists but is slower)' : '') + (P.weak ? ', quiet' : ''),
+    const lines = ['— ' + P.name + ': ' + used + (P.slowDirect ? ' (direct link exists but is slower)' : '') + (P.weak ? ', quiet' : ''),
       '  direct ping: ' + f(P.rD) + ' (browser: ' + f(P.iceRtt) + '), candidates: ' + (P.cand || '—') + ', open: ' + (dcLive(P) ? 'yes' : 'no') + ', hearing: ' + (dcHear(P) ? 'yes' : 'no')];
     if (N.relay) lines.push('  broker ping: ' + f(P.rR) + '; they hear us best through: ' + (P.peerBest.map(i => BROKERS[i].name).join(', ') || '—') +
       '; we hear them best through: ' + (bestBrokers(P).map(i => BROKERS[i].name).join(', ') || '—'));
@@ -206,6 +205,8 @@ export function watch(N) {
     if (gap > N.lostAfter && N.longSleep) { N.longSleep(); return; }
   }
   if (N.relay) tendBrokers(N, now);
+  holdOver(N, now);                                    // places kept too long go
+  if (N.hubCheck) N.hubCheck(now);                     // a guest whose host is away: someone else takes over (internet.js)
   for (const P of linkedPeers(N)) watchPeer(P, now);
   if (N.closed) return;
   if (N.statsDue) { N.statsDue = false; N.emit('stats', N.roomStats()); }
@@ -225,9 +226,8 @@ function watchPeer(P, now) {
   resend(P, now);
   if (now < N.graceUntil) return;
   const quiet = now - P.lastSeen;
-  setWeak(P, !!P.byeAt || quiet > 1500);            // the game pauses: nobody plays on while someone cannot
-  if (P.byeAt && now - P.byeAt > 20000) { N.peerGone(P); return; }   // closed the tab and did not come back
-  if (quiet > (N.patient() ? 90000 : N.lostAfter)) { N.peerGone(P); return; }
+  setWeak(P, quiet > 1500);                            // the game pauses: nobody plays on while someone cannot
+  if (quiet > N.lostAfter) { N.peerGone(P); return; }   // silent as long as a place is kept: that tab is gone
   // a direct link that went quiet for long is closed; the guest then tries to build a new one
   // (not nearby: there the direct link cannot be rebuilt without the players)
   if (N.relay && dcLive(P) && now - (P.dcSeen || P.dcBorn) > 4000) closeRtc(P);
@@ -242,7 +242,7 @@ function watchPeer(P, now) {
 // this player went quiet or came back
 export function setWeak(P, v) {
   if (P.weak === v) return;
-  P.weak = v;
+  P.weak = v; P.weakAt = v ? P.lastSeen : 0;           // (silent since the last thing they sent)
   if (v) kick(P.N);                                    // silence: check our broker connections at once
   P.N.refresh(P);
   weakChanged(P.N);

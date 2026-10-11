@@ -3,7 +3,7 @@
 // The host pairs with each guest in turn (a star, see room.js); after that the room works like an internet
 // room, through the direct links only. Every link starts with a hello (_h) that says who is on each end.
 //
-//   const room = joinNearby({ game, max });
+//   const room = joinNearby({ game, name, max });
 //   host:  show(await room.pair.offer()) … await room.pair.finish(codeFromGuest)   (again for each guest)
 //   guest: show(await room.pair.answer(codeFromHost))
 // When the devices cannot reach each other, status 'failed' comes with room.pair.reason:
@@ -16,24 +16,34 @@
 import { me, SENDER } from './config.js';
 import { closeRtc, openChannels, wireDc } from './rtc.js';
 import { ANSWER, OFFER, candidates, decode, describe, encode } from './code.js';
-import { linkedPeers, markLinked, newPeer, newRoom, renamePeer, setRole, startWatch, stop, unlink } from './room.js';
+import { dropMember, guestMembers, markLinked, memberOf, NAME, newPeer, newRoom, renamePeer, seatMember, setRole, startWatch, stop, unlink } from './room.js';
 
 const GATHER_MS = 3000, CONNECT_MS = 20000;
 
-export function joinNearby({ game, max, lostAfter }) {
-  const { N, room } = newRoom({ game, max, lostAfter, relay: false, close: N => stop(N, 'failTimer'), bye: () => {} });
+export function joinNearby({ game, name, max }) {
+  const { N, room } = newRoom({ game, name, max, relay: false, close: N => stop(N, 'failTimer'), bye: () => {} });
   let P = null;                                        // the link being paired now
-  N.peerGone = N.byeFrom = Q => ended(N, Q);
+  N.peerGone = Q => ended(N, Q, false);
+  N.byeFrom = (Q, final) => ended(N, Q, final);
   N.onDirect = (Q, open) => {
-    if (open) { try { Q.dcC.send(JSON.stringify({ t: '_h', id: me })); } catch (e) {} }   // who we are
-    else ended(N, Q);
+    if (open) { try { Q.dcC.send(JSON.stringify({ t: '_h', id: me, n: N.name })); } catch (e) {} }   // who we are
+    else ended(N, Q, false);
   };
-  N.onHello = (Q, m) => {                              // who is on the other end: now the link counts
+  // who is on the other end: now the link counts. The host seats them by name (a name it knows: their place,
+  // the old link steps aside); a guest learns the host's name.
+  N.onHello = (Q, m) => {
     if (Q.linked || N.closed || typeof m.id !== 'string' || !SENDER.test(m.id) || m.id === me || N.peers.has(m.id)) return;
+    if (typeof m.n !== 'string' || !NAME.test(m.n) || m.n === N.name) return;
     renamePeer(N, Q, m.id);
-    if (N.role === 'guest') N.host = m.id;
+    Q.name = m.n;
     if (Q === P) { stop(N, 'failTimer'); note('linked'); P = null; }
-    markLinked(Q);
+    if (N.role === 'guest') { N.host = m.id; guestMembers(N, m.n); markLinked(Q); }
+    else {
+      const old = memberOf(N, m.n), oldP = old && N.peers.get(old.s);
+      if (oldP && oldP !== Q) unlink(oldP);
+      markLinked(Q);                                   // linked first: the list of players that follows goes to them too
+      seatMember(N, m.n, m.id);
+    }
     if (!N.watchTimer) startWatch(N);
   };
 
@@ -44,7 +54,7 @@ export function joinNearby({ game, max, lostAfter }) {
   // a new pairing: its own peer, its own report
   const begin = role => {
     if (P) { unlink(P); P = null; }
-    if (role === 'host' && linkedPeers(N).length >= N.max - 1) throw new Error('full');
+    if (role === 'host' && N.members.length >= N.max) throw new Error('full');
     if (role === 'guest' && (N.linked || N.role === 'host')) throw new Error('kind');
     t0 = performance.now(); log = [navigator.userAgent]; tried = '';
     Object.assign(pair, { local: 0, remote: 0, vpn: false, reason: '' });
@@ -167,10 +177,12 @@ async function pairsOf(pc) {
   } catch (e) { return ''; }
 }
 
-// a link is gone for good (a nearby link cannot be rebuilt without pairing again)
-function ended(N, P) {
+// A link is gone for good (a nearby link cannot be rebuilt without pairing again). The host keeps the player's
+// place (unless they left for good): pairing again with the same name gives it back.
+function ended(N, P, final) {
   if (!P.linked) return;
-  unlink(P);
+  if (final && N.role === 'host') dropMember(N, P.name);
+  else unlink(P);
   if (P.id === N.host) N.host = null;                  // the host is gone: there is no one to pass anything on
   if (!N.linked) N.emit('status', 'peer-left');
 }

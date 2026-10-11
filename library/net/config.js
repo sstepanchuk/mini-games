@@ -37,20 +37,10 @@ const code = n => Array.from({ length: n }, () => ABC[Math.floor(Math.random() *
 export const newRoomCode = () => code(6);
 export const validRoomCode = r => typeof r === 'string' && /^[a-z0-9]{6,12}$/.test(r);
 
-// A player id has two parts: a persistent one (this browser) and a per-tab one. The persistent part lets a
-// room recognise the same person reopening the link in a new tab. window.__pid overrides it (tests).
-function browserId() {
-  try {
-    let p = localStorage.getItem('ihroteka-pid');
-    if (!p) { p = code(12); localStorage.setItem('ihroteka-pid', p); }
-    return p;
-  } catch (e) { return code(12); }
-}
-export const me = (window.__pid || browserId()) + '.' + code(6);
-export const SENDER = /^[a-z0-9]{4,32}\.[a-z0-9]{4,12}$/;   // what a player id looks like
-// the player behind an id (the same in every tab of this browser): what games see
-export const playerOf = id => String(id).split('.')[0];
-export const samePlayer = (a, b) => !!a && !!b && playerOf(a) === playerOf(b);
+// This tab's session: how the brokers and links tell tabs apart. (Players are known by name, see room.js.)
+// window.__pid sets its first part (tests).
+export const me = (window.__pid || code(12)) + '.' + code(6);
+export const SENDER = /^[a-z0-9]{4,32}\.[a-z0-9]{4,12}$/;   // what a session id looks like
 
 // The room's topic on the public brokers. Only a hash of game + code goes there, so someone listening to
 // every topic learns no room codes and cannot join or disturb a room.

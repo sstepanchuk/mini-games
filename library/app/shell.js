@@ -110,12 +110,12 @@ function closeFrame() {
   frame = null;
 }
 
-// what a game gets as window.ihroteka (contract version 3, see README "Game API")
+// what a game gets as window.ihroteka (contract version 4, see README "Game API")
 function api(info) {
   const g = find(current) || info;
   const room = attachGame(current);
   return Object.freeze({
-    version: 3,
+    version: 4,
     game: Object.freeze({ id: g.id, title: g.title, players: Object.freeze({ ...(g.players || { min: 2, max: 2 }) }) }),
     libraryUrl: root.href,
     home: () => go(null),

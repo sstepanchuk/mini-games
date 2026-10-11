@@ -4,8 +4,8 @@
    game in a frame and hands it the API (see app/shell.js); a game page opened on its own,
    outside the library, gets no API: `window.ihroteka` is undefined there, so games treat it as optional.
 
-   Contract (version 3):
-     ihroteka.version     3
+   Contract (version 4: players are names, a round can move to another player's copy):
+     ihroteka.version     4
      ihroteka.game        { id, title, players: { min, max } }
      ihroteka.libraryUrl  absolute URL of the library
      ihroteka.home()      back to the shelf
