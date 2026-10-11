@@ -9,6 +9,7 @@
 //   'here'   this device has no network address to offer (e.g. it shares the hotspot: its browser cannot see that network)
 //   'there'  the other device has none
 //   'blocked' both have addresses but cannot reach each other (the network keeps devices apart)
+// room.pair.vpn: one of the devices runs a VPN (a likely reason for 'blocked').
 // room.pair.report() describes what happened, for bug reports.
 // The pairing screens (QR codes, camera) are the library's: app/invite.js.
 import { closeRtc, wireDc } from './rtc.js';
@@ -26,14 +27,26 @@ export function joinNearby({ game, lostAfter }) {
     else if (!open) ended(N);
   };
   const t0 = performance.now(), log = [navigator.userAgent];
+  let tried = '';
+  const sample = async pc => {
+    while (N.pc === pc && !N.linked && pc.connectionState !== 'failed' && pc.connectionState !== 'closed') {
+      const now = await pairsOf(pc);
+      if (now) tried = now;
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  };
   const note = text => log.push((performance.now() - t0 | 0) + ' ms  ' + text);
-  const pair = room.pair = { local: 0, remote: 0, reason: '', report: () => log.join('\n') };
+  const pair = room.pair = { local: 0, remote: 0, vpn: false, reason: '', report: () => log.join('\n'), tried: () => tried };
 
   const fresh = role => {
     closeRtc(N);
     const pc = new RTCPeerConnection({ iceServers: [] });   // nothing to reach: only this network's own addresses
     N.pc = pc;
-    pc.oniceconnectionstatechange = () => note('ice ' + pc.iceConnectionState);
+    // Chrome forgets the address pairs it tried once the link fails: note them while it tries
+    pc.oniceconnectionstatechange = () => {
+      note('ice ' + pc.iceConnectionState);
+      if (pc.iceConnectionState === 'checking') sample(pc);
+    };
     pc.onconnectionstatechange = () => { if (N.pc === pc && pc.connectionState === 'failed') N.linked ? ended(N) : fail(N, pc, pair, note); };
     if (N.role !== role) setRole(N, role);
     return pc;
@@ -41,7 +54,9 @@ export function joinNearby({ game, lostAfter }) {
   const ours = async (pc, kind) => {
     await gathered(pc);
     const sdp = pc.localDescription.sdp;
-    pair.local = candidates(sdp).length;
+    const mine = candidates(sdp);
+    pair.local = mine.length;
+    pair.vpn = pair.vpn || viaVpn(mine);
     note('our addresses: ' + describe(sdp));
     return encode(sdp, kind, game);
   };
@@ -49,6 +64,7 @@ export function joinNearby({ game, lostAfter }) {
     const d = decode(code, game);
     if (d.kind !== kind) throw new Error('kind');
     pair.remote = d.candidates;
+    pair.vpn = pair.vpn || viaVpn(candidates(d.sdp));
     note('their addresses: ' + describe(d.sdp));
     return d.sdp;
   };
@@ -89,6 +105,9 @@ export function joinNearby({ game, lostAfter }) {
   return room;
 }
 
+// an address in 100.64.0.0/10: a VPN such as Tailscale is on, and may send even local traffic into its tunnel
+const viaVpn = list => list.some(c => /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(c.text));
+
 // the candidates are in the description once gathering is done (offline it takes a moment)
 const gathered = pc => new Promise(done => {
   if (pc.iceGatheringState === 'complete') return done();
@@ -102,19 +121,25 @@ async function fail(N, pc, pair, note) {
   N.failing = true;
   stop(N, 'failTimer');
   pair.reason = !pair.local ? 'here' : !pair.remote ? 'there' : 'blocked';
-  try {
-    const st = await pc.getStats(), pairs = [];
-    st.forEach(r => {
-      if (r.type !== 'candidate-pair') return;
-      const a = st.get(r.localCandidateId), b = st.get(r.remoteCandidateId), side = c => c ? c.candidateType + ' ' + (c.address || c.ip || '?') + ':' + c.port : '?';
-      pairs.push(side(a) + ' → ' + side(b) + ' ' + r.state + (r.requestsSent ? ', ' + r.requestsSent + ' checks sent, ' + (r.responsesReceived || 0) + ' answered' : ''));
-    });
-    note('pairs tried: ' + (pairs.join('; ') || 'none'));
-  } catch (e) {}
+  note('pairs tried: ' + ((await pairsOf(pc)) || pair.tried() || 'none'));
   note('failed: ' + pair.reason);
   closeRtc(N);
   N.failing = false;
   N.emit('status', 'failed');
+}
+
+// what the browser tried: "host 192.168.0.5 → host 192.168.0.7 in-progress, sent 9/answered 0, got 0/answered 0"
+async function pairsOf(pc) {
+  try {
+    const st = await pc.getStats(), out = [];
+    const side = c => c ? c.candidateType + ' ' + (c.address || c.ip || '?') + ':' + c.port : '?';
+    st.forEach(r => {
+      if (r.type !== 'candidate-pair') return;
+      out.push(side(st.get(r.localCandidateId)) + ' → ' + side(st.get(r.remoteCandidateId)) + ' ' + r.state +
+        ', sent ' + (r.requestsSent || 0) + '/answered ' + (r.responsesReceived || 0) + ', got ' + (r.requestsReceived || 0) + '/answered ' + (r.responsesSent || 0));
+    });
+    return out.join('; ');
+  } catch (e) { return ''; }
 }
 
 // the link is gone for good (a nearby link cannot be rebuilt without pairing again)
