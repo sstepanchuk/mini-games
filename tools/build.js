@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import * as esbuild from 'esbuild';
-import * as vault from '../sdk/vault/index.js';
+import * as vault from '../library/crypto.js';
 import { P, MIME, rel, esc, exists, problem, homepage, sourceIds, siteGames, sitePath, sourcePath, walk } from './repo.js';
 
 const RESERVED = new Set(['lib']);                     // top-level names the site itself uses
@@ -42,19 +42,15 @@ export function readManifest(id) {
   return g;
 }
 
-/* ---------- library API (@ihroteka/api), first thing in <head> ---------- */
+/* ---------- the library API (library/game-api.js), first thing in <head> ---------- */
 export function withLibraryApi(html, id, g) {
-  const api = fs.readFileSync(path.join(P.sdk, 'api', 'index.js'), 'utf8')
+  const api = fs.readFileSync(P.gameApi, 'utf8')
     .replace(/^\/\*[\s\S]*?\*\/\s*/, '')
     .replace('/* GAME */ null', () => JSON.stringify({ id, title: g.title }).replace(/</g, '\\u003c'));
   const at = /<meta charset[^>]*>/i.test(html) ? /<meta charset[^>]*>/i : /<head>/i;   // charset must stay near the top
   if (!at.test(html)) problem('games/' + id + '/index.html has no <head>');
   return html.replace(at, m => m + '\n<script>' + api.trim() + '</script>');
 }
-
-/* ---------- the SDK: import … from '@ihroteka/<name>' resolves to sdk/<name>/index.js ---------- */
-export const sdkModules = () => Object.fromEntries((exists(P.sdk) ? fs.readdirSync(P.sdk) : [])
-  .filter(n => exists(path.join(P.sdk, n, 'index.js'))).map(n => ['@ihroteka/' + n, path.join(P.sdk, n, 'index.js')]));
 
 /* ---------- one self-contained page ---------- */
 // Styles and module scripts are bundled inline; images, fonts and sounds they use become data: URLs.
@@ -68,7 +64,7 @@ const dataUrl = file => 'data:' + ASSETS[path.extname(file).toLowerCase()] + ';b
 // one entry point → one minified file (also used for the site's own script and stylesheet)
 async function esbuildText(entry, extra, where) {
   const r = await esbuild.build({ entryPoints: [entry], bundle: true, minify: true, write: false, charset: 'utf8',
-    legalComments: 'none', logLevel: 'silent', loader, alias: sdkModules(), ...extra }).catch(e => problem(where + ': ' + (e.errors?.[0]?.text || e.message)));
+    legalComments: 'none', logLevel: 'silent', loader, ...extra }).catch(e => problem(where + ': ' + (e.errors?.[0]?.text || e.message)));
   return r.outputFiles[0].text.trim();
 }
 const JS = { format: 'esm', target: 'es2020' };
@@ -103,14 +99,14 @@ export async function bundleGame(id, g) {
   return html;
 }
 
-/* ---------- the site's pages: one template (sdk/shelf/page.html) for the shelf and every game ---------- */
+/* ---------- the site's pages: one template (library/app/page.html) for the shelf and every game ---------- */
 // {{key}} is replaced (HTML-escaped; bootArgs as is); a line starting with {{?key}} stays only when key is set
 export function page(vals) {
-  return fs.readFileSync(path.join(P.sdk, 'shelf', 'page.html'), 'utf8')
+  return fs.readFileSync(path.join(P.app, 'page.html'), 'utf8')
     .replace(/^\{\{\?(\w+)\}\}(.*\n)/gm, (_, k, line) => vals[k] ? line : '')
     .replace(/\{\{(\w+)\}\}/g, (_, k) => k in vals ? (k === 'bootArgs' ? vals[k] : esc(vals[k])) : problem('page.html: unknown field ' + k));
 }
-const LIBRARY = { title: 'Ігротека', description: 'Наша маленька бібліотека ігор. Вхід за паролем.', theme: '#e4e2f0' };
+const LIBRARY = { title: 'Ігротека', description: 'Наша маленька бібліотека ігор. Ігри відкриваються за паролем.', theme: '#e4e2f0' };
 
 export function gamePage(id, g) {
   const base = homepage();
@@ -118,19 +114,19 @@ export function gamePage(id, g) {
   return page({
     title: g.title, description: g.description, shareTitle: g.shareTitle || g.title, shareDescription: g.shareDescription || g.description,
     imageUrl: base.replace(/\/?$/, '/') + id + '/' + g.image, imageAlt: g.imageAlt || g.title, emoji: g.emoji || '🎮', theme: g.theme || LIBRARY.theme,
-    base: '../', cover: g.image, icon: '', heading: g.title, lead: 'Гра з нашої Ігротеки. Введи свій пароль.', bootArgs: JSON.stringify({ game: id })
+    base: '../', bootArgs: JSON.stringify({ game: id })
   });
 }
 
-/* ---------- the library itself, built from sdk/shelf: path in docs/ → contents ---------- */
+/* ---------- the library itself, built from library/app: path in docs/ → contents ---------- */
 const ICONS = ['icon-192.png', 'icon-512.png', 'maskable-512.png', 'apple-touch-icon.png'];
 export async function siteFiles() {
-  const dir = path.join(P.sdk, 'shelf'), js = (entry, banner) => esbuildText(path.join(dir, entry), { ...JS, ...(banner && { banner: { js: banner } }) }, 'sdk/shelf');
+  const dir = P.app, js = (entry, banner) => esbuildText(path.join(dir, entry), { ...JS, ...(banner && { banner: { js: banner } }) }, 'library/app');
   const files = {
     'index.html': page({ ...LIBRARY, shareTitle: LIBRARY.title, shareDescription: LIBRARY.description, imageUrl: '', imageAlt: '', emoji: '🎲',
-      base: './', cover: '', icon: '🔒', heading: LIBRARY.title, lead: 'Наша маленька бібліотека ігор. Введи свій пароль.', bootArgs: '{}' }),
+      base: './', bootArgs: '{}' }),
     'lib/ihroteka.js': await js('index.js') + '\n',
-    'lib/ihroteka.css': await esbuildText(path.join(dir, 'style.css'), {}, 'sdk/shelf') + '\n',
+    'lib/ihroteka.css': await esbuildText(path.join(dir, 'style.css'), {}, 'library/app') + '\n',
     'lib/qr-scan.js': await js('scan.js', '/*! jsQR © Cosmo Wolfe, Apache-2.0 */') + '\n',
     'manifest.webmanifest': JSON.stringify({
       name: LIBRARY.title, short_name: LIBRARY.title, description: LIBRARY.description, lang: 'uk', id: './', start_url: './', scope: './',
@@ -147,9 +143,9 @@ export async function siteFiles() {
 export function serviceWorker() {
   const files = walk(P.site).filter(f => f !== 'sw.js'), hash = crypto.createHash('sha256');
   for (const f of files) hash.update(f + '\0').update(fs.readFileSync(sitePath(f)));
-  const fonts = [...fs.readFileSync(path.join(P.sdk, 'shelf', 'page.html'), 'utf8').matchAll(/href="(https:\/\/fonts\.googleapis\.com\/[^"]+)"/g)].map(m => m[1].replace(/&amp;/g, '&'));
+  const fonts = [...fs.readFileSync(path.join(P.app, 'page.html'), 'utf8').matchAll(/href="(https:\/\/fonts\.googleapis\.com\/[^"]+)"/g)].map(m => m[1].replace(/&amp;/g, '&'));
   const pages = files.map(f => f.replace(/(^|\/)index\.html$/, '$1'));   // a page is stored under its address
-  return fs.readFileSync(path.join(P.sdk, 'shelf', 'sw.js'), 'utf8')
+  return fs.readFileSync(path.join(P.app, 'sw.js'), 'utf8')
     .replace('/* FILES */', pages.map(f => JSON.stringify(f)).join(','))
     .replace('/* FONTS */', [...new Set(fonts)].map(f => JSON.stringify(f)).join(','))
     .replace('/* VERSION */', hash.digest('hex').slice(0, 16));
@@ -158,14 +154,14 @@ export function serviceWorker() {
 /* ---------- password-free site validation (also run by CI) → { problems, games, people } ---------- */
 export async function checkSite() {
   const shelf = await siteFiles();
-  const SITE_FILES = new Set(['keyring.json', 'library.bin', 'sw.js', ...Object.keys(shelf)]);
+  const SITE_FILES = new Set(['keyring.json', 'library.json', 'sw.js', ...Object.keys(shelf)]);
   const problems = [], bad = msg => problems.push(msg);
   let kr = null;
   try { kr = JSON.parse(fs.readFileSync(P.keyring, 'utf8')); } catch (e) { bad(rel(P.keyring) + ': ' + e.message); }
   if (kr) {
     if (kr.v !== vault.KEYRING_V || !kr.kid || !kr.kdf?.salt || !(kr.kdf.iterations >= 100000)) bad('keyring.json: invalid header');
     if (!kr.people?.length) bad('keyring.json: no people');
-    for (const p of kr.people || []) if (!(p.id && p.pub && p.priv && p.name && p.box?.epk && p.box?.ct)) bad('keyring.json: incomplete entry ' + (p.id || '?'));
+    for (const p of kr.people || []) if (!(p.id && p.pub && p.priv && typeof p.name === 'string' && p.box?.epk && p.box?.ct)) bad('keyring.json: incomplete entry ' + (p.id || '?'));
   }
   // every sealed file must be sealed with the current library key
   const sealedWithCurrentKey = (file, label) => {
@@ -176,19 +172,21 @@ export async function checkSite() {
   };
   for (const [f, data] of Object.entries(shelf)) {
     if (!exists(sitePath(f))) bad('missing docs/' + f);
-    else if (!fs.readFileSync(sitePath(f)).equals(Buffer.from(data))) bad('docs/' + f + ' is out of date with sdk/shelf (npm run build)');
+    else if (!fs.readFileSync(sitePath(f)).equals(Buffer.from(data))) bad('docs/' + f + ' is out of date with library/app (npm run build)');
   }
   if (!exists(sitePath('sw.js'))) bad('missing docs/sw.js');
   else if (fs.readFileSync(sitePath('sw.js'), 'utf8') !== serviceWorker()) bad('docs/sw.js does not list the published files (npm run build)');
-  sealedWithCurrentKey(sitePath('library.bin'), 'shelf');
+  let list = [];
+  try { list = JSON.parse(fs.readFileSync(sitePath('library.json'), 'utf8')); } catch (e) { bad('docs/library.json: ' + e.message); }
   const games = siteGames();
   if (!games.length) bad('no games in docs/');
+  if (list.map(g => g.id).sort().join() !== games.join()) bad('docs/library.json does not list exactly the games in docs/ (npm run build)');
   for (const id of games) {
     sealedWithCurrentKey(sitePath(id, 'game.bin'), id);
     sealedWithCurrentKey(sourcePath(id), id + ' sources');
     const page = sitePath(id, 'index.html');
     if (!exists(page)) { bad('missing docs/' + id + '/index.html'); continue; }
-    const html = fs.readFileSync(page, 'utf8'), img = html.match(/class="cover" src="([^"]+)"/)?.[1];
+    const html = fs.readFileSync(page, 'utf8'), img = list.find(g => g.id === id)?.image;
     if (!html.includes('boot({"game":' + JSON.stringify(id))) bad('docs/' + id + '/index.html is not a library game page');
     if (/\{\{\w+\}\}/.test(html)) bad('docs/' + id + '/index.html: unfilled template');
     if (!img || !exists(sitePath(id, img))) bad('docs/' + id + ': missing image ' + (img || ''));

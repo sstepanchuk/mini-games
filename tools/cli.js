@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import * as vault from '../sdk/vault/index.js';
+import * as vault from '../library/crypto.js';
 import * as repo from './repo.js';
 import { readManifest, bundleGame, gamePage, checkSite, siteFiles, serviceWorker } from './build.js';
 import { serve } from './dev.js';
@@ -25,16 +25,15 @@ function ask(question, hidden) {
 const password = (q = 'Password: ') => process.env.VAULT_PASSWORD ?? ask(q, true);
 const signIn = async () => repo.open(await password());
 
-async function writeShelf(lib, games) {
-  const shelf = games.map(([id, g]) => ({ id, title: g.title, tagline: g.tagline, image: g.image, emoji: g.emoji }));
-  await repo.writeSealed(repo.sitePath('library.bin'), JSON.stringify(shelf), vault.label.library(), lib);
-}
+// the list of games on the shelf (public: titles and covers are on the game pages anyway)
+const shelfFile = () => repo.sitePath('library.json');
+const writeShelf = games => writeIfChanged(shelfFile(), JSON.stringify(games.map(([id, g]) => ({ id, title: g.title, tagline: g.tagline, image: g.image, emoji: g.emoji })), null, 2) + '\n');
 
 const HELP = `Library commands
 
   npm run unlock [-- --force]    decrypt game sources into games/ (--force: overwrite local changes)
   npm run dev [-- docs] [port]   local server for games/ (or the built site in docs/), on this computer only
-  npm run build                  bundle, encrypt and update docs/ and vault/
+  npm run build                  bundle and encrypt the games, update docs/ and vault/
   npm run check                  validate docs/ before publishing (no password needed)
 
   npm run user -- list           who has access
@@ -53,12 +52,12 @@ const commands = {
   async init(...names) {
     if (exists(P.keyring)) problem('A library already exists: ' + rel(P.keyring));
     if (!names.length) problem('Give at least one name: node tools/cli.js init <name> …');
-    const kr = vault.newKeyring(), raw = vault.newLibraryKey(), key = await vault.importKey(raw);
+    const kr = vault.newKeyring(), raw = vault.newLibraryKey();
     kr.kid = await vault.keyId(raw);
     console.log('New library. Passwords are shown only once, save them:\n');
     for (const name of names) {
       const pw = repo.makePassword();
-      await repo.addPerson(kr, raw, key, name, pw);
+      await repo.addPerson(kr, raw, name, pw);
       console.log('  ' + name.padEnd(12) + pw);
     }
     repo.writeKeyring(kr);
@@ -100,14 +99,12 @@ const commands = {
       repo.writeAtomic(repo.sitePath(id, 'index.html'), gamePage(id, g));
       console.log('✓ ' + id + ': ' + (html.length / 1024).toFixed(0) + ' KB' + (changed ? '' : ' (unchanged)'));
     }
-    await writeShelf(lib, games);
+    writeShelf(games);
   },
 
   async 'remove-game'(id) {
     if (!id || !repo.siteGames().includes(id)) problem('No such game in docs/: ' + id);
-    const lib = await signIn();
-    const shelf = JSON.parse(vault.text(await repo.readSealed(repo.sitePath('library.bin'), vault.label.library(), lib)));
-    await writeShelf(lib, shelf.filter(g => g.id !== id).map(g => [g.id, g]));
+    writeShelf(JSON.parse(fs.readFileSync(shelfFile(), 'utf8')).filter(g => g.id !== id).map(g => [g.id, g]));
     for (const p of [repo.sitePath(id), repo.sourcePath(id), path.join(P.games, id)]) fs.rmSync(p, { recursive: true, force: true });
     console.log('✓ ' + id + ' removed. Commit docs/ and vault/.');
   },
@@ -115,21 +112,19 @@ const commands = {
   async user(sub, ...args) {
     const name = args.join(' ').trim();
     if (sub === 'list') {
-      const { kr, me, key } = await signIn();
-      for (const p of kr.people) console.log((p.id === me.id ? '* ' : '  ') + await repo.nameOf(key, p));
+      for (const p of repo.readKeyring().people) console.log('  ' + p.name);
     } else if (sub === 'add') {
       if (!name) problem('npm run user -- add <name>');
-      const { kr, raw, key } = await signIn();
-      for (const p of kr.people) if (await repo.nameOf(key, p) === name) problem('That name is already taken.');
+      const { kr, raw } = await signIn();
+      if (kr.people.some(p => p.name === name)) problem('That name is already taken.');
       const pw = repo.makePassword();
-      await repo.addPerson(kr, raw, key, name, pw);
+      await repo.addPerson(kr, raw, name, pw);
       repo.writeKeyring(kr);
       console.log('✓ ' + name + ' has access. Password (shown once): ' + pw);
     } else if (sub === 'remove') {
       repo.requireClean(P.site, P.vault);
-      const lib = await signIn(), { kr, me, key } = lib;
-      const names = await Promise.all(kr.people.map(p => repo.nameOf(key, p)));
-      const gone = kr.people.filter((p, i) => names[i] === name);
+      const lib = await signIn(), { kr, me } = lib;
+      const gone = kr.people.filter(p => p.name === name);
       if (!gone.length) problem('No such name. See: npm run user -- list');
       if (gone.includes(me)) problem('You cannot remove yourself: sign in with someone else’s password.');
       // the removed person may have kept the library key, so it is replaced and everything re-encrypted

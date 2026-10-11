@@ -1,36 +1,34 @@
 /* =====================================================================
-   @ihroteka/shelf — the library page: sign-in (lock.js), the shelf and the open game (shell.js),
+   The library page: the shelf and the open game (shell.js), the password for the games (lock.js),
    playing together (together.js), working offline as an app (install.js, sw.js).
    Built into docs/lib/ihroteka.js; every page of the site starts it with boot().
    ===================================================================== */
 import { $, root } from './dom.js';
 import { installHint, keepFiles, registerWorker } from './install.js';
-import { openGame, openShelf, preloadGame, signOut, unlock } from './lock.js';
+import { openGame, openShelf, preloadGame, signOut, whenSignedIn } from './lock.js';
 import { startShell } from './shell.js';
 import { together } from './together.js';
 
 /**
  * game  the game this page belongs to (its public page), if any
- * dev   { games }: `npm run dev` — plaintext games from disk, no sign-in, no offline copy
+ * dev   { games }: `npm run dev` — plaintext games from disk, no password, no offline copy
  */
 export async function boot({ game, dev } = {}) {
   window.__ihrotekaBooted = true;                      // the page's fallback timer checks this
   try {
     if (dev) {
-      startShell({ games: dev.games, initial: game, loader: async id => ({ src: new URL(id + '/?frame', root).href }), signOut: async () => {} });
+      startShell({ games: dev.games, initial: game, loader: async g => ({ src: new URL(g.id + '/?frame', root).href }) });
       return;
     }
     // a new version of the library arrived: reload when it disturbs nobody (on the shelf, alone, no dialog)
     registerWorker({ onUpdate: () => { if (!document.querySelector('.frame, .backdrop') && !together()) location.reload(); } });
-    if (game) preloadGame(game);                       // start downloading the game while the password is typed
-    await unlock();
+    if (game) preloadGame(game);                       // the game starts downloading at once
     const games = await openShelf();
-    keepFiles();
+    startShell({ games, initial: game, loader: async g => ({ srcdoc: await openGame(g) }), signOut, whenSignedIn });
     installHint();
-    startShell({ games, initial: game, loader: async id => ({ srcdoc: await openGame(id) }), signOut });
+    keepFiles();
   } catch (e) {
-    const busy = $('busy');
-    if (busy) { if (e.say) busy.textContent = e.say; busy.hidden = false; }
+    if (e.say) $('busy').textContent = e.say;
     console.error(e);
   }
 }

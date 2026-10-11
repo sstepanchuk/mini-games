@@ -6,13 +6,13 @@
 <meta name="theme-color" content="#e4e2f0">
 <meta name="robots" content="noindex">
 <title>Ігротека</title>
-<meta name="description" content="Наша маленька бібліотека ігор. Вхід за паролем.">
-<!-- Link preview for Telegram and other messengers. This page is public; the games themselves are encrypted. -->
+<meta name="description" content="Наша маленька бібліотека ігор. Ігри відкриваються за паролем.">
+<!-- Link preview for Telegram and other messengers. The library is public; the games themselves are encrypted. -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Ігротека">
 <meta property="og:locale" content="uk_UA">
 <meta property="og:title" content="Ігротека">
-<meta property="og:description" content="Наша маленька бібліотека ігор. Вхід за паролем.">
+<meta property="og:description" content="Наша маленька бібліотека ігор. Ігри відкриваються за паролем.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎲</text></svg>">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
@@ -26,19 +26,8 @@
 <link rel="modulepreload" href="./lib/ihroteka.js">
 </head>
 <body>
-<main class="card" id="lock">
-  <div class="lock-icon" aria-hidden="true">🔒</div>
-  <h1 class="title">Ігротека</h1>
-  <form id="unlock" hidden>
-    <p class="lead">Наша маленька бібліотека ігор. Введи свій пароль.</p>
-    <input type="text" name="username" value="Ігротека" autocomplete="username" hidden>
-    <input type="password" id="pw" autocomplete="current-password" placeholder="Пароль" aria-label="Пароль" required>
-    <button class="btn" type="submit">Відкрити</button>
-    <p class="err" id="err" role="alert"></p>
-  </form>
-  <p class="busy" id="busy">Відмикаю…</p>
-  <noscript><p class="err">Без JavaScript бібліотека не відкриється.</p></noscript>
-</main>
+<p class="busy" id="busy">Відкриваю Ігротеку…</p>
+<noscript><p class="err">Без JavaScript бібліотека не відкриється.</p></noscript>
 
 <section class="shelf" id="shelf" hidden>
   <div class="shelf-head">
@@ -47,7 +36,7 @@
   </div>
   <div class="games" id="games"></div>
   <p class="fine" id="install" hidden></p>
-  <button class="btn ghost" id="sign-out" type="button" title="Пристрій забуде твій ключ">Вийти</button>
+  <button class="btn ghost" id="sign-out" type="button" hidden>Забути пароль на цьому пристрої</button>
 </section>
 
 <section class="stage" id="stage" hidden>

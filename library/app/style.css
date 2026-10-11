@@ -32,9 +32,7 @@ button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid var(-
   font-family:var(--display);font-weight:800;font-size:clamp(28px,8vw,40px);line-height:1.08;
   text-shadow:3px 3px 0 var(--pink),-3px -2px 0 var(--blue);padding:4px 0 2px;
 }
-.lead{font-size:16px}
 .fine{font-size:13px;color:var(--mute)}
-.lock-icon{font-size:34px;line-height:1}
 
 form{display:flex;flex-direction:column;gap:12px}
 input[type=password],input.link{

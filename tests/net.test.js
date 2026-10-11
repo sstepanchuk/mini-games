@@ -1,7 +1,7 @@
 // The nearby pairing code: a WebRTC description squeezed into a short code and rebuilt on the other side.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ANSWER, OFFER, decode, encode } from '../sdk/net/code.js';
+import { ANSWER, OFFER, decode, encode } from '../library/net/code.js';
 
 const FP = '42:9D:66:50:97:A4:68:BC:E1:98:48:FE:58:01:CF:45:AE:A9:C1:C8:67:D9:AF:26:5B:1E:D0:72:C0:AE:25:D9';
 const sdp = cands => ['v=0', 'o=- 1 2 IN IP4 127.0.0.1', 's=-', 't=0 0', 'a=group:BUNDLE 0',

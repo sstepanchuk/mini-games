@@ -44,7 +44,7 @@ export function newRoom({ game, code = '', lostAfter = 60000, relay, close, bye 
     pulse: null,                                       // (now) => object: extra fields for the pulse sent 5 times a second
     on(name, fn) { ev.on(name, fn); return room; },
     send(msg, opts) {                                  // { fast, batch }: see link.js
-      if (!msg || typeof msg.t !== 'string' || RESERVED.has(msg.t)) throw new Error('@ihroteka/net: a message needs a string t other than ' + [...RESERVED].join(', '));
+      if (!msg || typeof msg.t !== 'string' || RESERVED.has(msg.t)) throw new Error('room: a message needs a string t other than ' + [...RESERVED].join(', '));
       send(N, msg, opts);
     },
     lag: () => lag(N),                                 // one-way delay estimate, ms

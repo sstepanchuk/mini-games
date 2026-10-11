@@ -5,7 +5,7 @@
 //   const room = joinNearby({ game });
 //   host:  show(await room.pair.offer()) … await room.pair.finish(codeFromGuest)
 //   guest: show(await room.pair.answer(codeFromHost))
-// Pairing UI (QR codes, camera) is the library's; see @ihroteka/shelf.
+// The pairing screens (QR codes, camera) are the library's: app/together.js.
 import { closeRtc, wireDc } from './rtc.js';
 import { ANSWER, OFFER, decode, encode } from './code.js';
 import { markLinked, newRoom, setRole, startWatch, stop } from './room.js';

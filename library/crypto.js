@@ -1,7 +1,8 @@
 /* =====================================================================
-   @ihroteka/vault — library encryption. Runs unchanged in the browser and in Node (Web Crypto).
+   Encryption of the games. Runs unchanged in the browser and in Node (Web Crypto).
 
-   - All content (games, their sources, the game list) is sealed with one library key (AES-256-GCM).
+   - The games (each built game and its sources) are sealed with one library key (AES-256-GCM).
+     Everything else is public: the library itself, the list of games, who has access.
    - Each person has an ECDH P-256 key pair. keyring.json holds, per person, a "box" with the library
      key that only their private key opens, and their private key sealed with their password
      (PBKDF2-SHA-256). People can be added or removed without knowing anyone else's password.
@@ -20,10 +21,8 @@ export const text = u8 => dec.decode(u8);
 
 // Associated data for every ciphertext: a file swapped in under another name will not decrypt.
 export const label = {
-  library: () => 'ihroteka:library',
   game: id => 'ihroteka:game:' + id,
   source: id => 'ihroteka:source:' + id,
-  name: id => 'ihroteka:name:' + id,
   priv: id => 'ihroteka:priv:' + id,
   box: id => 'ihroteka:box:' + id
 };
@@ -77,10 +76,10 @@ async function boxKey(priv, pubRaw, epk, id) {
 }
 
 /* ---------- keyring ---------- */
-export const KEYRING_V = 2;                            // format version: changes whenever the labels above do
+export const KEYRING_V = 3;                            // format version (3: names are plain)
 export const newKeyring = () => ({ v: KEYRING_V, kid: '', kdf: { salt: b64(random(16)), iterations: 600000 }, people: [] });
 
-// a new person: fresh key pair, private key sealed with their password (box and name are added by the caller)
+// a new person: fresh key pair, private key sealed with their password (the caller adds name and box)
 export async function newPerson(keyring, id, password) {
   const pair = await subtle.generateKey(ECDH, true, ['deriveBits']);
   const pkcs8 = await subtle.exportKey('pkcs8', pair.privateKey);

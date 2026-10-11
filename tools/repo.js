@@ -1,11 +1,11 @@
-// Repository model: where things live, the keyring, sealed files and game source archives.
+// Repository model: where things live, the keyring, sealed games and their source archives.
 // Library code throws Problem for anything the user can fix; only cli.js prints and exits.
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import * as vault from '../sdk/vault/index.js';
+import * as vault from '../library/crypto.js';
 
 export class Problem extends Error {}
 export const problem = msg => { throw new Problem(msg); };
@@ -18,7 +18,8 @@ export const P = {
   site: path.join(ROOT, 'docs'),         // published site
   vault: path.join(ROOT, 'vault'),       // encrypted sources
   keyring: path.join(ROOT, 'docs', 'keyring.json'),
-  sdk: path.join(TOOLS, '..', 'sdk')     // @ihroteka/<name> modules: vault, shelf, api, net
+  app: path.join(TOOLS, '..', 'library', 'app'),       // the library page
+  gameApi: path.join(TOOLS, '..', 'library', 'game-api.js')
 };
 export const rel = p => path.relative(ROOT, p) || '.';
 export const exists = fs.existsSync;
@@ -70,15 +71,10 @@ export async function open(password) {
   if (kr.kid !== kid) problem('keyring.json is inconsistent: its key id does not match the library key.');
   return { kr, me: who.person, raw, key: await vault.importKey(raw), kid };
 }
-// names are sealed with the library key: only people with access see who else has it
-const sealName = async (key, id, name) => vault.b64(await vault.seal(key, name, vault.label.name(id)));
-const openName = (key, p) => vault.unseal(key, vault.unb64(p.name), vault.label.name(p.id)).then(vault.text);
-export const nameOf = (key, p) => openName(key, p).catch(() => '?');
-
-export async function addPerson(kr, raw, key, name, password) {
+export async function addPerson(kr, raw, name, password) {
   const id = Buffer.from(vault.random(6)).toString('hex');
   const person = await vault.newPerson(kr, id, password);
-  person.name = await sealName(key, id, name);
+  person.name = name;
   person.box = await vault.boxFor(person, raw);
   kr.people.push(person);
 }
@@ -99,7 +95,6 @@ export function checkNewPassword(pw) {
 // every sealed file with its label
 export function sealedFiles() {
   const out = [];
-  if (exists(sitePath('library.bin'))) out.push([sitePath('library.bin'), vault.label.library()]);
   for (const id of siteGames()) out.push([sitePath(id, 'game.bin'), vault.label.game(id)]);
   for (const id of sourceIds()) out.push([sourcePath(id), vault.label.source(id)]);
   return out;
@@ -127,14 +122,9 @@ export async function writeSealed(file, plain, aad, lib, equal = same) {
 export async function rotate(kr, lib) {
   const files = [];
   for (const [file, aad] of sealedFiles()) files.push([file, aad, await readSealed(file, aad, lib)]);
-  const names = [];
-  for (const p of kr.people) names.push(await openName(lib.key, p));
   const raw = vault.newLibraryKey(), next = { raw, key: await vault.importKey(raw), kid: await vault.keyId(raw) };
   for (const [file, aad, plain] of files) fs.writeFileSync(file + '.tmp', await vault.sealFile(next.key, next.kid, plain, aad));
-  for (const [i, p] of kr.people.entries()) {
-    p.name = await sealName(next.key, p.id, names[i]);
-    p.box = await vault.boxFor(p, raw);
-  }
+  for (const p of kr.people) p.box = await vault.boxFor(p, raw);
   kr.kid = next.kid;
   for (const [file] of files) fs.renameSync(file + '.tmp', file);
   writeKeyring(kr);

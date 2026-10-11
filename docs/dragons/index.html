@@ -7,7 +7,7 @@
 <meta name="robots" content="noindex">
 <title>Два дракони</title>
 <meta name="description" content="Гра на двох: збирай шматочки, рости й обжени іншого дракона. Відкрий посилання й натисни «Почати гру». Нічого встановлювати не треба.">
-<!-- Link preview for Telegram and other messengers. This page is public; the games themselves are encrypted. -->
+<!-- Link preview for Telegram and other messengers. The library is public; the games themselves are encrypted. -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Ігротека">
 <meta property="og:locale" content="uk_UA">
@@ -33,20 +33,8 @@
 <link rel="modulepreload" href="../lib/ihroteka.js">
 </head>
 <body>
-<main class="card" id="lock">
-  <img class="cover" src="preview.png" alt="Рожевий і синій дракони мчать до жовтого шматочка" width="1200" height="630">
-  <h1 class="title">Два дракони</h1>
-  <form id="unlock" hidden>
-    <p class="lead">Гра з нашої Ігротеки. Введи свій пароль.</p>
-    <input type="text" name="username" value="Ігротека" autocomplete="username" hidden>
-    <input type="password" id="pw" autocomplete="current-password" placeholder="Пароль" aria-label="Пароль" required>
-    <button class="btn" type="submit">Відкрити</button>
-    <p class="err" id="err" role="alert"></p>
-  </form>
-  <p class="busy" id="busy">Відмикаю…</p>
-  <a class="btn ghost" href="../">Усі ігри</a>
-  <noscript><p class="err">Без JavaScript бібліотека не відкриється.</p></noscript>
-</main>
+<p class="busy" id="busy">Відкриваю Ігротеку…</p>
+<noscript><p class="err">Без JavaScript бібліотека не відкриється.</p></noscript>
 
 <section class="shelf" id="shelf" hidden>
   <div class="shelf-head">
@@ -55,7 +43,7 @@
   </div>
   <div class="games" id="games"></div>
   <p class="fine" id="install" hidden></p>
-  <button class="btn ghost" id="sign-out" type="button" title="Пристрій забуде твій ключ">Вийти</button>
+  <button class="btn ghost" id="sign-out" type="button" hidden>Забути пароль на цьому пристрої</button>
 </section>
 
 <section class="stage" id="stage" hidden>

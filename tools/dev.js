@@ -1,30 +1,24 @@
-// Local server. For games/ it runs the real library around the plaintext games: the shelf at /, each game in
-// the library's frame, the SDK bundled on the fly (an import map points @ihroteka/<name> at it), no sign-in.
-// It serves plaintext sources, so by default it only listens on this computer.
+// Local server. For games/ it runs the real library around the plaintext games: the shelf at /, each game in the
+// library's frame, the library bundled on the fly, no sign-in. It serves plaintext sources, so by default it only
+// listens on this computer.
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import * as esbuild from 'esbuild';
 import { P, MIME, rel, exists, problem, gameIds } from './repo.js';
-import { readManifest, withLibraryApi, sdkModules, page } from './build.js';
+import { readManifest, withLibraryApi, page } from './build.js';
 
 const text = type => type + (/^(text|application\/json)/.test(type) ? '; charset=utf-8' : '');
-const SDK = '/@ihroteka/';
-const bundle = async (entry, format = 'esm') => (await esbuild.build({ entryPoints: [entry], bundle: true, write: false, format,
-  sourcemap: 'inline', charset: 'utf8', logLevel: 'silent', alias: sdkModules(), loader: { '.png': 'dataurl', '.woff2': 'dataurl' } })).outputFiles[0].text;
-// the library's own files, as the build makes them (lib/… from sdk/shelf)
+const bundle = async entry => (await esbuild.build({ entryPoints: [entry], bundle: true, write: false, format: 'esm',
+  sourcemap: 'inline', charset: 'utf8', logLevel: 'silent' })).outputFiles[0].text;
+// the library's own files, as the build makes them (lib/… from library/app)
 const LIB = { '/lib/ihroteka.js': 'index.js', '/lib/ihroteka.css': 'style.css', '/lib/qr-scan.js': 'scan.js' };
-
-// the game's page: library API first, then an import map for the SDK
-function gameHtml(id) {
-  const imports = Object.fromEntries(Object.keys(sdkModules()).map(m => [m, SDK + m.split('/')[1] + '/index.js']));
-  return withLibraryApi(fs.readFileSync(path.join(P.games, id, 'index.html'), 'utf8'), id, readManifest(id))
-    .replace(/<script\b/i, m => '<script type="importmap">' + JSON.stringify({ imports }) + '</script>\n' + m);
-}
+// the game's page, with the library API in front of its code
+const gameHtml = id => withLibraryApi(fs.readFileSync(path.join(P.games, id, 'index.html'), 'utf8'), id, readManifest(id));
 function shelfHtml(game) {
   const games = gameIds().map(id => { const g = readManifest(id); return { id, title: g.title, tagline: g.tagline, image: g.image, emoji: g.emoji }; });
   return page({ title: 'Ігротека (dev)', description: '', shareTitle: '', shareDescription: '', imageUrl: '', imageAlt: '', emoji: '🛠', theme: '#e4e2f0',
-    base: '/', cover: '', icon: '🛠', heading: 'Ігротека', lead: '', bootArgs: JSON.stringify({ game, dev: { games } }) });
+    base: '/', bootArgs: JSON.stringify({ game, dev: { games } }) });
 }
 
 export function serve(what = 'games', port = '8000', host = '127.0.0.1') {
@@ -40,12 +34,8 @@ export function serve(what = 'games', port = '8000', host = '127.0.0.1') {
       const game = url.match(/^\/([a-z0-9-]+)\/(index\.html)?$/)?.[1];
       if (url === '/' || (game && gameIds().includes(game) && !embed)) return send(200, 'text/html', shelfHtml(url === '/' ? undefined : game));
       if (game && gameIds().includes(game)) return send(200, 'text/html', gameHtml(game));
-      if (LIB[url]) return send(200, url.endsWith('.css') ? 'text/css' : 'text/javascript', await bundle(path.join(P.sdk, 'shelf', LIB[url])));
-      if (url.startsWith(SDK)) {                         // an SDK module, bundled with its dependencies
-        const name = url.slice(SDK.length).split('/')[0], entry = sdkModules()['@ihroteka/' + name];
-        return entry ? send(200, 'text/javascript', await bundle(entry)) : send(404, 'text/plain', 'Not found');
-      }
-      if (url.startsWith('/icons/')) return file(path.join(P.sdk, 'shelf'), url);
+      if (LIB[url]) return send(200, url.endsWith('.css') ? 'text/css' : 'text/javascript', await bundle(path.join(P.app, LIB[url])));
+      if (url.startsWith('/icons/')) return file(P.app, url);
     }
     return file(dir, url);
 

@@ -9,21 +9,26 @@ import { attachGame, chipClick, detachGame, initTogether, leave, query, state, v
 let games = [], current, frame = null, load = null, following = false;   // current: the open game id, null on the shelf (undefined before the first view)
 
 /**
- * games    [{ id, title, tagline, image, emoji }]
- * initial  the game this page was opened at, if any
- * loader   id → Promise<{ srcdoc } | { src }>: how a game's page is obtained (decrypted, or in dev from disk)
- * signOut  () → Promise
+ * games         [{ id, title, tagline, image, emoji }]
+ * initial       the game this page was opened at, if any
+ * loader        game → Promise<{ srcdoc } | { src }>: its page (decrypted, or in dev from disk); rejects with
+ *               error.cancelled when the player does not give the password
+ * signOut       () → Promise: forget the password on this device
+ * whenSignedIn  (fn) → calls fn once this device knows the password
  */
-export function startShell({ games: list, initial, loader, signOut }) {
+export function startShell({ games: list, initial, loader, signOut, whenSignedIn }) {
   games = list; load = loader;
-  // the game's page asks for the library API (see @ihroteka/api)
+  // the game's page asks for the library API (see game-api.js)
   window.__ihroteka = { attach: (win, info) => win === frame?.contentWindow ? api(info) : undefined, state };
   $('games').replaceChildren(...games.map(card));
   $('together').addEventListener('click', chipClick);
   $('stage-back').addEventListener('click', () => go(null));
-  $('sign-out').addEventListener('click', async () => { leave(); await signOut(); location.replace(root.href); });
+  if (signOut) {
+    $('sign-out').addEventListener('click', async () => { leave(); await signOut(); $('sign-out').hidden = true; });
+    whenSignedIn(() => { $('sign-out').hidden = false; });
+  }
   addEventListener('popstate', () => { const byPeer = following; following = false; show(fromAddress(), true, byPeer); });
-  $('lock').hidden = true;
+  $('busy').hidden = true;
   initTogether({ current: () => current ?? null, follow: id => go(id, true) });
   show(initial && find(initial) ? initial : null, true);
 }
@@ -64,8 +69,14 @@ async function openFrame(g) {
   const note = $('stage-note'), say = (text, cls) => { $('stage-text').textContent = text; $('stage-text').className = cls; $('stage-back').hidden = cls !== 'err'; };
   say('Відкриваю гру…', 'busy'); note.hidden = false;
   let page;
-  try { page = await load(g.id); }
-  catch (e) { console.error(e); if (current === g.id) say(e.say || 'Не вдалося відкрити гру. Онови сторінку.', 'err'); return; }
+  try { page = await load(g); }
+  catch (e) {
+    if (current !== g.id) return;
+    if (e.cancelled) { go(null); return; }             // no password: back to the shelf
+    console.error(e);
+    say(e.say || 'Не вдалося відкрити гру. Онови сторінку.', 'err');
+    return;
+  }
   if (current !== g.id) return;                          // switched elsewhere meanwhile
   frame = el('iframe', { className: 'frame', title: g.title });
   frame.allow = 'fullscreen; screen-wake-lock; autoplay; gamepad; camera';

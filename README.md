@@ -1,39 +1,47 @@
 # 🎲 Ihroteka
 
-A tiny private game library. Password-protected, end-to-end encrypted, hosted on GitHub Pages.
+A tiny private game library. The library is public; its games are end-to-end encrypted and open with a
+password. Play alone, together over the internet, or side by side with no internet at all. Installs as an app
+and works offline. Hosted on GitHub Pages.
 
 **[Open](https://sstepanchuk.github.io/mini-games/)** · [🐉 Two Dragons](https://sstepanchuk.github.io/mini-games/dragons/)
 
 ## How it works
 
-- Games and their sources are stored only encrypted (AES-256-GCM).
-- Each person has their own password and ECDH P-256 key pair; the password unlocks the private key, which unlocks the library key.
-- Removing someone rotates the library key and re-encrypts everything.
-- Every game has its own public link preview; the game itself opens only after sign-in.
+- **One page.** The library is a single page: the shelf, and the open game in a frame. Leaving a game never
+  reloads the library, so the connection with a friend lives on from game to game.
+- **Encrypted games.** Each game and its sources are sealed with one library key (AES-256-GCM). Each person has
+  a password and an ECDH P-256 key pair; the password unlocks their private key, which unlocks the library key.
+  Removing someone rotates the library key and re-encrypts every game.
+- **Together.** "Грати разом" connects two players for the whole library: whatever one opens, the other's
+  library opens too. Over the internet: a link (public MQTT brokers find the friend; WebRTC goes direct when
+  it can). Nearby, no internet: two phones on the same Wi-Fi or hotspot show each other a QR code.
+- **Offline.** A service worker keeps one complete copy of the site per version; the shelf, the games and nearby
+  play work without a network. On a phone it installs as an app.
 
 ## Layout
 
 ```
-sdk/     the Ihroteka itself, as @ihroteka/<name> modules
-  vault    encryption: keyring, sealed files (browser and Node)
-  shelf    the site: sign-in, remembered device, shelf and game page templates
-  api      window.ihroteka, injected into every game
-  net      two-player rooms for games
-tools/   cli.js (commands) · repo.js (keys, sealed files) · build.js (bundling, checks) · dev.js (local server)
-docs/    the published site — build output, never edited by hand
-vault/   encrypted game sources
-games/   plaintext sources (local only, git-ignored)
+library/   everything that runs in the browser
+  app/       the library page: shell, password, together, offline copy, page template, icons
+  net/       two-player rooms: internet (MQTT + WebRTC) and nearby (QR-paired WebRTC)
+  crypto.js  keyring and sealed files (browser and Node)
+  game-api.js  window.ihroteka, injected into every game
+tools/     cli.js (commands) · repo.js (keys, sealed files) · build.js (bundling, checks) · dev.js (local server)
+games/     plaintext game sources (local only, git-ignored)
+vault/     the same sources, encrypted
+docs/      the published site — build output, never edited by hand
 ```
 
 ## Usage
 
 ```sh
 npm install
-npm run unlock              # decrypt sources into games/
-npm run dev                 # serve games/ at localhost:8000
-npm run build               # bundle, encrypt, update docs/ and vault/
+npm run unlock              # decrypt game sources into games/
+npm run dev                 # the library with your plaintext games at localhost:8000
+npm run build               # bundle and encrypt the games, update docs/ and vault/
 npm run check               # validate docs/ (runs in CI before every deploy)
-npm test                    # end-to-end tests of the tools and crypto
+npm test
 
 npm run user -- list | add <name> | remove <name> | passwd
 ```
@@ -50,63 +58,49 @@ games/<id>/          <id> becomes the URL: /<id>/
   preview.png        1200×630, used on the shelf and in link previews
 ```
 
-Then `npm run build`, commit, push.
-
-The build inlines everything into one page, decrypted and written with `document.write`: start with
-`<!doctype html>`, don't rely on `window.onload`, and keep assets next to `index.html` (relative links
-to anything that is not a style, module script or media file fail the build).
+Then `npm run build`, commit, push. The build inlines everything into one page: start with `<!doctype html>`,
+keep assets next to `index.html` (relative links to anything that is not a style, module script or media file
+fail the build).
 
 ## Game API
 
-Every game gets `window.ihroteka`, injected before its own code (in builds and in `npm run dev`):
+The library runs each game in a frame and gives it `window.ihroteka` before the game's code runs
+(`undefined` when a game page is opened on its own, so treat it as optional):
 
 ```js
-ihroteka.version     // 1
+ihroteka.version     // 2
 ihroteka.game        // { id, title }
-ihroteka.libraryUrl  // the shelf
-ihroteka.home()      // back to the library
+ihroteka.home()      // back to the shelf
+ihroteka.invite()    // the library's "play together" dialog
+ihroteka.room        // the other player (below)
 ```
 
-Treat it as optional — it is `undefined` when a game runs standalone:
+`ihroteka.room` is linked while both players have this game open:
 
 ```js
-if (window.ihroteka) backButton.onclick = () => ihroteka.home();
+const room = ihroteka.room;
+room.on('linked', () => …)            // both are here (also fires for a listener added later)
+    .on('message', m => …)            // what the other player sent
+    .on('weak', quiet => …)           // they went quiet / came back: pause and wait
+    .on('peer-gone', () => …)         // they left this game
+    .on('relinked', () => …);         // they reopened it in a new tab: send them the full state
+room.role                             // 'host' (usually runs the game) or 'guest'
+room.send({ t: 'move', … });                  // reliable: arrives exactly once
+room.send({ t: 'pos', … }, { fast: true });   // may be lost or reordered: number it yourself
 ```
 
-## Multiplayer
-
-`@ihroteka/net` gives any game a two-player room: public MQTT brokers find the other player and carry
-the game when nothing better works, a direct WebRTC link takes over when it can, and both paths are
-measured all the time. No server of our own. The build bundles it; `npm run dev` serves it through an import map.
-
-```js
-import { joinRoom, newRoomCode, validRoomCode, preload } from '@ihroteka/net';
-
-const room = joinRoom({ game: 'my-game', code });   // returns at once, connects in the background
-room.on('role', r => …)            // null (looking) → 'host' (came first) | 'guest'; 'out' when replaced
-    .on('status', s => …)          // connecting | waiting | joining | ready | full | peer-left | no-signal | unavailable
-    .on('linked', () => …)         // both players are here
-    .on('message', m => …)         // what the other player sent
-    .on('weak', quiet => …)        // the other player went quiet / came back: pause and wait
-    .on('peer-gone', () => …);     // they left; we hold the room and wait for someone
-
-room.send({ t: 'move', … });                   // reliable: arrives exactly once
-room.send({ t: 'pos', … }, { fast: true });    // may be lost or reordered: number it yourself
-room.leave();
-```
-
-Messages are plain objects with a string `t` (`p`, `q` and `bye` are taken, and so is the field `_x`). Also: `relinked` and `replaced` (the same person in a new tab),
-`pulse` and `stats` events; `room.lag()` (one-way delay, ms), `room.stats()`, `room.diag()`, `room.kick()`
-(after a network change), `room.frame(now)` (optional, per animation frame), and policies the game may
-replace: `room.keepSeat`, `room.patient`, `room.streaming`, `room.pulse`. Details in `sdk/net/room.js`.
+Messages are plain objects with a string `t`. Also: `pulse`, `stats` and `tick` events; `room.lag()`,
+`room.stats()`, `room.diag()`, `room.nearby`, `room.direct`; and policies a game may set: `room.keepSeat`,
+`room.patient`, `room.streaming`, `room.pulse` (see `library/net/room.js`).
 
 ## Security notes
 
-- The keyring and sealed files are public; strength rests on the passwords (12+ characters, generated by default).
+- The keyring and sealed games are public; strength rests on the passwords (12+ characters, generated by default).
+  Who has access (the names in the keyring) and the list of games are public too.
 - A leaked password: `npm run user -- passwd` replaces that person's keys; `remove` also rotates the library key.
 - Signed-in devices keep a non-extractable key in IndexedDB. Anything served from the same origin
   (`*.github.io` of this account) could use it, so host no untrusted pages there and don't load third-party scripts in games.
-- Multiplayer traffic goes through public MQTT brokers. Room topics are hashed, but messages are not encrypted.
+- Play together is not encrypted beyond WebRTC's own DTLS; through the brokers, messages are plain. Room topics are hashed.
   The MQTT client comes from a CDN, pinned to one version and checked with Subresource Integrity.
 
 **Deploy:** every push to `main` is checked and published by GitHub Actions (Settings → Pages → Source: *GitHub Actions*).

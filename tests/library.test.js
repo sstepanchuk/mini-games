@@ -7,7 +7,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import * as vault from '../sdk/vault/index.js';
+import * as vault from '../library/crypto.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(REPO, 'tools', 'cli.js');
@@ -27,7 +27,7 @@ const game = (id, extra = {}) => {
   write(`games/${id}/game.json`, JSON.stringify({ title: 'Test ' + id, tagline: 't', description: 'd', image: 'preview.png', ...extra }));
   write(`games/${id}/index.html`, '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head><body><img src="dot.png"><script type="module" src="main.js"></script></body></html>');
   write(`games/${id}/style.css`, 'body{background:url(dot.png)}');
-  write(`games/${id}/main.js`, 'import { hi } from "./lib/hi.js"; import { validRoomCode } from "@ihroteka/net"; document.title = hi + validRoomCode("abcdef");');
+  write(`games/${id}/main.js`, 'import { hi } from "./lib/hi.js"; document.title = hi;');
   write(`games/${id}/lib/hi.js`, 'export const hi = "hello";');
   write(`games/${id}/dot.png`, PNG);
   write(`games/${id}/preview.png`, PNG);
@@ -48,12 +48,12 @@ test('init, build and check', () => {
   assert.match(must(['build'], pw.alice), /demo/);
   assert.match(must(['check']), /valid: 1 game/);
   assert.match(must(['build'], pw.alice), /unchanged/);                       // nothing changed → nothing rewritten
-  for (const p of ['docs/library.bin', 'docs/demo/game.bin', 'vault/demo.bin']) assert.equal(kidOf(p), kr().kid);
+  for (const p of ['docs/demo/game.bin', 'vault/demo.bin']) assert.equal(kidOf(p), kr().kid);
 });
 
 test('the site works offline: every published file is in the service worker, under its address', () => {
   const sw = fs.readFileSync(file('docs/sw.js'), 'utf8');
-  for (const f of ['""', '"demo/"', '"demo/game.bin"', '"keyring.json"', '"library.bin"', '"lib/ihroteka.js"', '"lib/qr-scan.js"', '"manifest.webmanifest"', '"icons/icon-512.png"']) assert.ok(sw.includes(f), f);
+  for (const f of ['""', '"demo/"', '"demo/game.bin"', '"keyring.json"', '"library.json"', '"lib/ihroteka.js"', '"lib/qr-scan.js"', '"manifest.webmanifest"', '"icons/icon-512.png"']) assert.ok(sw.includes(f), f);
   assert.ok(!sw.includes('"sw.js"') && !sw.includes('index.html'));
   assert.match(sw, /fonts\.googleapis\.com/);
   assert.equal(JSON.parse(fs.readFileSync(file('docs/manifest.webmanifest'), 'utf8')).display, 'standalone');
@@ -74,11 +74,10 @@ test('the game page is one self-contained module page with the library API', asy
   assert.match(html, /<script type="module">/);
   assert.doesNotMatch(html, /src="(?!data:)|href="(?!data:)/);              // every relative reference was inlined
   assert.match(html, /hello/);
-  assert.match(html, /\[a-z0-9\]\{6,12\}/);                                    // @ihroteka/net was bundled in
 });
 
 test('wrong password is refused', () => {
-  const r = run(['user', 'list'], 'not-a-password');
+  const r = run(['unlock'], 'not-a-password');
   assert.ok(!r.ok);
   assert.match(r.out, /Wrong password/);
 });
@@ -102,9 +101,10 @@ test('removing a person rotates the key; their password stops working', () => {
   const oldKid = kr().kid;
   must(['user', 'remove', 'carol'], pw.alice);
   assert.notEqual(kr().kid, oldKid);
-  for (const p of ['docs/library.bin', 'docs/demo/game.bin', 'vault/demo.bin']) assert.equal(kidOf(p), kr().kid);
-  assert.ok(!run(['user', 'list'], pwCarol).ok);
-  assert.match(must(['user', 'list'], pw.bob), /alice/);
+  for (const p of ['docs/demo/game.bin', 'vault/demo.bin']) assert.equal(kidOf(p), kr().kid);
+  assert.ok(!run(['unlock'], pwCarol).ok);
+  assert.match(must(['user', 'list']), /alice/);                             // names are public: no password needed
+  assert.doesNotMatch(must(['user', 'list']), /carol/);
   assert.match(must(['build'], pw.bob), /unchanged/);
   assert.match(must(['check']), /valid/);
   assert.ok(!run(['user', 'remove', 'alice'], pw.alice).ok);                // not yourself
@@ -114,12 +114,12 @@ test('a failed rotation writes nothing', () => {
   const k = kr(), stale = fs.readFileSync(file('vault/demo.bin'));
   const bad = Buffer.from(stale); bad[1] ^= 0xff;                              // pretend a file was sealed with another key
   fs.writeFileSync(file('vault/demo.bin'), bad);
-  const lib = fs.readFileSync(file('docs/library.bin'));
+  const game = fs.readFileSync(file('docs/demo/game.bin'));
   const r = run(['user', 'remove', 'bob'], pw.alice);
   assert.ok(!r.ok);
   assert.match(r.out, /another library key/);
   assert.deepEqual(kr(), k);
-  assert.ok(fs.readFileSync(file('docs/library.bin')).equals(lib));
+  assert.ok(fs.readFileSync(file('docs/demo/game.bin')).equals(game));
   fs.writeFileSync(file('vault/demo.bin'), stale);
 });
 
@@ -128,8 +128,8 @@ test('a new password replaces the keys, so the old one opens nothing', async () 
   const out = must(['user', 'passwd'], pw.bob, '\n');                         // empty answer → generated password
   const fresh = out.match(/New password: (\S+)/)[1];
   const after = kr();
-  assert.ok(!run(['user', 'list'], pw.bob).ok);
-  assert.ok(run(['user', 'list'], fresh).ok);
+  assert.ok(!run(['unlock'], pw.bob).ok);
+  assert.ok(run(['unlock'], fresh).ok);
   // someone with the old keyring (git history) and the old password: their private key no longer opens the box
   const old = await vault.signIn(before, pw.bob);
   await assert.rejects(vault.libraryKey(after, old.person.id, old.priv));
@@ -189,7 +189,6 @@ test('dev server stays inside its folder and survives bad requests', async () =>
     assert.equal(await get('/demo/'), 200);
     assert.equal(await get('/demo/?frame'), 200);                              // the game itself, inside the library's frame
     assert.equal(await get('/lib/ihroteka.js'), 200);
-    assert.equal(await get('/@ihroteka/net/index.js'), 200);                  // the SDK, through the import map
-    assert.equal(await get('/@ihroteka/..%2f..%2fpackage.json'), 404);
+    assert.equal(await get('/icons/..%2f..%2fpackage.json'), 403);
   } finally { server.kill(); }
 });

@@ -15,7 +15,7 @@ const LIB = 'ihroteka';                                  // the room namespace o
 const LAST = 'ihroteka-room';                            // the last internet room: the same link keeps working
 
 let shell = null;                                        // { current() → id | null, follow(id) }
-let room = null;                                         // the room (see @ihroteka/net)
+let room = null;                                         // the room (see ../net)
 let seq = 0;                                             // version of the shared view
 let peerHere = null, myHere = null;                      // which game each side has open and listening
 let ch = null;                                           // the open game's channel (ihroteka.room)
@@ -150,7 +150,7 @@ function channel(id) {
     get leaving() { return inGame() && room.leaving; },
     get direct() { return !!room && room.direct; },
     get nearby() { return !!room && room.nearby; },
-    // the game's policies (see @ihroteka/net): keepSeat, patient, streaming, pulse
+    // the game's policies (see ../net/room.js): keepSeat, patient, streaming, pulse
     keepSeat: null, patient: null, streaming: null, pulse: null,
     on(name, fn) {
       if (c.disposed) return api;
