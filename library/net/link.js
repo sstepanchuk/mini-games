@@ -9,7 +9,7 @@
 // brokers.
 import { BROKERS } from './config.js';
 import { bestBrokers, brokerDiag, kickBrokers, pubData, tendBrokers } from './brokers.js';
-import { closeRtc, dcFresh, dcHear, dcLive, probeLink, startRtc } from './rtc.js';
+import { closeRtc, dcFresh, dcHear, dcLive, dcQuiet, probeLink, startRtc } from './rtc.js';
 import { hostPeer, linkedPeers, weakChanged } from './room.js';
 
 const RX_WINDOW = 512;                                 // how many reliable message numbers we remember
@@ -19,7 +19,7 @@ const UNSURE_MS = 2500;                                // how long a message sen
 export function resetPaths(P) {
   P.tx = 0; P.rxSet = new Set(); P.rxMax = 0; P.pts = -1; P.byePts = -1; P.suspect = -1e9;
   P.rD = P.rR = null; P.sD = []; P.sR = []; P.qD = P.qR = -1; P.slowDirect = false; P.peerRtt = null;
-  P.unsure = []; P.wasFresh = false;
+  P.unsure = []; P.wasFresh = false; P.aliveAt = 0;
 }
 
 /* ---------- sending ---------- */
@@ -71,6 +71,7 @@ export function deliver(P, m, viaRelay) {
     const q = { t: 'q', ts: m.ts };
     if (viaRelay) sendRelay(P, q); else sendDirect(P, q);   // answer by the same path, so each path is measured on its own
     if (!isNew) return;                                // the copy from the other path was already counted
+    if (viaRelay) P.aliveAt = now;                     // a pulse the direct link has not brought: they are there
     if (P.byeAt && m.ts > P.byePts) P.byeAt = 0;       // a new pulse after a goodbye: they are back (not a late packet)
     if (typeof m.rt === 'number' && m.rt >= 0 && m.rt < 5000) P.peerRtt = m.rt;
     if (Array.isArray(m.w)) { P.peerBest = m.w.filter(i => Number.isInteger(i) && i >= 0 && i < BROKERS.length).slice(0, 2); P.peerBestAt = now; }
@@ -82,6 +83,7 @@ export function deliver(P, m, viaRelay) {
     const rtt = now - m.ts;
     if (rtt < 0 || rtt > 5000) return;
     if (viaRelay) {                                    // the answer came through the brokers: that path's ping
+      if (m.ts > P.dcSeen) P.aliveAt = now;            // they answered a ping sent after the direct link went quiet
       if (m.ts <= P.qR) return;
       P.qR = m.ts; P.sR.push(rtt); if (P.sR.length > 7) P.sR.shift(); P.rR = med(P.sR);
     } else {                                           // it came through the direct link: the direct path's ping
@@ -168,7 +170,7 @@ function watchPeer(P, now) {
     P.pingAt = now; P.pN++;
     const p = pingMsg(P, now), dc = dcLive(P);
     if (dc) sendDirect(P, p);
-    if (!dc || P.via !== 'p2p' || !dcFresh(P) || P.pN % 6 === 0) sendRelay(P, p);   // through the brokers when the game goes that way, and now and then to measure
+    if (!dc || P.via !== 'p2p' || !dcFresh(P) || dcQuiet(P) || P.pN % 6 === 0) sendRelay(P, p);   // through the brokers when the game goes that way, the direct link is quiet, and now and then to measure
   }
   resendUnsure(P, now);
   if (now < N.graceUntil) return;
@@ -224,11 +226,11 @@ function pingMsg(P, now) {
   return m;
 }
 
-// A direct link went quiet: speak up through the brokers right away instead of waiting for the next pulse.
+// A direct link went quiet: ask through the brokers right away (are they there?) instead of waiting for the next pulse.
 export function keepDirectAlive(N, now) {
   if (!N.relay || N.closed) return;
   for (const P of linkedPeers(N)) {
-    if (dcLive(P) && !dcFresh(P) && now - P.nudged > 400) {
+    if ((dcQuiet(P) || (dcLive(P) && !dcFresh(P))) && now - P.nudged > 400) {
       P.nudged = now; P.pingAt = now;
       const p = pingMsg(P, now); sendDirect(P, p); sendRelay(P, p);
     }

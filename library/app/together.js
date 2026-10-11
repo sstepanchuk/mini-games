@@ -63,7 +63,7 @@ export function leave() {
 }
 // for checks from the console and tests
 export const state = () => ({ kind: room && room.kind, role: room && room.role, linked: linked(), status: room && room.lastStatus,
-  players: room ? room.players : [], seq, myHere, here: Object.fromEntries(here), game: ch && { players: seatedOf(ch), linked: ch.api.linked, role: ch.api.role } });
+  players: room ? room.players : [], seq, myHere, here: Object.fromEntries(here), game: ch && { players: ch.seated, linked: ch.api.linked, role: ch.api.role } });
 
 function wire(r, kind) {
   room = r; r.kind = kind; seq = 0; by = NOBODY; here.clear();
@@ -76,7 +76,7 @@ function wire(r, kind) {
     if (r.role === 'host') send({ t: 'lib', v: shell.current(), s: seq, b: by === NOBODY ? r.me : by }, p);
     send({ t: 'lib-here', v: myHere }, p);
   };
-  on('linked', () => { if (r.role === 'host') sendView(shell.current(), true); });
+  on('linked', () => { if (r.role === 'host') sendView(shell.current(), true); update(); });
   on('join', p => { greet(p); update(); });
   on('leave', p => { here.delete(p); if (ch) ch.relinking.delete(p); update(); });
   on('relinked', p => { here.delete(p); if (ch) ch.relinking.add(p); greet(p); update(); });   // their new tab is coming
@@ -86,7 +86,7 @@ function wire(r, kind) {
   on('weak', () => { if (ch) ch.weakNow(); });
   on('stats', () => { if (ch) { ch.weakNow(); if (ch.api.linked) ch.emit('stats', ch.api.stats()); } });
   r.on('tick', now => { if (room === r && ch && ch.api.linked) ch.emit('tick', now); });
-  r.on('pulse', (p, from) => { if (room === r && ch && ch.api.linked && p && p.v === ch.id && p.g && typeof p.g === 'object' && seatedOf(ch).includes(from)) ch.emit('pulse', p.g, from); });
+  r.on('pulse', (p, from) => { if (room === r && ch && ch.api.linked && p && p.v === ch.id && p.g && typeof p.g === 'object' && ch.seated.includes(from)) ch.emit('pulse', p.g, from); });
   r.on('message', (m, from) => { if (room === r) onLibMessage(m, from); });
   changed('status');
   return r;
@@ -100,7 +100,7 @@ function onLibMessage(m, from) {
     }
   } else if (m.t === 'lib-here' && ID(m.v)) {
     here.set(from, m.v);
-    if (ch && m.v === ch.id && ch.relinking.delete(from) && seatedOf(ch).includes(from)) ch.emit('relinked', from);
+    if (ch && m.v === ch.id && ch.relinking.delete(from) && ch.seated.includes(from)) ch.emit('relinked', from);
     update();
   } else if (m.t === 'lib-g' && ch && m.v === ch.id && myHere === ch.id) {
     ch.receive(m.m, from);
@@ -145,13 +145,19 @@ function inGameOf(c) {
   if (!linked() || myHere !== c.id) return [];
   return room.players.filter(p => p === room.me || here.get(p) === c.id || c.relinking.has(p));
 }
-const seatedOf = c => inGameOf(c).slice(0, c.seats);
+// who has the game open, who of them plays, and who we play with: counted again whenever any of it may have
+// changed (update), so the game's many questions (several per frame) cost nothing
+function recount(c) {
+  const all = inGameOf(c), seated = all.slice(0, c.seats);
+  c.inGame = all; c.seated = seated;
+  c.others = room && seated.includes(room.me) ? seated.filter(p => p !== room.me) : [];
+}
 
 function channel(id, seats) {
   const handlers = new Map(), inbox = [];
-  const others = () => { const s = seatedOf(c); return room && s.includes(room.me) ? s.filter(p => p !== room.me) : []; };   // who we play with
+  const others = () => c.others;                       // who we play with
   const c = {
-    id, seats, disposed: false, relinking: new Set(), was: [], weak: false,
+    id, seats, disposed: false, relinking: new Set(), was: [], weak: false, inGame: [], seated: [], others: [],
     emit(name, ...a) { for (const fn of handlers.get(name) || []) safe(fn, ...a); },
     policy: name => typeof api[name] === 'function' && safe(api[name]),
     pulseOut: now => typeof api.pulse === 'function' ? safe(api.pulse, now) : null,
@@ -170,13 +176,13 @@ function channel(id, seats) {
   const worst = (fn, merge, none) => { const o = others(); return o.length ? o.map(fn).reduce(merge) : none; };
   const api = {
     get me() { return room ? room.me : null; },        // our player id
-    get players() { return seatedOf(c); },             // who plays: up to `seats` players, the game's host first
-    get waiting() { return inGameOf(c).slice(seats); },   // who has the game open too, waiting for a seat
+    get players() { return c.seated.slice(); },        // who plays: up to `seats` players, the game's host first
+    get waiting() { return c.inGame.slice(seats); },   // who has the game open too, waiting for a seat
     get seats() { return seats; },
-    get seated() { return seatedOf(c).includes(api.me); },   // we have a seat
-    get host() { return seatedOf(c)[0] || null; },     // the player whose copy usually runs the game
-    get role() { const s = seatedOf(c); return !s.includes(api.me) ? null : s[0] === api.me ? 'host' : 'guest'; },
-    get linked() { return others().length > 0; },      // we have a seat, and someone else is playing too
+    get seated() { return !!room && c.seated.includes(room.me); },   // we have a seat
+    get host() { return c.seated[0] || null; },        // the player whose copy usually runs the game
+    get role() { return !api.seated ? null : c.seated[0] === room.me ? 'host' : 'guest'; },
+    get linked() { return c.others.length > 0; },      // we have a seat, and someone else is playing too
     get weak() { return c.weak; },                     // a player went quiet: pause and wait
     get leaving() { return api.linked && room.leaving; },
     get direct() { return api.linked && others().every(p => room.stats(p).direct); },
@@ -223,7 +229,8 @@ function statsOf(ps) {
 // for two, the other player is the round: someone else taking the seat is 'peer-gone', then 'linked' as well.
 function update() {
   if (!ch) return;
-  const now = ch.api.linked ? seatedOf(ch) : [], was = ch.was;
+  recount(ch);
+  const now = ch.api.linked ? ch.seated : [], was = ch.was;
   if (now.join() === was.join()) return;
   ch.was = now;
   const hostChanged = now[0] !== was[0] || (ch.seats === 2 && now[1] !== was[1]);

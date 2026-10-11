@@ -12,13 +12,19 @@ const ICE_MAX = 50;                                    // candidates kept while 
 
 export const dcLive = P => !!(P.dcF && P.dcC && P.dcF.readyState === 'open' && P.dcC.readyState === 'open');
 
-// Do we hear them through the direct link? While the host streams state every frame, a third of a second of
-// silence already means it is broken; otherwise only the pulse goes through, so we wait longer.
+// Do we hear them through the direct link? Something arriving through it says yes. Silence is suspicious after
+// a third of a second while they stream state every frame (1.3 s otherwise), but it counts as a broken link only
+// if they reached us through the brokers meanwhile (aliveAt: they are there, the direct link is not). If nothing
+// came by either path, they just stalled (a busy phone, a hiccup in the network): moving to the brokers would
+// not bring their messages sooner, only add delay to everything after. 3 s of silence is a broken link anyway.
 export function dcHear(P) {
   if (!dcLive(P)) return false;
-  const limit = P.via === 'p2p' && P.N.streaming() ? 350 : 1300;
-  return performance.now() - P.dcSeen < limit;
+  const quiet = performance.now() - P.dcSeen;
+  if (quiet < (P.via === 'p2p' && P.N.streaming() ? 350 : 1300)) return true;
+  return P.aliveAt <= P.dcSeen && quiet < 3000;
 }
+// a moment of silence on the direct link: worth asking through the brokers whether they are still there
+export const dcQuiet = P => dcLive(P) && performance.now() - P.dcSeen > 350;
 // use the direct link only while we hear through it and they have not said they don't hear us
 export const dcFresh = P => dcHear(P) && performance.now() - P.suspect > 1500;
 
