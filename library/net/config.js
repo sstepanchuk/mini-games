@@ -48,7 +48,9 @@ function browserId() {
 }
 export const me = (window.__pid || browserId()) + '.' + code(6);
 export const SENDER = /^[a-z0-9]{4,32}\.[a-z0-9]{4,12}$/;   // what a player id looks like
-export const samePlayer = (a, b) => !!a && !!b && a.split('.')[0] === b.split('.')[0];
+// the player behind an id (the same in every tab of this browser): what games see
+export const playerOf = id => String(id).split('.')[0];
+export const samePlayer = (a, b) => !!a && !!b && playerOf(a) === playerOf(b);
 
 // The room's topic on the public brokers. Only a hash of game + code goes there, so someone listening to
 // every topic learns no room codes and cannot join or disturb a room.

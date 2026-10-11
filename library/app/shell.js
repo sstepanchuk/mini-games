@@ -39,7 +39,7 @@ export function startShell({ games: list, initial, loader, signOut, whenSignedIn
     if (queued) { const [id, p] = queued; queued = null; go(id, p); }
   });
   $('busy').hidden = true;
-  const views = { current: () => current ?? null, follow: id => go(id, true), invite: openDialog, address: () => address(current) };
+  const views = { current: () => current ?? null, follow: id => go(id, true), invite: openDialog, address: () => address(current), seats: id => find(id)?.players?.max || 2 };
   initInvite(views);
   initTogether(views);
   show(initial && find(initial) ? initial : null);
@@ -110,13 +110,13 @@ function closeFrame() {
   frame = null;
 }
 
-// what a game gets as window.ihroteka (contract version 2, see README "Game API")
+// what a game gets as window.ihroteka (contract version 3, see README "Game API")
 function api(info) {
   const g = find(current) || info;
   const room = attachGame(current);
   return Object.freeze({
-    version: 2,
-    game: Object.freeze({ id: g.id, title: g.title }),
+    version: 3,
+    game: Object.freeze({ id: g.id, title: g.title, players: Object.freeze({ ...(g.players || { min: 2, max: 2 }) }) }),
     libraryUrl: root.href,
     home: () => go(null),
     room,

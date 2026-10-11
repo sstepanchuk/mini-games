@@ -19,13 +19,19 @@ const FIELDS = {
   shareDescription: '?link preview text',
   imageAlt: '?image description',
   emoji: '?tab icon (one emoji)',
+  players: '?how many play together: "2", or a range such as "2-4" (1 to 8; 2 when not given)',
   theme: '?browser theme color, e.g. #e4e2f0'
 };
 const FORMAT = {
   image: v => /^[\w-]+\.png$/.test(v),
   emoji: v => [...v].length <= 4 && !/[\x00-\x7f]/.test(v),
-  theme: v => /^#[0-9a-f]{3,8}$/i.test(v)
+  theme: v => /^#[0-9a-f]{3,8}$/i.test(v),
+  players: v => { const r = playersOf(v); return !!r && r.min <= r.max; }
 };
+// "2" → { min: 2, max: 2 }, "2-4" → { min: 2, max: 4 }
+export const playersOf = (v = '2') => { const m = /^([1-8])(?:-([1-8]))?$/.exec(v); return m && { min: +m[1], max: +(m[2] || m[1]) }; };
+// what the shelf knows about a game (library.json, and the dev server's list)
+export const shelfEntry = (id, g) => ({ id, title: g.title, tagline: g.tagline, image: g.image, emoji: g.emoji, players: playersOf(g.players) });
 export function readManifest(id, dir = path.join(P.games, id)) {
   const file = rel(path.join(dir, 'game.json'));
   if (!/^[a-z0-9][a-z0-9-]*$/.test(id) || RESERVED.has(id)) problem(rel(dir) + ': the folder name becomes the URL, so use lowercase letters, digits and dashes (and not ' + [...RESERVED].join(', ') + ')');
@@ -47,7 +53,7 @@ export function readManifest(id, dir = path.join(P.games, id)) {
 export function withLibraryApi(html, id, g) {
   const api = fs.readFileSync(P.gameApi, 'utf8')
     .replace(/^\/\*[\s\S]*?\*\/\s*/, '')
-    .replace('/* GAME */ null', () => JSON.stringify({ id, title: g.title }).replace(/</g, '\\u003c'));
+    .replace('/* GAME */ null', () => JSON.stringify({ id, title: g.title, players: playersOf(g.players) }).replace(/</g, '\\u003c'));
   const at = /<meta charset[^>]*>/i.test(html) ? /<meta charset[^>]*>/i : /<head>/i;   // charset must stay near the top
   if (!at.test(html)) problem('games/' + id + '/index.html has no <head>');
   return html.replace(at, m => m + '\n<script>' + api.trim() + '</script>');
@@ -146,7 +152,7 @@ export async function buildSite(out = P.site) {
   if (problems.length) problem(problems.join('\n'));
   const files = await libraryFiles(), games = vaultIds().map(id => [id, readManifest(id, vaultPath(id))]);
   files['keyring.json'] = fs.readFileSync(P.keyring);
-  files['library.json'] = JSON.stringify(games.map(([id, g]) => ({ id, title: g.title, tagline: g.tagline, image: g.image, emoji: g.emoji })));
+  files['library.json'] = JSON.stringify(games.map(([id, g]) => shelfEntry(id, g)));
   for (const [id, g] of games) {
     files[id + '/index.html'] = gamePage(id, g);
     files[id + '/game.bin'] = fs.readFileSync(vaultPath(id, 'game.bin'));

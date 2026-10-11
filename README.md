@@ -13,11 +13,12 @@ and works offline. Hosted on GitHub Pages.
 - **Encrypted games.** Each game and its sources are sealed with one library key (AES-256-GCM). Each person has
   a password and an ECDH P-256 key pair; the password unlocks their private key, which unlocks the library key.
   Removing someone rotates the library key and re-encrypts every game.
-- **Together.** "Грати разом" connects two players for the whole library: whatever one opens, the other's
+- **Together.** "Грати разом" connects up to 8 players for the whole library: whatever one opens, everyone's
   library opens too. The dialog first checks by itself whether there is internet (whether a broker answers:
   `navigator.onLine` also says yes on a hotspot without data). With internet there are two ways: a link (public
   MQTT brokers find the friend; WebRTC goes direct when it can), or nearby. Without it, only nearby: two devices
-  on the same Wi-Fi or hotspot, one shows a QR code and the other scans it, then the other way round. If a
+  on the same Wi-Fi or hotspot, one shows a QR code and the other scans it, then the other way round (the
+  first one adds more players the same way). If a
   nearby link is impossible, the dialog says why (e.g. a phone sharing its hotspot cannot see that network in
   its browser) and offers a report for debugging.
 - **Offline.** A service worker keeps one complete copy of the site per version; the shelf, the games and nearby
@@ -61,7 +62,8 @@ assembles the site again.
 ```
 games/<id>/          <id> becomes the URL: /<id>/
   game.json          title, tagline, description, image (+ optional shareTitle,
-                     shareDescription, imageAlt, emoji, theme) — validated on build
+                     shareDescription, imageAlt, emoji, theme, players: "2" or "2-4")
+                     — validated on build
   index.html         <script type="module"> and <link rel="stylesheet"> are bundled inline
   preview.png        1200×630, used on the shelf and in link previews
 ```
@@ -76,30 +78,42 @@ The library runs each game in a frame and gives it `window.ihroteka` before the 
 (`undefined` when a game page is opened on its own, so treat it as optional):
 
 ```js
-ihroteka.version     // 2
-ihroteka.game        // { id, title }
+ihroteka.version     // 3
+ihroteka.game        // { id, title, players: { min, max } }   (game.json "players": "2", "2-4", …)
 ihroteka.home()      // back to the shelf
 ihroteka.invite()    // the library's "play together" dialog
-ihroteka.room        // the other player (below)
+ihroteka.room        // the other players (below)
 ```
 
-`ihroteka.room` is linked while both players have this game open:
+A room holds up to 8 players. A game gets as many seats as its `players` says (2 when not given): the first
+players to have it open play, in the room's order; anyone else who opens it waits for a seat (`room.waiting`)
+and gets one as soon as a player leaves. `ihroteka.room` is linked while we have a seat and someone else does too:
 
 ```js
 const room = ihroteka.room;
-room.on('linked', () => …)            // both are here (also fires for a listener added later)
-    .on('message', m => …)            // what the other player sent
-    .on('weak', quiet => …)           // they went quiet / came back: pause and wait
-    .on('peer-gone', () => …)         // they left this game
-    .on('relinked', () => …);         // they reopened it in a new tab: send them the full state
-room.role                             // 'host' (usually runs the game) or 'guest'
-room.send({ t: 'move', … });                  // reliable: arrives exactly once
+room.on('linked', () => …)            // we play with someone now (also fires for a listener added later)
+    .on('message', (m, from) => …)    // what another player sent, and who
+    .on('join', id => …)              // one more player (games for more than two; in a game for two,
+    .on('leave', id => …)             //   another partner is 'peer-gone' and then 'linked' again)
+    .on('players', ids => …)          // who plays now, the game's host first
+    .on('weak', quiet => …)           // someone went quiet / came back: pause and wait
+    .on('peer-gone', () => …)         // the round is over: our partner left, or the game's host did
+    .on('relinked', id => …);         // a player reopened the game in a new tab: send them the full state
+room.me, room.players, room.waiting   // player ids: us, who plays (the host first), who waits for a seat
+room.role                             // 'host' (the first player: usually runs the game), 'guest', or null (waiting)
+room.send({ t: 'move', … });                  // to everyone who plays; reliable: arrives exactly once
 room.send({ t: 'pos', … }, { fast: true });   // may be lost or reordered: number it yourself
+room.send({ t: 'card', … }, { to: id });      // to one player
 ```
 
-Messages are plain objects with a string `t`. Also: `pulse`, `stats` and `tick` events; `room.lag()`,
-`room.stats()`, `room.diag()`, `room.nearby`, `room.direct`; and policies a game may set: `room.keepSeat`,
-`room.patient`, `room.streaming`, `room.pulse` (see `library/net/room.js`).
+Messages are plain objects with a string `t` (not starting with `_`). Also: `pulse` (with who) `stats` and `tick`
+events; `room.lag(id?)`, `room.stats(id?)` (one player, or the slowest), `room.diag()`, `room.nearby`,
+`room.direct`, `room.seats`, `room.seated`; and policies a game may set: `room.keepSeat`, `room.patient`,
+`room.streaming`, `room.pulse` (see `library/net/room.js`).
+
+Under it, a room is a star: everyone is linked to the room's host, which passes on what guests send. If the host
+leaves an internet room, the first guest on the roster takes over and the others follow without a word. Nearby
+(no internet), the host pairs with each guest in turn; the guests hear each other through it.
 
 ## Security notes
 

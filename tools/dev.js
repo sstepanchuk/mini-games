@@ -6,7 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import * as esbuild from 'esbuild';
 import { P, MIME, rel, exists, problem, gameIds } from './repo.js';
-import { readManifest, withLibraryApi, page } from './build.js';
+import { readManifest, shelfEntry, withLibraryApi, page } from './build.js';
 
 const text = type => type + (/^(text|application\/json)/.test(type) ? '; charset=utf-8' : '');
 const bundle = async entry => (await esbuild.build({ entryPoints: [entry], bundle: true, write: false, format: 'esm',
@@ -16,7 +16,7 @@ const LIB = { '/lib/ihroteka.js': 'index.js', '/lib/ihroteka.css': 'style.css', 
 // the game's page, with the library API in front of its code
 const gameHtml = id => withLibraryApi(fs.readFileSync(path.join(P.games, id, 'index.html'), 'utf8'), id, readManifest(id));
 function shelfHtml(game) {
-  const games = gameIds().map(id => { const g = readManifest(id); return { id, title: g.title, tagline: g.tagline, image: g.image, emoji: g.emoji }; });
+  const games = gameIds().map(id => shelfEntry(id, readManifest(id)));
   return page({ title: 'Ігротека (dev)', description: '', shareTitle: '', shareDescription: '', imageUrl: '', imageAlt: '', emoji: '🛠', theme: '#e4e2f0',
     base: '/', bootArgs: JSON.stringify({ game, dev: { games } }) });
 }

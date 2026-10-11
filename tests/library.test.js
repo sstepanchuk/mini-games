@@ -64,7 +64,7 @@ test('the site is assembled from library/ and vault/, and works offline: every f
   assert.match(sw, /fonts\.googleapis\.com/);
   assert.equal(JSON.parse(fs.readFileSync(file('site/manifest.webmanifest'), 'utf8')).display, 'standalone');
   assert.match(fs.readFileSync(file('site/demo/index.html'), 'utf8'), /boot\(\{"game":"demo"\}\)/);
-  assert.deepEqual(JSON.parse(fs.readFileSync(file('site/library.json'), 'utf8')).map(g => g.id), ['demo']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file('site/library.json'), 'utf8')).map(g => [g.id, g.players]), [['demo', { min: 2, max: 2 }]]);   // 2 when not given
   // no password needed, and the same vault gives the same site
   const before = fs.readFileSync(file('site/sw.js'));
   must(['site']);
@@ -181,7 +181,8 @@ test('check catches stale keys and unexpected files', () => {
 
 test('manifests and pages are validated', () => {
   const cases = [
-    [{ image: '../x.png' }, /image/], [{ colour: 'red' }, /unknown field/], [{ emoji: '<' }, /emoji/], [{ title: '' }, /title/]
+    [{ image: '../x.png' }, /image/], [{ colour: 'red' }, /unknown field/], [{ emoji: '<' }, /emoji/], [{ title: '' }, /title/],
+    [{ players: '9' }, /players/], [{ players: '4-2' }, /players/], [{ players: 2 }, /players/]
   ];
   for (const [extra, msg] of cases) { game('bad', extra); assert.match(run(['build'], pw.alice).out, msg); }
   game('bad');

@@ -59,7 +59,7 @@ export function hasInternet(ms = 3000) {
 
 export function openBrokers(N) {
   N.br = BROKERS.map(() => ({ state: 'connecting', since: 0, fails: 0, timer: null }));
-  N.clients = []; N.win = BROKERS.map(() => 0);
+  N.clients = [];
   BROKERS.forEach((b, i) => openBroker(N, i));
 }
 
@@ -135,7 +135,7 @@ export function kickBrokers(N) {
 
 // periodic upkeep (from the watchdog): echo test, forget old broker scores, restart stuck connections
 export function tendBrokers(N, now) {
-  if (now - N.winAt > 2000) { N.winAt = now; for (let i = 0; i < N.win.length; i++) N.win[i] *= .5; }
+  if (now - N.winAt > 2000) { N.winAt = now; for (const P of N.peers.values()) for (let i = 0; i < P.win.length; i++) P.win[i] = (P.win[i] || 0) * .5; }
   if (now - N.kAt > 5000) {
     N.kAt = now;
     pubOn(N, { t: 'k', ts: now });
@@ -157,10 +157,14 @@ export function pubOn(N, obj) {
   for (const c of N.clients) if (c && c._ok) { try { c.publish(N.topic, s, { qos: 0 }); } catch (e) {} }
 }
 
-// Game data goes to two brokers, not all four. Which two the other player tells us: they see which broker
+// The "mailbox" for data from one player to another: only the receiver listens to it, and the broker does not
+// echo it back to the sender, which halves the traffic.
+export const mailbox = (N, from, to) => N.topic + '/d/' + from + '/' + to;
+
+// Game data for player P goes to two brokers, not all four. Which two P tells us: they see which broker
 // delivers our packets first. Until they do, we take the two that answer us fastest. Every 24th message
 // goes through all of them, so the other side can keep comparing.
-export function pubData(N, obj) {
+export function pubData(N, P, obj) {
   obj.f = me; obj.q = ++N.seq;
   const s = JSON.stringify(obj), cl = N.clients;
   const live = [];
@@ -168,19 +172,19 @@ export function pubData(N, obj) {
   let to = live;
   if (++N.pubN % 24 !== 0) {
     to = [];
-    if (performance.now() - N.peerBestAt < 6000) for (const i of N.peerBest) if (live.includes(i)) to.push(i);
+    if (performance.now() - P.peerBestAt < 6000) for (const i of P.peerBest) if (live.includes(i)) to.push(i);
     live.sort((a, b) => (cl[a]._lat == null ? 1e9 : cl[a]._lat) - (cl[b]._lat == null ? 1e9 : cl[b]._lat));
     for (const i of live) { if (to.length >= 2) break; if (!to.includes(i)) to.push(i); }
   }
-  // data goes to the sender's own "mailbox": the broker does not echo it back, which halves the traffic
-  for (const i of to) { try { cl[i].publish(N.topic + '/d/' + me, s, { qos: 0 }); } catch (e) {} }
+  const topic = mailbox(N, me, P.id);
+  for (const i of to) { try { cl[i].publish(topic, s, { qos: 0 }); } catch (e) {} }
 }
 
-// the two brokers that deliver the other player's data to us first
-export function bestBrokers(N) {
+// the two brokers that deliver P's data to us first
+export function bestBrokers(P) {
   const idx = [];
-  for (let i = 0; i < N.win.length; i++) if (N.win[i] > .5) idx.push(i);
-  return idx.sort((a, b) => N.win[b] - N.win[a]).slice(0, 2);
+  for (let i = 0; i < P.win.length; i++) if (P.win[i] > .5) idx.push(i);
+  return idx.sort((a, b) => P.win[b] - P.win[a]).slice(0, 2);
 }
 
 function onRaw(N, p, c) {

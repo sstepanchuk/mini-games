@@ -1,15 +1,16 @@
 /* =====================================================================
    The screens of playing together (together.js holds the room): the chip on the shelf, notes at the
    bottom of the screen, and the "Грати разом" dialog. It first checks for internet by itself: with internet
-   there are two ways (a link, or nearby with QR codes), without it only nearby.
+   there are two ways (a link, or nearby with QR codes), without it only nearby. Once together, more players
+   can be added the same way (up to the room's limit).
    ===================================================================== */
 import { hasInternet, newRoomCode, preload } from '../net/index.js';
 import { $, btn, copy, el, modal, para, toast } from './dom.js';
 import { Camera, drawQr } from './qr.js';
 import { currentRoom, lastInternetCode, leave, linked, onChange, startInternet, startNearby } from './together.js';
 
-let shell = null;                                        // { currentRoom() → id | null }
-let dlg = null;                                          // the open dialog: { screen, show, close, camera, scan, online }
+let shell = null;                                        // { address() → this view's address, with the room }
+let dlg = null;                                          // the open dialog: { screen, show, close, camera, scan, online, adding }
 
 export function initInvite(s) {
   shell = s;
@@ -17,7 +18,9 @@ export function initInvite(s) {
   onChange(what => {
     const room = currentRoom();
     if (what === 'linked') toast(room.kind === 'nearby' ? 'Ви разом, поруч без інтернету' : 'Ви разом!');
-    if (what === 'peer-gone') toast(room && room.kind === 'nearby' ? 'Зв’язок із другом обірвався' : 'Друг вийшов');
+    else if (what === 'join' && room && room.linked && room.players.length > 2) toast('До вас приєднався ще один гравець (' + room.players.length + ')');
+    else if (what === 'leave' && room && room.linked) toast('Один гравець вийшов');
+    if (what === 'peer-gone') toast(room && room.kind === 'nearby' ? 'Зв’язок обірвався' : 'Друзі вийшли');
     if (what === 'replaced') toast('Цю бібліотеку відкрито в іншій вкладці');
     chip();
     if (dlg) refresh(what);
@@ -30,7 +33,7 @@ function chip() {
   const room = currentRoom(), s = room && room.linked && room.stats(), b = $('together');
   b.classList.toggle('on', linked());
   b.textContent = !room ? 'Грати разом'
-    : linked() ? (room.weak ? 'Разом · зв’язок зник…' : 'Разом' + (s.rtt != null ? ' · ' + s.rtt + ' мс' : room.kind === 'nearby' ? ' · поруч' : ''))
+    : linked() ? (room.weak ? 'Разом · зв’язок зник…' : 'Разом' + (room.players.length > 2 ? ' ' + room.players.length : '') + (s.rtt != null ? ' · ' + s.rtt + ' мс' : room.kind === 'nearby' ? ' · поруч' : ''))
     : room.kind === 'nearby' ? 'З’єднуюсь…'
     : /unavailable|no-signal/.test(room.lastStatus) ? 'Немає інтернету' : 'Чекаю на друга…';
 }
@@ -42,7 +45,7 @@ const STATUS = {
   'no-signal': 'Немає зв’язку із сервером. Перевір інтернет, я пробую далі…',
   waiting: 'Чекаю, поки друг відкриє посилання…',
   joining: 'З’єднуюсь із другом…',
-  full: 'У цій кімнаті вже грають двоє.',
+  full: 'У цій кімнаті вже немає місць.',
   'peer-left': 'Друг вийшов. Посилання діє далі — чекаю…'
 };
 
@@ -52,7 +55,7 @@ export function openDialog() {
   dlg = modal(() => {
     if (dlg.camera) dlg.camera.stop();
     const room = currentRoom();
-    if (room && room.kind === 'nearby' && !room.linked) leave();   // a pairing that never finished goes with the dialog
+    if (room && room.kind === 'nearby') { if (!room.linked) leave(); else room.pair.cancel(); }   // a pairing that never finished goes with the dialog
     dlg = null;
   });
   if (linked()) return show('together');
@@ -69,13 +72,24 @@ const closeDialog = () => { if (dlg) dlg.close(); };
 // once linked, the dialog says so and goes
 function refresh(what) {
   const room = currentRoom(), d = dlg;
-  if (linked() && d.screen !== 'together') { show('together'); setTimeout(() => { if (dlg === d && d.screen === 'together') closeDialog(); }, 900); return; }
-  if (d.screen === 'together' && linked()) d.state.textContent = stateText(room);
-  else if (d.screen === 'link' && room && room.kind === 'internet') { if (what === 'status') d.state.textContent = STATUS[room.lastStatus] || ''; }
-  else if (d.screen === 'link' || d.screen === 'together') show(d.screen);
-  else if (room && room.kind === 'nearby' && room.lastStatus === 'failed') failed(room.pair);
+  if (what === 'linked' || (what === 'join' && d.adding)) {  // together now (or one more): say so, and go
+    d.adding = false;
+    show('together');
+    setTimeout(() => { if (dlg === d && d.screen === 'together') closeDialog(); }, 900);
+    return;
+  }
+  if (d.screen === 'together') { if (!linked()) closeDialog(); else if (what === 'join' || what === 'leave') show('together'); else d.state.textContent = stateText(room); }
+  else if (d.screen === 'link') { if (!room || room.kind !== 'internet') show('menu'); else if (what === 'status') d.state.textContent = STATUS[room.lastStatus] || ''; }
+  else if (room && room.kind === 'nearby' && room.lastStatus === 'failed' && what === 'status') failed(room.pair);
 }
 const stateText = room => { const s = room.stats(); return room.weak ? 'Зв’язок зник, відновлюю…' : s.rtt != null ? 'Пінг: ' + s.rtt + ' мс' : ''; };
+// one more player: the same link, or (nearby) a new pairing that only the room's host can make
+function addPlayer() {
+  const room = currentRoom();
+  dlg.adding = true;
+  if (room.kind === 'internet') show('link');
+  else hostPairing();
+}
 // a room over the internet, under the same code as last time (the link sent earlier keeps working)
 const viaLink = () => { startInternet(lastInternetCode() || newRoomCode()); show('link'); };
 
@@ -95,12 +109,12 @@ function show(screen) {
     drawQr(qr, link, 200);
     const share = navigator.share && btn('Поділитися', () => navigator.share({ title: 'Ігротека', text: 'Заходь, пограємо разом!', url: link }).catch(() => {}));
     dlg.show(el('h2', { textContent: 'Через посилання' }),
-      para('Надішли другові це посилання. Щойно він відкриє його й увійде, ви будете разом.'),
+      para(room.linked ? 'Надішли це посилання ще комусь: щойно він його відкриє, приєднається до вас.' : 'Надішли другові це посилання. Щойно він відкриє його й увійде, ви будете разом. Посилання можна дати й кільком друзям.'),
       el('input', { className: 'link', readOnly: true, value: link, onfocus: e => e.target.select() }),
       el('div', { className: 'row' }, ...[share, btn('Скопіювати', e => copy(link, e.target))].filter(Boolean)),
       qr, para('Або хай друг наведе на цей код камеру свого телефона.', 'fine'),
       dlg.state,
-      btn('Скасувати', () => { leave(); closeDialog(); }, 'btn ghost'));
+      room.linked ? btn('Готово', closeDialog, 'btn ghost') : btn('Скасувати', () => { leave(); closeDialog(); }, 'btn ghost'));
   } else if (screen === 'nearby') {
     dlg.show(el('h2', { textContent: 'Поруч, без інтернету' }),
       ...(dlg.online ? [] : [para('Інтернету немає — з’єднаємося напряму.', 'fine')]),
@@ -109,10 +123,14 @@ function show(screen) {
       option('📷', 'Сканувати код', 'Друг уже показує код', guestPairing),
       dlg.online ? btn('Назад', () => show('menu'), 'btn ghost') : close);
   } else if (screen === 'together') {
+    const n = room.players.length, space = n < room.max;
     dlg.state = para(stateText(room), 'fine');
-    dlg.show(el('h2', { textContent: 'Ви граєте разом' }),
+    dlg.show(el('h2', { textContent: n > 2 ? 'Вас ' + n : 'Ви граєте разом' }),
       para(room.kind === 'nearby' ? 'Поруч, без інтернету.' : 'Через посилання.' + (room.stats().direct ? ' Пристрої з’єднані напряму.' : '')),
       dlg.state,
+      ...(!space ? [para('Кімната повна: ' + room.max + ' гравців.', 'fine')]
+        : room.kind === 'internet' || room.role === 'host' ? [btn('Додати гравця', addPlayer, 'btn ghost')]
+        : [para('Ще когось поруч додає той, хто показував код першим.', 'fine')]),
       btn('Від’єднатися', () => { leave(); closeDialog(); }),
       close);
   }
@@ -130,11 +148,11 @@ const WHY = {
 function failed(pair) {
   dlg.screen = 'failed';
   if (dlg.camera) dlg.camera.stop();
-  const report = pair.report();
-  leave();
+  const report = pair.report(), room = currentRoom();
+  if (room && room.linked) pair.cancel(); else leave();  // adding a player failed: those already here stay together
   dlg.show(el('h2', { textContent: 'Не вдалося з’єднатися' }),
     para(pair.reason === 'blocked' && pair.vpn ? WHY.vpn : WHY[pair.reason] || WHY.blocked),
-    btn('Спробувати ще', () => show('nearby')),
+    btn('Спробувати ще', () => room && room.linked ? hostPairing() : show('nearby')),
     ...(dlg.online ? [btn('Через посилання', viaLink, 'btn ghost')] : []),
     btn('Скопіювати звіт для розробника', e => copy(report, e.target), 'btn ghost'),
     btn('Закрити', closeDialog, 'btn ghost'));
@@ -163,7 +181,7 @@ async function hostPairing() {
   let code;
   try { code = await p.room.pair.offer(); } catch (e) { console.error(e); return p.live() && failed(p.room.pair); }
   if (!p.live() || currentRoom() !== p.room) return;
-  showCode('Крок 1 з 2', 'Друг сканує цей код своїм пристроєм.', code, p.room.pair.local ? null : para(WHY.here, 'err'),
+  showCode('Крок 1 з 2', (p.room.linked ? 'Новий гравець' : 'Друг') + ' сканує цей код своїм пристроєм.', code, p.room.pair.local ? null : para(WHY.here, 'err'),
     btn('Далі: сканувати код друга', () => scanCode('Крок 2 з 2', 'Наведи камеру на код на екрані друга.', p.cam, async text => {
       await p.room.pair.finish(text);
       busy('Поруч, без інтернету', 'З’єднуюсь…');
