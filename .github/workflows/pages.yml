@@ -35,6 +35,13 @@ jobs:
           if git ls-files --error-unmatch games >/dev/null 2>&1; then
             echo "::error::games/ must never be committed (plaintext sources)"; exit 1
           fi
+      # Generated passwords look like ####-####-#### (tools/repo.js: makePassword). Only names and counts are
+      # printed (the log is public); binary files are skipped (a PNG's metadata can hold such a group by chance).
+      - name: No passwords in git
+        run: |
+          if LC_ALL=C git grep -cIE '(^|[^A-Za-z0-9_])[a-hjkmnp-z2-9]{4}-[a-hjkmnp-z2-9]{4}-[a-hjkmnp-z2-9]{4}([^A-Za-z0-9_]|$)'; then
+            echo "::error::these files hold something shaped like a password: remove it, and if it is a real one, change it (npm run user -- passwd)"; exit 1
+          fi
       - run: npm run lint
       - run: npm test
       - run: npm run check

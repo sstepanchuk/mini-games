@@ -8,5 +8,8 @@ export default [
   { files: ['library/**/*.js', 'games/**/*.js'], languageOptions: { globals: globals.browser }, rules },
   { files: ['library/app/sw.js'], languageOptions: { globals: globals.serviceworker } },
   { files: ['library/game-api.js'], languageOptions: { sourceType: 'script' } },
-  { files: ['tools/**/*.js', 'tests/**/*.js', 'eslint.config.js'], languageOptions: { globals: globals.node }, rules }
+  { files: ['tools/**/*.js', 'tests/**/*.js', 'eslint.config.js'], languageOptions: { globals: globals.node }, rules },
+  // browser scenarios (the library's, and a game's own sealed in games/<id>/test): CommonJS in Node, with functions
+  // that run in the page (page.evaluate, init scripts)
+  { files: ['tests/e2e/**/*.cjs', 'games/*/test/**/*.cjs'], languageOptions: { sourceType: 'commonjs', globals: { ...globals.node, ...globals.browser } }, rules }
 ];
