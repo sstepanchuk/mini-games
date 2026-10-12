@@ -11,18 +11,23 @@
    - A round outlives the device that runs it: the game hands the library snapshots (room.snapshot) and every
      player keeps the latest. If the player whose copy runs the round has been away for AUTH_WAIT, the next one
      here runs it on from the snapshot (event 'resume'); whoever comes back simply plays on.
+   The rules of all this (who plays, who runs the round, who is away, when the round moves) are in rules.js.
    Messages on the room, besides the games' own ('lib-g'): lib-state { e: entries } (the shared state, or a change
    to it), lib-snap { v: game, s: snapshot | null, c: version }.
    The screens for all this are in invite.js; it follows the room through onChange.
    ===================================================================== */
-import { HOLD, joinNearby, joinRoom, NAME, validRoomCode } from '../net/index.js';
+import { HOLD, joinNearby, joinRoom, NAME, TIMING, validRoomCode } from '../net/index.js';
 import { safe } from './dom.js';
 import { roomState } from './roomstate.js';
+import * as rules from './rules.js';
 
 const LIB = 'ihroteka';                                  // the room namespace of the whole library
 const LAST = 'ihroteka-room', LAST_NAME = 'ihroteka-name';   // the last room (its link keeps working) and name
-const AUTH_WAIT = 10000;                                 // a round's runner away this long: someone else runs it on
+const AUTH_WAIT = TIMING.AUTH_WAIT;                      // a round's runner away this long: someone else runs it on
 const ID = v => v === null || (typeof v === 'string' && /^[a-z0-9-]{1,40}$/.test(v));
+// the site's version, first in room.diag() and state() (the build writes it into the page, tools/build.js siteVersion;
+// 'dev' on the dev server, '?' where the page has none: an old page, a worker tab)
+const SITE = 'Ігротека ' + (globalThis.document?.querySelector?.('meta[name="ihroteka-version"]')?.content || '?');
 
 let shell = null;                                        // { current(), follow(id), invite(), address(), seats(id), askName(...) }
 let room = null;                                         // the room (see ../net), with .kind and .lastStatus
@@ -86,7 +91,7 @@ export function leave() {
 }
 const remember = (k, v) => safe(() => localStorage.setItem(k, v));
 // for checks from the console and tests
-export const state = () => ({ kind: room && room.kind, role: room && room.role, linked: linked(), online: !!room && room.online, status: room && room.lastStatus,
+export const state = () => ({ site: SITE, kind: room && room.kind, role: room && room.role, linked: linked(), online: !!room && room.online, status: room && room.lastStatus,
   me: room && room.me, players: room ? room.players : [], away: room ? room.players.filter(p => room.away(p)) : [], view: st && st.get('view'), myHere,
   here: room && st ? Object.fromEntries(room.players.map(p => [p, p === room.me ? myHere : st.get('here:' + p) ?? null])) : {},
   game: ch && { players: ch.seated, linked: ch.api.linked, role: ch.api.role, host: ch.api.host, waiting: ch.api.waiting } });
@@ -110,12 +115,12 @@ function wire(r, kind) {
     for (const p of r.players) if (p !== r.me) greet(p);
     update();
   });
-  on('join', p => { greet(p); update(); });
+  on('join', p => { greet(p); if (rules.arrivesLoading(facts, p, 'join')) loading.set(p, performance.now()); update(); });
   // Back in a new tab or device: until their game is open there again, the game waits for them (see 'here' below).
   // The same tab after its link started over: its game is still there, it only needs the full picture again.
   on('relinked', (p, fresh) => {
     greet(p);
-    if (fresh && st.get('here:' + p)) loading.set(p, performance.now());
+    if (rules.arrivesLoading(facts, p, 'relinked', fresh)) loading.set(p, performance.now());
     update();
     if (!fresh && ch && ch.others.includes(p) && !loading.has(p)) ch.emit('relinked', p);
   });
@@ -205,39 +210,36 @@ export function detachGame() {
   if (room) publish(st.set('here:' + room.me, null));
 }
 
-// who has this game open, in the room's order (whoever came first, first); a player who dropped out keeps
-// their place here too
-function inGameOf(c) {
-  if (!room || myHere !== c.id) return [];
-  return room.players.filter(p => p === room.me || (st.get('here:' + p) === c.id && !stale.has(p)));
-}
+// The room as the rules see it (rules.js), read when they ask; only while there is a room.
+const facts = {
+  get me() { return room.me; },
+  get players() { return room.players; },
+  here: p => st.get('here:' + p),
+  stale, loading,
+  away: p => room.away(p),
+  weak: p => room.stats(p).weak,
+  get nearby() { return room.nearby; },
+  get role() { return room.role; },
+  get host() { return room.host; },
+  get now() { return performance.now(); }
+};
+// who has this game open, in the room's order; a player who dropped out keeps their place here too
+const inGameOf = c => room ? rules.inGame(facts, c.id, myHere) : [];
 // dropped out (their place is kept), or back in a new tab or device whose game is not open yet: for how long, ms
-const awayMs = p => !room || p === room.me ? 0 : room.away(p) || (loading.has(p) ? Math.max(1, performance.now() - loading.get(p)) : 0);
-const away = p => awayMs(p) > 0;
-// Whose copy runs the round: the one the shared state names, if they play; else the first who plays.
-function runnerOf(c) {
-  const r = st && st.get('auth:' + c.id);
-  return r && c.seated.includes(r) ? r : c.seated[0] || null;
-}
-// The runner has been away for AUTH_WAIT: the first player here who plays takes the round over (only that one
-// writes it; everyone sees it in the shared state). Silence has two ends, though: only a player who can show it
-// is not them who dropped out takes over —
-//   - someone else (not the runner) is here with us, or
-//   - through the internet: the brokers have answered us all that time, and we are the room's host or hear it.
-// Two phones nearby that lose each other cannot tell which of them it was: the round waits for its runner (on
-// either phone, taking over would split it in two, each going on alone).
+const awayMs = p => room ? rules.awayMs(facts, p) : 0;
+// whose copy runs the round: the one the shared state names (authOf), if they play; else the first who plays
+const authOf = c => st && st.get('auth:' + c.id);
+const runnerOf = c => rules.runnerOf(c.seated, authOf(c));
+// The runner has been away for AUTH_WAIT: the first player here who plays takes the round over, if they can show
+// it is not them who dropped out (rules.takeOver); only that one writes it, everyone sees it in the shared state.
+// A player whose new tab has not opened their game for as long as a place is kept goes stale (out of the game).
 let onlineSince = 0;
 function watchRunner() {
   const now = performance.now();
-  onlineSince = room && room.online ? onlineSince || now : 0;
-  for (const [p, t] of loading) if (now - t > HOLD) { loading.delete(p); stale.add(p); update(); }
+  onlineSince = rules.onlineSince(onlineSince, !!room && room.online, now);
+  for (const p of rules.loadingTooLong(loading, now, HOLD)) if (loading.delete(p)) { stale.add(p); update(); }
   if (!ch || !room || !ch.api.linked) return;
-  const r = runnerOf(ch);
-  if (!r || r === room.me || awayMs(r) < AUTH_WAIT) return;
-  const company = room.players.some(p => p !== room.me && p !== r && !away(p));
-  const reached = !room.nearby && onlineSince && now - onlineSince >= AUTH_WAIT && (room.role === 'host' || (!!room.host && !away(room.host)));
-  if (!company && !reached) return;
-  if (ch.seated.find(p => !away(p)) === room.me) { publish(st.set('auth:' + ch.id, room.me)); update(); }
+  if (rules.takeOver(facts, { seated: ch.seated, runner: runnerOf(ch), since: onlineSince, now, wait: AUTH_WAIT })) { publish(st.set('auth:' + ch.id, room.me)); update(); }
 }
 
 function channel(id, seats) {
@@ -245,7 +247,7 @@ function channel(id, seats) {
   let pending = null, sendTimer = null, lastSent = 0;     // the latest snapshot not sent yet (at most two a second)
   const c = {
     id, seats, disposed: false, was: [], seen: '', weak: false, role: null, runner: null, own: false,
-    inGame: [], seated: [], others: [],
+    inGame: [], seated: [], waiting: [], others: [],
     emit(name, ...a) { for (const fn of handlers.get(name) || []) safe(fn, ...a); },
     policy: name => typeof api[name] === 'function' && safe(api[name]),
     pulseOut: now => typeof api.pulse === 'function' ? safe(api.pulse, now) : null,
@@ -270,11 +272,11 @@ function channel(id, seats) {
   const api = {
     get me() { return room ? room.me : null; },        // our name
     get players() { return c.seated.slice(); },        // who plays: up to `seats` players, in the room's order
-    get waiting() { return c.inGame.slice(seats); },   // who has the game open too, waiting for a seat
+    get waiting() { return c.waiting.slice(); },       // who has the game open too, waiting for a seat
     get seats() { return seats; },
     get seated() { return !!room && c.seated.includes(room.me); },   // we have a seat
     get host() { return runnerOf(c); },                // whose copy runs the round
-    get role() { return !api.seated ? null : runnerOf(c) === room.me ? 'host' : 'guest'; },
+    get role() { return !api.seated ? null : rules.roleOf(c.seated, room.me, authOf(c)); },
     get linked() { return c.others.length > 0; },      // we have a seat, and someone else plays too
     get weak() { return c.weak; },                     // a player is away or went quiet: pause and wait
     away: p => c.seated.includes(p) ? awayMs(p) : 0,   // a player who dropped out (or whose game is not open yet): for how long, ms
@@ -325,7 +327,7 @@ function channel(id, seats) {
     },
     lag: p => !room ? 0 : p !== undefined ? room.lag(p) : c.others.reduce((m, q) => Math.max(m, room.lag(q)), 0),
     stats: p => statsOf(p !== undefined ? (room ? [p] : []) : c.others),
-    diag: () => room ? room.diag() : 'no room',
+    diag: () => SITE + '\n' + (room ? room.diag() : 'no room'),
     frame: now => { if (room) room.frame(now); },
     kick: () => { if (room) room.kick(); },
     invite: () => shell.invite()
@@ -341,18 +343,16 @@ function statsOf(ps) {
     turn: all.some(s => s.turn === true) ? true : all.every(s => s.turn === false) ? false : null, weak: all.some(s => s.weak) };
 }
 
-// who has the game open, who of them plays, and who we play with: counted again whenever any of it may have
-// changed, so the game's many questions (several per frame) cost nothing
+// who has the game open, who of them plays, who waits, and who we play with: counted again whenever any of it
+// may have changed, so the game's many questions (several per frame) cost nothing
 function recount(c) {
-  const all = inGameOf(c), seated = all.slice(0, c.seats);
-  c.inGame = all; c.seated = seated;
-  c.others = room && seated.includes(room.me) ? seated.filter(p => p !== room.me) : [];
+  const s = rules.seating(inGameOf(c), c.seats, room && room.me);
+  c.inGame = s.inGame; c.seated = s.seated; c.waiting = s.waiting; c.others = s.others;
 }
 
-// Tell the open game who plays now. The round ends ('peer-gone', then 'linked' again if someone is left) when
-// whoever runs it is gone for good, or in a game for two when the other player is someone else now; otherwise
-// players coming and going are 'join' and 'leave', and whose copy runs the round may change ('role', and
-// 'resume' with the snapshot for the new one).
+// Tell the open game who plays now: 'players', then what changed for the round (rules.playersChange: 'peer-gone'
+// and 'linked', or 'leave' and 'join'), then whose copy runs it ('role', and 'resume' with the snapshot for the
+// new one), then 'weak'.
 function update() {
   if (!ch) return;
   const c = ch;
@@ -363,14 +363,7 @@ function update() {
   if (seen !== c.seen) { c.seen = seen; c.emit('players', c.api.players); }
   if (now.join() !== was.join()) {
     c.was = now;
-    const partner = c.seats === 2 && now.length && was.length && now.join() !== was.join();
-    const gone = was.length && (!now.length || !now.includes(wasRunner) || partner);
-    if (gone) c.emit('peer-gone');
-    if (now.length && (!was.length || gone)) c.emit('linked');
-    else if (now.length) {
-      for (const p of was) if (!now.includes(p)) c.emit('leave', p);
-      for (const p of now) if (!was.includes(p)) c.emit('join', p);
-    }
+    for (const [e, ...a] of rules.playersChange(c.seats, was, now, wasRunner)) c.emit(e, ...a);
   }
   const role = c.api.role;
   if (role !== c.role) {
@@ -380,14 +373,14 @@ function update() {
     if (before && role && c.api.linked) c.emit('role', role);
     c.maybeResume();
   }
-  const weak = c.api.linked && c.others.some(p => room.stats(p).weak || loading.has(p));
+  const weak = c.api.linked && rules.paused(facts, c.others);
   if (weak !== c.weak) { c.weak = weak; c.emit('weak', weak); }
 }
 
 // for the screens: the players we wait for in the open game (dropped out, their seat kept) → [{ name, left ms }]
 export function waitingFor() {
   if (!ch || !room || !ch.api.linked) return [];
-  return ch.others.filter(away).map(p => ({ name: p, left: Math.max(0, HOLD - awayMs(p)) }));
+  return rules.waitingFor(facts, ch.others, HOLD);
 }
 // nobody waits for this player any longer: their place goes
 export const release = p => { if (room) room.release(p); };
