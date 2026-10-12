@@ -3,27 +3,53 @@
 // (a star, see room.js). Roles settle themselves: if two think they are first, the one with fewer players here
 // gives way, and between equals the "greater" session.
 //
-// Messages on the room topic: who (anyone here? n: our name), host (I hold the room; c: players here with me;
-// u: "I do not know you", to a guest that thinks it is linked), full, hello (guest → host: n: name, k: a
-// number per attempt), hi (host → guest: linked; the same k, n: the host's name), go (host → guest: join this
-// other host instead), here (a guest whose host went quiet: are we still together?), moved (another tab of
-// yours took your place), bye (a tab closes; final if menu=1: the player left), rtc (direct link signalling),
-// d (game data through the brokers, in per-pair mailboxes).
-//
 // Places are by name (room.js): a hello with a name the room knows takes that place, from whatever tab (the
 // old one is told 'moved'); with the host's own name, the host steps aside and the new tab gets its place
-// from whoever takes over. When the host is away for HOST_WAIT (or says bye), the first player on the list
-// who is here becomes the host and the others join it: everyone has the same list, so they agree without a
-// word. The host keeps announcing itself now and then even with guests, so two rooms that formed on one code
-// (a broker hiccup at the wrong moment, a host back from a long sleep) find each other and merge.
-import { me, roomTopic } from './config.js';
+// from whoever takes over. When the host is away for HOST_WAIT (config.js TIMING) or says bye, the first player
+// on the list who is here becomes the host and the others join it: everyone has the same list, so they agree
+// without a word. The host keeps announcing itself now and then even with guests, so two rooms that formed on
+// one code (a broker hiccup at the wrong moment, a host back from a long sleep) find each other and merge.
+//
+// Messages on the room's topic: JSON to every broker. brokers.js adds f (the sender's session) and q (its number:
+// a copy through another broker is dropped); one with `to` is for that session only.
+//   k      a tab → itself      {ts} the brokers echo it: alive, and how fast (brokers.js; the others ignore it)
+//   who    newcomer → all      {n: name} anyone here? The host answers 'host' or 'full'; a tab still looking whose
+//                              session is smaller takes the room and answers 'host'
+//   host   host → all | one    {c: players here with it, u?} I hold the room: alone every 2.5 s, with guests every
+//                              10 s (two rooms on one code merge), and to whoever asks. u: 1, to a tab that talks as
+//                              if linked: I do not know you, say hello again
+//   full   host → newcomer     no place left (it looks again in 2 s)
+//   hello  guest → host        {n: name, k: attempt} let me in (every 1.2 s until 'hi'; after 6, it looks again)
+//   hi     host → guest        {k, n: the host's name} linked (k: of the hello it answers)
+//   go     host → its guests   {h: session} I give way to that host: join it (said twice)
+//   here   guest → its host    are we still together? (every 3 s while the host is quiet)
+//   moved  host → a tab        another tab of your player took your place: step aside (role 'out')
+//   bye    a tab → all | one   {menu?} it closes (leave, pagehide); menu: 1, its player left for good. To one tab: it
+//                              steps aside (leaveQuietly), it starts over and drops our link (dropAll, menu: 1), or
+//                              a guest tells a stranger we are not together (menu: 1)
+//   rtc    guest ⇄ host        {k: attempt, sdp | ice} direct link signalling (the guest offers, rtc.js)
+//   d      a tab → its peer    {d: [link messages]} through the brokers, in the pair's own mailbox: topic/d/from/to
+// Messages on a link (with one tab: the direct channels, or inside 'd'). Fast ones may be lost; reliable ones carry
+// _x, their number, and go again until acknowledged (link.js):
+//   p      both, fast          {ts, a, rt?, g?, r?, w?} pulse and ping, 5 a second. a: their reliable ones we have;
+//                              rt: our ping; g: the game's pulse fields; r: 1, I cannot hear you directly; w: the
+//                              brokers that bring your data to me first
+//   q      both, fast          {ts} the ping's answer, by the path the ping came (each path is measured on its own)
+//   ak     both, fast          {a} their reliable ones we have, 25 ms after some came. (room.send does not refuse a
+//                              game's own 'ak' yet; sent fast, it would be taken for this)
+//   bye    both, reliable      {menu?} as on the topic; acted on at once, even if something before it is missing
+//   _r     host → guests, rel. {m: [[name, session, away ms], …]} the players
+//   _x     guest → host, rel.  {n} let n's place go («Не чекати»; the host does it only while n is away)
+//   (game) any, fast or rel.   the game's own (t: not one of these, not starting with '_'). A guest sends all of it
+//                              to the host, with _t: to whom ('*': everyone; none: the host only); the host passes
+//                              it on with _f: its author
+import { me, roomTopic, TIMING } from './config.js';
 import { closeBrokers, loadTransport, mailbox, openBrokers, pubOn } from './brokers.js';
 import { onRtc } from './rtc.js';
 import { deliver, resetPaths } from './link.js';
 import { closePeer, dropMember, guestMembers, hostPeer, linkedPeers, markLinked, memberOf, NAME, newPeer, newRoom,
   presence, seatMember, setRole, startWatch, stop, unlink } from './room.js';
 
-const HOST_WAIT = 10000;                               // the host away this long: someone else takes over
 const ANNOUNCE = 2500, ANNOUNCE_LINKED = 4;            // the host says it is here every 2.5 s, every 10 s with guests
 
 /**
@@ -35,12 +61,12 @@ const ANNOUNCE = 2500, ANNOUNCE_LINKED = 4;            // the host says it is he
  * Returns the room at once; it connects in the background and reports through events.
  */
 export function joinRoom({ game, code, name, max }) {
-  const { N, room } = newRoom({ game, code, name, max, relay: true, close, bye: N => pubOn(N, { t: 'bye' }) });
-  Object.assign(N, {
-    peerGone: P => linkGone(N, P), byeFrom: (P, final) => byeFrom(N, P, final), onUnlink: P => listen(N, P, false),
-    probe: (P, now) => probe(N, P, now), longSleep: () => longSleep(N), hubCheck: now => hubCheck(N, now),
-    releaseHost: () => hostGone(N, true)
-  });
+  const { N, room } = newRoom({ game, code, name, max, relay: true, mode: {        // (the hooks: room.js)
+    peerGone: P => linkGone(N, P), byeFrom: (P, final) => byeFrom(N, P, final),
+    onConnected: c => connected(N, c), onMessage: (m, c) => onMessage(N, m, c), onDown: () => signal(N),
+    close, bye: () => pubOn(N, { t: 'bye' }), onUnlink: P => listen(N, P, false), probe: (P, now) => probe(N, P, now),
+    hubCheck: now => hubCheck(N, now), longSleep: () => { longSleep(N); return true; }, releaseHost: () => hostGone(N, true)
+  } });
 
   // Browsers report a network change even when they only refined a speed estimate: react only when the
   // network type really changed (Wi-Fi ↔ mobile) or we have no connection anyway.
@@ -52,7 +78,7 @@ export function joinRoom({ game, code, name, max }) {
   };
   addEventListener('online', room.kick);
   try { navigator.connection.addEventListener('change', onConnection); } catch (e) {}
-  function close(N, final = true) {
+  function close(final = true) {
     try { pubOn(N, final ? { t: 'bye', menu: 1 } : { t: 'bye' }); } catch (e) {}
     stop(N, 'whoTimer', 'annTimer', 'helloTimer', 'failTimer', 'fullTimer');
     closeBrokers(N);
@@ -67,9 +93,6 @@ export function joinRoom({ game, code, name, max }) {
     try { await loadTransport(); } catch (e) { if (!N.closed) N.emit('status', 'unavailable'); return; }
     N.topic = await roomTopic(game, code);
     if (N.closed) return;
-    N.onConnected = c => connected(N, c);
-    N.onMessage = (m, c) => onMessage(N, m, c);
-    N.onDown = () => signal(N);
     openBrokers(N);
     N.failTimer = setTimeout(() => { if (!N.closed && !N.ready) N.emit('status', 'no-signal'); }, 6000);
     startWatch(N);
@@ -120,11 +143,11 @@ function onMessage(N, m, c) {
     case 'host': {                                     // someone holds the room
       const c = Number.isInteger(m.c) && m.c > 0 ? m.c : 1;
       if (N.role === 'guest' && from === N.host) {     // our host says it does not know us: ask to join again
-        if (N.linked && m.to === me && m.u) becomeGuest(N, from, true);
+        if (N.linked && m.to === me && m.u) becomeGuest(N, from);
         break;                                         // (its announcements to everyone change nothing)
       }
       if (N.role === 'guest' && N.linked) break;       // someone else's room on our code: ours stays (its host merges)
-      if (N.role === null || N.role === 'guest') becomeGuest(N, from, true);
+      if (N.role === null || N.role === 'guest') becomeGuest(N, from);
       else if (N.role === 'host') {                    // two hosts: fewer players here (or the greater session) gives way
         const mine = here(N);
         if (c > mine || (c === mine && from < me)) giveWay(N, from);
@@ -153,7 +176,7 @@ function onMessage(N, m, c) {
       if (!P || !P.linked) stranger(N, from);
       break;
     case 'go':                                         // our host gives way to another one: join it
-      if (N.role === 'guest' && from === N.host && typeof m.h === 'string' && m.h !== me) becomeGuest(N, m.h, true);
+      if (N.role === 'guest' && from === N.host && typeof m.h === 'string' && m.h !== me) becomeGuest(N, m.h);
       break;
     case 'moved':                                      // this player goes on in another tab
       if (P) leaveQuietly(N);
@@ -246,10 +269,10 @@ function becomeHost(N, keep = false) {
   N.annTimer = setInterval(ann, ANNOUNCE);
 }
 
-// quiet: whoever we were linked with is not told we left (they were told to come along, or it is our host again)
-function becomeGuest(N, host, quiet = false) {
+// Whoever we were linked with is not told we left: they come along (go, hostGone), or it is our host again.
+function becomeGuest(N, host) {
   stop(N, 'whoTimer', 'annTimer', 'helloTimer');
-  dropAll(N, !quiet, host);
+  dropAll(N, false);
   N.host = host;
   const H = newPeer(N, host);
   H.k = Math.random() * 1e9 | 0;                       // this attempt: the host starts our link over when it sees a new one
@@ -271,7 +294,7 @@ function becomeGuest(N, host, quiet = false) {
 function giveWay(N, other) {
   const ids = linkedPeers(N).map(P => P.id), go = () => { for (const id of ids) pub(N, { t: 'go', h: other, to: id }); };
   go(); setTimeout(go, 1000);
-  becomeGuest(N, other, true);
+  becomeGuest(N, other);
 }
 
 // Our host is gone: it left (gone: its place goes too), said bye, or has been away for HOST_WAIT. The first
@@ -285,12 +308,12 @@ function hostGone(N, gone = false) {
     N.host = null;
     becomeHost(N, true);                               // the others' places (and the old host's, unless it left) stay
     if (!N.linked) N.emit('status', 'peer-left');
-  } else becomeGuest(N, next.s, true);
+  } else becomeGuest(N, next.s);
 }
 // a guest: the host has been away too long
 function hubCheck(N, now) {
   const H = hostPeer(N);
-  if (N.role === 'guest' && H && H.linked && H.weak && now - H.weakAt > HOST_WAIT) hostGone(N);
+  if (N.role === 'guest' && H && H.linked && H.weak && now - H.weakAt > TIMING.HOST_WAIT) hostGone(N);
 }
 
 // A tab closes (its player's place is kept: maybe a reload), or the player leaves for good (final).
@@ -317,7 +340,7 @@ function probe(N, P, now) {
 // We were away (a phone locked, a tab frozen) for longer than anyone waits: the others have moved on. A guest
 // says hello to its host again; a host starts over and finds the room by its announcements (two hosts merge).
 function longSleep(N) {
-  if (N.role === 'guest' && N.host) becomeGuest(N, N.host, true);
+  if (N.role === 'guest' && N.host) becomeGuest(N, N.host);
   else if (N.role === 'host' && N.linked) { dropAll(N, true); N.role = null; becomeHost(N); }
 }
 
@@ -347,10 +370,10 @@ function leaveQuietly(N, tell = false) {
   N.emit('replaced');
 }
 
-// forget every link (a new role is coming); tell: let them know we left (but not `keep`, whom we go to)
-function dropAll(N, tell, keep) {
+// forget every link (a new role is coming); tell: let them know we left
+function dropAll(N, tell) {
   for (const P of [...N.peers.values()]) {
-    if (tell && P.id !== keep) pub(N, { t: 'bye', menu: 1, to: P.id });
+    if (tell) pub(N, { t: 'bye', menu: 1, to: P.id });
     unlink(P);
   }
   N.peers.clear();

@@ -1,6 +1,7 @@
 // MQTT transport: one connection per public broker, all at once. Liveness checks, backoff, and dropping
-// copies of a message that arrived through several brokers. What messages mean is up to room.js,
-// which receives them through N.onConnected(client), N.onMessage(msg, client) and N.onDown() (a working broker dropped).
+// copies of a message that arrived through several brokers. What messages mean is up to internet.js, which
+// receives them through its mode hooks (room.js): N.onConnected(client), N.onMessage(msg, client) and N.onDown()
+// (a working broker dropped).
 //
 // The connections are managed here rather than by the MQTT library, so behaviour is predictable:
 // - each broker connects on its own; a failed one is retried later and later (up to two minutes);

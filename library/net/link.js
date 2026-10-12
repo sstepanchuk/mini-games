@@ -8,7 +8,7 @@
 // everything up to here"); until then it is sent again, by whatever path works, with growing pauses. So nothing
 // is lost to a dead direct link, brokers that are reconnecting, or a phone that was offline for a minute. The
 // receiver runs them exactly once and in order: a message that overtook a missing one waits for it.
-import { BROKERS } from './config.js';
+import { BROKERS, TIMING } from './config.js';
 import { bestBrokers, brokerDiag, kickBrokers, pubData, tendBrokers } from './brokers.js';
 import { closeRtc, dcFresh, dcHear, dcLive, dcQuiet, probeLink, startRtc } from './rtc.js';
 import { holdOver, hostPeer, linkedPeers, weakChanged } from './room.js';
@@ -216,21 +216,21 @@ export function diag(N) {
 // mobile) breaks both the direct link and the broker connections. So: a short silence pauses the game and
 // waits; brokers reconnect on their own; the direct link is rebuilt. Only a really long silence ends a link.
 export function watch(N) {
-  const now = performance.now(), gap = now - N.lastWatch, slept = gap > N.watchMs + 1300;
+  const now = performance.now(), gap = now - N.lastWatch, slept = gap > N.watchMs + TIMING.SLEEP;
   N.lastWatch = now;
   if (N.closed) return;
   // Our own tab was asleep (phone locked, timers throttled): the silence was ours, not theirs.
   // Give the connections a few seconds to come back before judging the others. Away for longer than anyone
-  // waits: they have let us go, so we find our way back (internet.js: longSleep).
+  // waits: they have let us go, so we find our way back (the mode's longSleep; true: it started over).
   if (slept) {
-    N.graceUntil = now + 5000;
+    N.graceUntil = now + TIMING.GRACE;
     for (const P of N.peers.values()) P.lastSeen = now;
     kick(N);
-    if (gap > N.lostAfter && N.longSleep) { N.longSleep(); return; }
+    if (gap > N.lostAfter && N.longSleep()) return;
   }
   if (N.relay) tendBrokers(N, now);
   holdOver(N, now);                                    // places kept too long go
-  if (N.hubCheck) N.hubCheck(now);                     // a guest whose host is away: someone else takes over (internet.js)
+  N.hubCheck(now);                                     // a guest whose host is away: someone else takes over (internet.js)
   for (const P of linkedPeers(N)) watchPeer(P, now);
   if (N.closed) return;
   if (N.statsDue) { N.statsDue = false; N.emit('stats', N.roomStats()); }
@@ -239,7 +239,7 @@ export function watch(N) {
 
 function watchPeer(P, now) {
   const N = P.N;
-  if (N.probe) N.probe(P, now);
+  N.probe(P, now);                                     // e.g. a guest asks a quiet host whether we are still together
   if (dcLive(P) && now - P.statsAt > 2000) { P.statsAt = now; probeLink(P); }
   if (now - P.pingAt > 190) {
     P.pingAt = now; P.pN++;
@@ -250,7 +250,7 @@ function watchPeer(P, now) {
   resend(P, now);
   if (now < N.graceUntil) return;
   const quiet = now - P.lastSeen;
-  setWeak(P, quiet > 1500);                            // the game pauses: nobody plays on while someone cannot
+  setWeak(P, quiet > TIMING.WEAK);                     // the game pauses: nobody plays on while someone cannot
   if (quiet > N.lostAfter) { N.peerGone(P); return; }   // silent as long as a place is kept: that tab is gone
   // a direct link that went quiet for long is closed; the guest then tries to build a new one
   // (not nearby: there the direct link cannot be rebuilt without the players)

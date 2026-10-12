@@ -18,6 +18,23 @@
 // find each other through. The player is then away, as over the internet: their place (and the round) waits for
 // them as long as places are kept, and pairing again — the same name, from the same tab or another device —
 // puts them back where they were.
+//
+// Messages (on a link only: there is no topic). The same as on an internet room's links (internet.js), through
+// the direct channels only, plus the hello. Fast ones may be lost; reliable ones carry _x, their number, and go
+// again until acknowledged (link.js):
+//   _h     both, on 'ctl'      {id: session, n: name} who is on this end, as soon as both channels open; the link
+//                              counts once it comes (the host seats them by name; a guest learns its host)
+//   p      both, fast          {ts, a, rt?, g?} pulse and ping, 5 a second. a: their reliable ones we have; rt: our
+//                              ping; g: the game's pulse fields
+//   q      both, fast          {ts} the ping's answer
+//   ak     both, fast          {a} their reliable ones we have, 25 ms after some came. (room.send does not refuse a
+//                              game's own 'ak' yet; sent fast, it would be taken for this)
+//   bye    both, reliable      {menu?} the tab closes; menu: 1, its player left for good. Acted on at once
+//   _r     host → guests, rel. {m: [[name, session, away ms], …]} the players
+//   _x     guest → host, rel.  {n} let n's place go («Не чекати»; the host does it only while n is away)
+//   (game) any, fast or rel.   the game's own (t: not one of these, not starting with '_'). A guest sends all of it
+//                              to the host, with _t: to whom ('*': everyone; none: the host only); the host passes
+//                              it on with _f: its author
 import { me, SENDER } from './config.js';
 import { closeRtc, dcLive, openChannels, wireDc } from './rtc.js';
 import { ANSWER, OFFER, candidates, decode, describe, encode } from './code.js';
@@ -26,18 +43,19 @@ import { closePeer, dropMember, guestMembers, linkedPeers, markLinked, NAME, new
 const GATHER_MS = 3000, CONNECT_MS = 20000;
 
 export function joinNearby({ game, name, max }) {
-  const { N, room } = newRoom({ game, name, max, relay: false, close: N => stop(N, 'failTimer'), bye: () => {} });
+  const { N, room } = newRoom({ game, name, max, relay: false, mode: {             // (the hooks: room.js)
+    peerGone: Q => ended(N, Q, false), byeFrom: (Q, final) => ended(N, Q, final),
+    close: () => stop(N, 'failTimer'), onDirect, onHello
+  } });
   let P = null;                                        // the link being paired now
-  N.peerGone = Q => ended(N, Q, false);
-  N.byeFrom = (Q, final) => ended(N, Q, final);
   // a link that opens says who we are; one that closes leaves its player away (the watch: weak at once, gone
   // only when places are no longer kept — see the top)
-  N.onDirect = (Q, open) => {
+  function onDirect(Q, open) {
     if (open) { try { Q.dcC.send(JSON.stringify({ t: '_h', id: me, n: N.name })); } catch (e) {} }
-  };
+  }
   // who is on the other end: now the link counts. The host seats them by name (a name it knows: their place,
   // the old link steps aside); a guest learns the host's name.
-  N.onHello = (Q, m) => {
+  function onHello(Q, m) {
     if (Q.linked || N.closed || typeof m.id !== 'string' || !SENDER.test(m.id) || m.id === me) return;
     if (typeof m.n !== 'string' || !NAME.test(m.n) || m.n === N.name) return;
     // the same player paired again (their old link broke): the new link takes over from the old one
@@ -55,7 +73,7 @@ export function joinNearby({ game, name, max }) {
     }
     if (again) N.emit('relinked', m.n, false);         // (a new session tells itself: see room.js tell)
     if (!N.watchTimer) startWatch(N);
-  };
+  }
 
   let t0, log, tried;
   const note = text => log.push((performance.now() - t0 | 0) + ' ms  ' + text);

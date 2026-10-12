@@ -6,7 +6,7 @@ import { loadTransport } from './brokers.js';
 export { hasInternet } from './brokers.js';
 export { joinRoom } from './internet.js';
 export { joinNearby } from './nearby.js';
-export { newRoomCode, validRoomCode } from './config.js';
+export { newRoomCode, TIMING, validRoomCode } from './config.js';   // TIMING: how long the room waits, ms
 export { HOLD, MAX_PLAYERS, NAME } from './room.js';
 // start loading the internet transport early (e.g. while the player is still on the shelf); never throws
 export const preload = () => { loadTransport().catch(() => {}); };

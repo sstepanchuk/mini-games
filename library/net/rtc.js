@@ -69,16 +69,16 @@ export function wireDc(P, pc, dc) {
     flushRelay(P);
     P.dcBorn = performance.now();
     P.dcSeen = 0; P.rtcTries = 0;                      // it becomes "alive" when the first message arrives through it
-    if (P.N.onDirect) P.N.onDirect(P, true);
+    P.N.onDirect(P, true);
     P.N.refresh(P);
   };
-  dc.onclose = () => { if (P.pc === pc) { closeRtc(P); if (P.N.onDirect) P.N.onDirect(P, false); P.N.refresh(P); } };
+  dc.onclose = () => { if (P.pc === pc) { closeRtc(P); P.N.onDirect(P, false); P.N.refresh(P); } };
   dc.onmessage = e => {
     if (P.N.closed || P.pc !== pc) return;
     P.dcSeen = performance.now();
     let x; try { x = JSON.parse(e.data); } catch (err) { return; }
     if (!P.linked) {                                   // before the link counts: a nearby hello, or a moment early
-      if (x && x.t === '_h' && P.N.onHello) P.N.onHello(P, x);
+      if (x && x.t === '_h' && !P.N.relay) P.N.onHello(P, x);
       else if (P.early.length < 64) P.early.push(x);
       return;
     }

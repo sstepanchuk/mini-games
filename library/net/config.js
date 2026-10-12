@@ -1,5 +1,5 @@
 // Where rooms meet and who we are: public MQTT brokers (signalling and fallback transport), STUN/TURN for
-// direct links, player ids and room codes.
+// direct links, the room's timing, session ids and room codes.
 
 // Four brokers, so one outage does not matter: both players only need one broker in common.
 // Two listen on port 443, which even strict networks (office Wi-Fi, some mobile carriers) leave open.
@@ -30,6 +30,25 @@ export const ICE = [
   { urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turn:openrelay.metered.ca:443?transport=tcp'], username: 'openrelayproject', credential: 'openrelayproject' }
 ].concat(MY_TURN.username ? [MY_TURN] : []);
 
+// How long the room waits, ms. The order matters and is checked here, at load (WEAK < GRACE < HOST_WAIT <=
+// AUTH_WAIT < HOLD): a quiet player pauses the game first; the room's host moves on no later than a round's runner;
+// a place goes long after both. window.__timeScale (tests only: set before the library loads) scales them all,
+// and only them: the pulse and the watchdog's 200 ms do not scale, so below about 0.3 a linked player goes weak
+// between two pulses (measured idle, two tabs: at 0.1 the host paused 7 times in 8 s; at 0.3 never).
+const BASE = {
+  WEAK: 1500,                                          // a player silent this long is weak: the game pauses (link.js)
+  SLEEP: 1300,                                         // a watchdog tick this much later than due: our own tab was asleep (link.js)
+  GRACE: 5000,                                         // after our tab slept, nobody is judged this long (link.js)
+  HOST_WAIT: 10000,                                    // the room's host away this long: the first player here takes over (internet.js)
+  AUTH_WAIT: 10000,                                    // a round's runner away this long: the first player here runs it on (app/together.js)
+  HOLD: 180000                                         // a player who dropped out keeps their place this long; a link silent this long is gone
+};
+const SCALE = Number.isFinite(window.__timeScale) && window.__timeScale > 0 ? window.__timeScale : 1;
+export const TIMING = Object.freeze(Object.fromEntries(Object.entries(BASE).map(([k, v]) => [k, v * SCALE])));
+if (!(TIMING.WEAK < TIMING.GRACE && TIMING.GRACE < TIMING.HOST_WAIT && TIMING.HOST_WAIT <= TIMING.AUTH_WAIT && TIMING.AUTH_WAIT < TIMING.HOLD)) {
+  throw new Error('net: TIMING must keep WEAK < GRACE < HOST_WAIT <= AUTH_WAIT < HOLD');
+}
+
 const ABC = 'abcdefghjkmnpqrstuvwxyz23456789';      // no look-alikes (0/o, 1/l)
 const code = n => Array.from({ length: n }, () => ABC[Math.floor(Math.random() * ABC.length)]).join('');
 
@@ -43,7 +62,8 @@ export const me = (window.__pid || code(12)) + '.' + code(6);
 export const SENDER = /^[a-z0-9]{4,32}\.[a-z0-9]{4,12}$/;   // what a session id looks like
 
 // The room's topic on the public brokers. Only a hash of game + code goes there, so someone listening to
-// every topic learns no room codes and cannot join or disturb a room.
+// every topic learns no room codes. They do see the room's messages, though, and nothing is signed: whoever
+// watches a room's topic could join that room or disturb it.
 export async function roomTopic(game, room) {
   try {
     const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(game + ':' + room)));
