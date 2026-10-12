@@ -66,10 +66,24 @@ function waitNote() {
   if (!list.length || stage.hidden) { if (box) box.remove(); return; }
   if (!box) { box = el('div', { id: 'waiting', className: 'waiting card', role: 'status' }); stage.append(box); }
   const mmss = ms => { const s = Math.ceil(ms / 1000); return (s / 60 | 0) + ':' + String(s % 60).padStart(2, '0'); };
+  // nearby, a broken link does not come back by itself: show the way back (pairing again)
+  const near = currentRoom() && currentRoom().kind === 'nearby';
   box.replaceChildren(...list.flatMap(({ name, left }) => [
     para('Чекаємо на ' + name + '… ' + mmss(left)),
+    ...(near ? [para('Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.', 'fine'), btn('З’єднатися знову', repair)] : []),
     btn('Не чекати', () => { release(name); box.remove(); }, 'btn ghost')]));
 }
+
+// Nearby, a link broke: pair again (the host shows its code, a guest scans it); the player is back in their place.
+function repair() {
+  const room = currentRoom();
+  if (!room || room.kind !== 'nearby') return;
+  if (!dlg) openDialog();
+  dlg.name = room.me; dlg.adding = true;
+  if (room.role === 'host') hostPairing(); else guestPairing();
+}
+// someone in a nearby room is away (their link broke)
+const brokenNearby = room => room.kind === 'nearby' && room.players.some(p => p !== room.me && room.away(p));
 
 /* ---------- the chip on the shelf ---------- */
 function chip() {
@@ -118,7 +132,8 @@ const closeDialog = () => { if (dlg) dlg.close(); };
 // once linked, the dialog says so and goes
 function refresh(what) {
   const room = currentRoom(), d = dlg;
-  if (what === 'linked' || (what === 'join' && d.adding)) {  // together now (or one more): say so, and go
+  // together now (or one more, or back after pairing again): say so, and go
+  if (what === 'linked' || (d.adding && (what === 'join' || (what === 'relinked' && !/^(together|link)$/.test(d.screen))))) {
     d.adding = false;
     show('together');
     setTimeout(() => { if (dlg === d && d.screen === 'together') closeDialog(); }, 900);
@@ -182,6 +197,7 @@ function show(screen) {
       el('ul', { className: 'players' }, ...room.players.map(p => el('li', { textContent: p + (p === room.me ? ' (ти)' : room.away(p) ? ' — відпав, місце чекає' : '') }))),
       para(room.kind === 'nearby' ? 'Поруч, без інтернету.' : 'Через посилання.' + (room.stats().direct ? ' Пристрої з’єднані напряму.' : '')),
       dlg.state,
+      ...(brokenNearby(room) ? [para('Зв’язок поруч перервався. Щоб продовжити, з’єднайтеся ще раз кодами.', 'fine'), btn('З’єднатися знову', repair)] : []),
       ...(!space ? [para('Кімната повна: ' + room.max + ' гравців.', 'fine')]
         : room.kind === 'internet' || room.role === 'host' ? [btn('Додати гравця', addPlayer, 'btn ghost')]
         : [para('Ще когось поруч додає той, хто показував код першим.', 'fine')]),
@@ -235,7 +251,7 @@ async function hostPairing() {
   let code;
   try { code = await p.room.pair.offer(); } catch (e) { console.error(e); return p.live() && failed(p.room.pair); }
   if (!p.live() || currentRoom() !== p.room) return;
-  showCode('Крок 1 з 2', (p.room.linked ? 'Новий гравець' : 'Друг') + ' сканує цей код своїм пристроєм.', code, p.room.pair.local ? null : para(WHY.here, 'err'),
+  showCode('Крок 1 з 2', (p.room.linked && !brokenNearby(p.room) ? 'Новий гравець' : 'Друг') + ' сканує цей код своїм пристроєм.', code, p.room.pair.local ? null : para(WHY.here, 'err'),
     btn('Далі: сканувати код друга', () => scanCode('Крок 2 з 2', 'Наведи камеру на код на екрані друга.', p.cam, async text => {
       await p.room.pair.finish(text);
       busy('Поруч, без інтернету', 'З’єднуюсь…');

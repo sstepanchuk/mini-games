@@ -62,9 +62,10 @@ export function startInternet(code, name) {
   return wire(joinRoom({ game: LIB, code, name }), 'internet');
 }
 export const lastInternetCode = () => { const c = safe(() => localStorage.getItem(LAST)); return validRoomCode(c) ? c : null; };
-// a nearby room; its host adds players to it (pairing again), so it is kept
+// a nearby room; its host adds players to it (pairing again), and a player whose link broke pairs again into
+// it (to their place), so it is kept
 export function startNearby(name) {
-  if (room && room.kind === 'nearby' && room.role === 'host' && room.linked) return room;
+  if (room && room.kind === 'nearby' && (room.linked || room.role === 'host')) return room;
   leave();
   remember(LAST_NAME, name);
   return wire(joinNearby({ game: LIB, name }), 'nearby');
@@ -122,7 +123,8 @@ function wire(r, kind) {
   on('away', update);
   on('peer-gone', () => {
     update();
-    if (r.kind === 'nearby') queueMicrotask(leave);      // nearby, a room cannot come back without pairing again
+    // nearby, nobody is left whose place is kept (they were away as long as places are kept): the room is over
+    if (r.kind === 'nearby') queueMicrotask(() => { if (room === r && !r.linked) leave(); });
   });
   on('replaced', () => {                                  // this player went on in another tab or device
     replaced = { kind: r.kind, code: r.code, name: r.me };
@@ -218,9 +220,12 @@ function runnerOf(c) {
   return r && c.seated.includes(r) ? r : c.seated[0] || null;
 }
 // The runner has been away for AUTH_WAIT: the first player here who plays takes the round over (only that one
-// writes it; everyone sees it in the shared state). Not a player who may have been cut off themselves (nobody
-// else here, and the brokers have not answered them all that time): then it is them who dropped out, and the
-// runner may well be playing on.
+// writes it; everyone sees it in the shared state). Silence has two ends, though: only a player who can show it
+// is not them who dropped out takes over —
+//   - someone else (not the runner) is here with us, or
+//   - through the internet: the brokers have answered us all that time, and we are the room's host or hear it.
+// Two phones nearby that lose each other cannot tell which of them it was: the round waits for its runner (on
+// either phone, taking over would split it in two, each going on alone).
 let onlineSince = 0;
 function watchRunner() {
   const now = performance.now();
@@ -229,7 +234,9 @@ function watchRunner() {
   if (!ch || !room || !ch.api.linked) return;
   const r = runnerOf(ch);
   if (!r || r === room.me || awayMs(r) < AUTH_WAIT) return;
-  if ((!onlineSince || now - onlineSince < AUTH_WAIT) && room.players.every(p => p === room.me || away(p))) return;
+  const company = room.players.some(p => p !== room.me && p !== r && !away(p));
+  const reached = !room.nearby && onlineSince && now - onlineSince >= AUTH_WAIT && (room.role === 'host' || (!!room.host && !away(room.host)));
+  if (!company && !reached) return;
   if (ch.seated.find(p => !away(p)) === room.me) { publish(st.set('auth:' + ch.id, room.me)); update(); }
 }
 

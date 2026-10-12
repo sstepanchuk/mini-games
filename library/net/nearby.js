@@ -13,10 +13,15 @@
 // room.pair.vpn: one of the devices runs a VPN (a likely reason for 'blocked').
 // room.pair.report() describes the last pairing, for bug reports; room.pair.cancel() drops a pairing under way.
 // The pairing screens (QR codes, camera) are the library's: app/invite.js.
+//
+// A link that breaks (a phone locked for long, the Wi-Fi gone) cannot come back by itself: there is nothing to
+// find each other through. The player is then away, as over the internet: their place (and the round) waits for
+// them as long as places are kept, and pairing again — the same name, from the same tab or another device —
+// puts them back where they were.
 import { me, SENDER } from './config.js';
-import { closeRtc, openChannels, wireDc } from './rtc.js';
+import { closeRtc, dcLive, openChannels, wireDc } from './rtc.js';
 import { ANSWER, OFFER, candidates, decode, describe, encode } from './code.js';
-import { dropMember, guestMembers, markLinked, memberOf, NAME, newPeer, newRoom, renamePeer, seatMember, setRole, startWatch, stop, unlink } from './room.js';
+import { closePeer, dropMember, guestMembers, linkedPeers, markLinked, NAME, newPeer, newRoom, renamePeer, seatMember, setRole, startWatch, stop, unlink, weakChanged } from './room.js';
 
 const GATHER_MS = 3000, CONNECT_MS = 20000;
 
@@ -25,25 +30,30 @@ export function joinNearby({ game, name, max }) {
   let P = null;                                        // the link being paired now
   N.peerGone = Q => ended(N, Q, false);
   N.byeFrom = (Q, final) => ended(N, Q, final);
+  // a link that opens says who we are; one that closes leaves its player away (the watch: weak at once, gone
+  // only when places are no longer kept — see the top)
   N.onDirect = (Q, open) => {
-    if (open) { try { Q.dcC.send(JSON.stringify({ t: '_h', id: me, n: N.name })); } catch (e) {} }   // who we are
-    else ended(N, Q, false);
+    if (open) { try { Q.dcC.send(JSON.stringify({ t: '_h', id: me, n: N.name })); } catch (e) {} }
   };
   // who is on the other end: now the link counts. The host seats them by name (a name it knows: their place,
   // the old link steps aside); a guest learns the host's name.
   N.onHello = (Q, m) => {
-    if (Q.linked || N.closed || typeof m.id !== 'string' || !SENDER.test(m.id) || m.id === me || N.peers.has(m.id)) return;
+    if (Q.linked || N.closed || typeof m.id !== 'string' || !SENDER.test(m.id) || m.id === me) return;
     if (typeof m.n !== 'string' || !NAME.test(m.n) || m.n === N.name) return;
+    // the same player paired again (their old link broke): the new link takes over from the old one
+    const olds = [...N.peers.values()].filter(X => X !== Q && (X.id === m.id || X.name === m.n));
+    if (olds.some(X => X.linked && dcLive(X))) return;  // (still linked and alive: not a second link for one player)
+    const again = olds.some(X => X.linked);
+    for (const X of olds) retire(N, X);
     renamePeer(N, Q, m.id);
     Q.name = m.n;
     if (Q === P) { stop(N, 'failTimer'); note('linked'); P = null; }
     if (N.role === 'guest') { N.host = m.id; guestMembers(N, m.n); markLinked(Q); }
     else {
-      const old = memberOf(N, m.n), oldP = old && N.peers.get(old.s);
-      if (oldP && oldP !== Q) unlink(oldP);
       markLinked(Q);                                   // linked first: the list of players that follows goes to them too
       seatMember(N, m.n, m.id);
     }
+    if (again) N.emit('relinked', m.n, false);         // (a new session tells itself: see room.js tell)
     if (!N.watchTimer) startWatch(N);
   };
 
@@ -55,7 +65,9 @@ export function joinNearby({ game, name, max }) {
   const begin = role => {
     if (P) { unlink(P); P = null; }
     if (role === 'host' && N.members.length >= N.max) throw new Error('full');
-    if (role === 'guest' && (N.linked || N.role === 'host')) throw new Error('kind');
+    // a guest pairs again only when its link to the host broke; a guest never starts pairing others
+    if (role === 'guest' && (N.role === 'host' || linkedPeers(N).some(dcLive))) throw new Error('kind');
+    if (role === 'host' && N.role === 'guest') throw new Error('kind');
     t0 = performance.now(); log = [navigator.userAgent]; tried = '';
     Object.assign(pair, { local: 0, remote: 0, vpn: false, reason: '' });
     P = newPeer(N, 'pairing.' + Math.random().toString(36).slice(2, 8));
@@ -66,7 +78,10 @@ export function joinNearby({ game, name, max }) {
       note('ice ' + pc.iceConnectionState);
       if (pc.iceConnectionState === 'checking') sample(Q, pc);
     };
-    pc.onconnectionstatechange = () => { if (Q.pc === pc && pc.connectionState === 'failed') Q.linked ? ended(N, Q) : fail(N, Q, pair, note); };
+    pc.onconnectionstatechange = () => {
+      if (Q.pc !== pc || pc.connectionState !== 'failed') return;
+      if (Q.linked) { closeRtc(Q); N.refresh(Q); } else fail(N, Q, pair, note);   // linked: away from now on (see the top)
+    };
     if (N.role !== role) setRole(N, role);
     return pc;
   };
@@ -177,8 +192,18 @@ async function pairsOf(pc) {
   } catch (e) { return ''; }
 }
 
-// A link is gone for good (a nearby link cannot be rebuilt without pairing again). The host keeps the player's
-// place (unless they left for good): pairing again with the same name gives it back.
+// A link replaced by a new pairing of the same player: it goes quietly (the new one is linked already, so
+// nobody hears that anyone left).
+function retire(N, X) {
+  X.linked = false;
+  closePeer(X);
+  if (N.peers.get(X.id) === X) N.peers.delete(X.id);
+  N.linked = linkedPeers(N).length > 0;
+  weakChanged(N);
+}
+
+// A link is gone for good: silent as long as places are kept, or they left. The host keeps the player's place
+// (unless they left for good) until then.
 function ended(N, P, final) {
   if (!P.linked) return;
   if (final && N.role === 'host') dropMember(N, P.name);

@@ -124,6 +124,6 @@ video.scan{width:100%;max-height:50vh;object-fit:cover;border:3px solid var(--in
   background:var(--ink);color:#fff;border-radius:12px;box-shadow:4px 4px 0 var(--pink);transition:opacity .4s;
 }
 .toast.out{opacity:0}
-.waiting{position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:2;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 12px;padding:8px 14px;max-width:calc(100% - 24px);text-align:center}
+.waiting{position:absolute;left:50%;bottom:max(16px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:2;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 12px;padding:8px 14px;max-width:calc(100% - 24px);text-align:center}
 .waiting p{margin:0;font-weight:700}
 .players{margin:0;padding-left:20px;text-align:left}
