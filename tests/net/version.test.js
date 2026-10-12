@@ -159,14 +159,17 @@ describe('library versions in one room', { concurrency: 3 }, () => {
     assert.ok(await until(async () => (await H.state()).linked, 8000), 'a phone of our version pairs after it: ' + await shows([H]));
   });
 
-  test('nearby: the previous release pairs with this one', T, async t => {
-    if (!prev) { t.skip('no earlier release tag in this checkout'); return; }
-    const W = world(t, { rtc: true });
-    const H = await W.tab('p1tab', {}, { library: prev.library }), G = await W.tab('p2tab');
-    await H.near('Аня'); await G.near('Богдан');
-    await pairUp(H, G);
-    assert.ok(await until(settled([H, G]), 8000), prev.tag + ': ' + await shows([H, G]));
-    await H.send({ t: 'x', n: 1 }); await G.send({ t: 'x', n: 2 });
-    assert.ok(await until(async () => (await G.got()).join() === 'Аня:x:1' && (await H.got()).join() === 'Богдан:x:2', 3000));
-  });
+  // (since phase 1b the host says its hello only in answer to the guest's: an old one says its own at once, either way)
+  for (const oldHost of [true, false]) {
+    test('nearby: the previous release pairs with this one (' + (oldHost ? 'the old one' : 'this one') + ' shows the code)', T, async t => {
+      if (!prev) { t.skip('no earlier release tag in this checkout'); return; }
+      const W = world(t, { rtc: true });
+      const H = await W.tab('p1tab', {}, oldHost ? { library: prev.library } : {}), G = await W.tab('p2tab', {}, oldHost ? {} : { library: prev.library });
+      await H.near('Аня'); await G.near('Богдан');
+      await pairUp(H, G);
+      assert.ok(await until(settled([H, G]), 8000), prev.tag + ': ' + await shows([H, G]));
+      await H.send({ t: 'x', n: 1 }); await G.send({ t: 'x', n: 2 });
+      assert.ok(await until(async () => (await G.got()).join() === 'Аня:x:1' && (await H.got()).join() === 'Богдан:x:2', 3000));
+    });
+  }
 });

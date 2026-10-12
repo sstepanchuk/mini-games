@@ -1,20 +1,22 @@
 // The room's rules for an open game (library/app/rules.js), as they work today: who plays and who waits, whose
 // copy runs the round, who is away and why, when the round moves to another copy, what the game hears when its
-// players change. The known bugs are { todo } tests of what should happen; phase 1 turns them green.
+// players change.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { absence, arrivesLoading, awayMs, goneForGood, inGame, loadingTooLong, offerUpdate, onlineSince, paused, playersChange, reloadNow, roleOf, runnerOf, sameWire,
-  seating, snapFits, takeOver, versionGap, waitingFor } from '../library/app/rules.js';
+import { absence, arrivesLoading, awayMs, canRelease, goneForGood, inGame, offerUpdate, onlineSince, paused, playersChange, reloadNow, roleOf, runnerOf, sameWire,
+  seating, snapFits, stale, takeOver, versionGap, waitingFor } from '../library/app/rules.js';
 
 const G = 'dragons', WAIT = 10000, HOLD = 180000, NOW = 1000000;   // AUTH_WAIT and HOLD as the library has them
 // The room as together.js shows it to the rules. here: the game each player has open (everyone: G, unless given);
-// away: ms since a player dropped out; loading: since when (ms) a player's new tab has not opened the game; wire: the
-// wire number of each player's copy of G (not given: their library does not say).
-const room = ({ me = 'Аня', players = ['Аня', 'Богдан'], here, stale = [], loading = {}, away = {}, weak = [], nearby = false, role = 'host', host = players[0], now = NOW, wire = {} } = {}) => {
+// away: ms since a player dropped out (or went quiet: the room says so at once); loading: since when (ms) a player who
+// is back has not opened the game (longer than HOLD: stale); wire: the wire number of each player's copy of G (not
+// given: their library does not say).
+const room = ({ me = 'Аня', players = ['Аня', 'Богдан'], here, loading = {}, away = {}, nearby = false, role = 'host', host = players[0], now = NOW, wire = {} } = {}) => {
   const h = here || Object.fromEntries(players.map(p => [p, G]));
-  return { me, players, here: p => h[p], wire: (p, game) => game === G ? wire[p] : undefined, stale: new Set(stale), loading: new Map(Object.entries(loading)), away: p => away[p] || 0,
-    weak: p => weak.includes(p), nearby, role, host, now };
+  return { me, players, here: p => h[p], wire: (p, game) => game === G ? wire[p] : undefined, loading: new Map(Object.entries(loading)), away: p => away[p] || 0,
+    nearby, role, host, hold: HOLD, now };
 };
+const STALE = NOW - HOLD - 1;                                     // loading since then: for longer than a place is kept
 // what together.js counts for the open game (recount)
 const seats = (f, n, mine = G) => seating(inGame(f, G, mine), n, f.me);
 
@@ -56,8 +58,9 @@ test('in the game: not a player whose copy of the game speaks another wire numbe
 });
 
 test('in the game: not a stale player (their new tab never opened the game), though they are still in the room', () => {
-  assert.deepEqual(inGame(room({ stale: ['Богдан'] }), G, G), ['Аня']);
-  assert.deepEqual(inGame(room({ stale: ['Аня'] }), G, G), ['Аня', 'Богдан']);      // never us
+  assert.deepEqual(inGame(room({ loading: { Богдан: STALE } }), G, G), ['Аня']);
+  assert.deepEqual(inGame(room({ loading: { Богдан: NOW - HOLD } }), G, G), ['Аня', 'Богдан']);   // (strictly longer)
+  assert.deepEqual(inGame(room({ loading: { Аня: STALE } }), G, G), ['Аня', 'Богдан']);      // never us
 });
 
 /* ---------- seats ---------- */
@@ -95,7 +98,7 @@ test('seats: alone in the game, we are seated but play with nobody', () => {
 test('seats: a dropped player keeps their seat; a stale one gives it to the one waiting', () => {
   const players = ['Аня', 'Богдан', 'Сава'];
   assert.deepEqual(seats(room({ players, away: { Богдан: 170000 } }), 2).seated, ['Аня', 'Богдан']);
-  assert.deepEqual(seats(room({ players, stale: ['Богдан'] }), 2).seated, ['Аня', 'Сава']);
+  assert.deepEqual(seats(room({ players, loading: { Богдан: STALE } }), 2).seated, ['Аня', 'Сава']);
 });
 
 /* ---------- whose copy runs the round ---------- */
@@ -137,19 +140,21 @@ test('absence: here', () => {
   assert.equal(awayMs(room(), 'Богдан'), 0);
 });
 
-test('absence: dropped out (the room keeps their place), for as long as the room says', () => {
+test('absence: dropped out (the room keeps their place), since then as the room says', () => {
   const f = room({ away: { Богдан: 4000 } });
-  assert.deepEqual(absence(f, 'Богдан'), { ms: 4000, why: 'link' });
+  assert.deepEqual(absence(f, 'Богдан'), { since: NOW - 4000, why: 'link' });
   assert.equal(awayMs(f, 'Богдан'), 4000);
 });
 
-test('absence: back in a new tab or device whose game is not open yet: loading, since then (at least 1 ms)', () => {
-  assert.deepEqual(absence(room({ loading: { Богдан: NOW - 3000 } }), 'Богдан'), { ms: 3000, why: 'loading' });
-  assert.deepEqual(absence(room({ loading: { Богдан: NOW } }), 'Богдан'), { ms: 1, why: 'loading' });
+test('absence: back and their game not open yet: loading, since then (for at least 1 ms)', () => {
+  assert.deepEqual(absence(room({ loading: { Богдан: NOW - 3000 } }), 'Богдан'), { since: NOW - 3000, why: 'loading' });
+  assert.equal(awayMs(room({ loading: { Богдан: NOW - 3000 } }), 'Богдан'), 3000);
+  assert.deepEqual(absence(room({ loading: { Богдан: NOW } }), 'Богдан'), { since: NOW, why: 'loading' });
+  assert.equal(awayMs(room({ loading: { Богдан: NOW } }), 'Богдан'), 1);
 });
 
 test('absence: dropped out while loading counts as dropped out', () => {
-  assert.deepEqual(absence(room({ away: { Богдан: 2000 }, loading: { Богдан: NOW - 9000 } }), 'Богдан'), { ms: 2000, why: 'link' });
+  assert.deepEqual(absence(room({ away: { Богдан: 2000 }, loading: { Богдан: NOW - 9000 } }), 'Богдан'), { since: NOW - 2000, why: 'link' });
 });
 
 /* ---------- coming back, loading, stale ---------- */
@@ -160,32 +165,61 @@ test('arrival: back in a new tab or device with a game open: loading until their
   assert.equal(arrivesLoading(room({ here: { Аня: G, Богдан: null } }), 'Богдан', 'relinked', true), false);   // no game open
 });
 
-test('arrival: a player joining (no place kept) counts as here at once', () => {
+test('arrival: a player joining with no game open as far as we know (new, or on the shelf) counts as here at once', () => {
   assert.equal(arrivesLoading(room({ here: { Аня: G, Богдан: null } }), 'Богдан', 'join'), false);
+  assert.equal(arrivesLoading(room({ here: { Аня: G } }), 'Богдан', 'join'), false);   // never here before
 });
 
-test('stale: loading for longer than a place is kept (strictly)', () => {
-  const loading = new Map([['Богдан', NOW - HOLD - 1], ['Сава', NOW - HOLD], ['Дана', NOW - 5]]);
-  assert.deepEqual(loadingTooLong(loading, NOW, HOLD), ['Богдан']);
-  assert.deepEqual(loadingTooLong(new Map(), NOW, HOLD), []);
+// A player whose place dropped (HOLD over, or «Не чекати») comes back: the room says 'join', not 'relinked', and
+// the shared state still has their old here:. They count as loading (seated, the game waits) until a here: they
+// wrote after joining arrives (together.js), so what the game sends them after that reaches their game.
+test('arrival: back after their place dropped, with an old here:, a player is loading', () => {
+  const f = room({ players: ['Аня', 'Богдан'] });                  // here:Богдан is still G, from before
+  assert.equal(arrivesLoading(f, 'Богдан', 'join'), true);
+  f.loading.set('Богдан', NOW);                                   // what together.js does on 'join'
+  assert.deepEqual(seats(f, 2).seated, ['Аня', 'Богдан']);
+  assert.deepEqual(absence(f, 'Богдан'), { since: NOW, why: 'loading' });
+  assert.equal(paused(f, ['Богдан']), true);
+  assert.deepEqual(waitingFor(f, ['Богдан']), [{ name: 'Богдан', left: HOLD - 1, why: 'loading', release: false }]);
+});
+
+test('stale: loading for longer than a place is kept (strictly); never a player who is not loading', () => {
+  const f = room({ players: ['Аня', 'Богдан', 'Сава', 'Дана'], loading: { Богдан: STALE, Сава: NOW - HOLD, Дана: NOW - 5 }, away: { Аня: HOLD * 2 } });
+  assert.deepEqual(f.players.filter(p => stale(f, p)), ['Богдан']);
+  assert.equal(stale(room(), 'Богдан'), false);
 });
 
 /* ---------- the game pauses ---------- */
-test('pause: one of the players we play with went quiet or is still loading', () => {
+// (a player whose link went quiet is away: the room marks them so at once, net/room.js presence)
+test('pause: one of the players we play with is away (dropped out, went quiet) or is still loading', () => {
   assert.equal(paused(room(), ['Богдан']), false);
-  assert.equal(paused(room({ weak: ['Богдан'] }), ['Богдан']), true);
+  assert.equal(paused(room({ away: { Богдан: 300 } }), ['Богдан']), true);
   assert.equal(paused(room({ loading: { Богдан: NOW - 1 } }), ['Богдан']), true);
-  assert.equal(paused(room({ players: ['Аня', 'Богдан', 'Сава'], weak: ['Сава'], loading: { Сава: NOW } }), ['Богдан']), false);   // Сава waits for a seat
-  assert.equal(paused(room({ weak: ['Богдан'] }), []), false);
+  assert.equal(paused(room({ players: ['Аня', 'Богдан', 'Сава'], away: { Сава: 300 }, loading: { Сава: NOW } }), ['Богдан']), false);   // Сава waits for a seat
+  assert.equal(paused(room({ away: { Богдан: 300 } }), []), false);
 });
 
 /* ---------- waiting for players ---------- */
-test('waiting for: who of those we play with is away, and the time left of their place', () => {
+test('waiting for: who of those we play with is away, why, and the time left (of their place; loading: until stale)', () => {
   const f = room({ players: ['Аня', 'Богдан', 'Сава', 'Дана'], away: { Богдан: 5000 }, loading: { Сава: NOW - 2000 } });
-  assert.deepEqual(waitingFor(f, ['Богдан', 'Сава', 'Дана'], HOLD), [{ name: 'Богдан', left: 175000 }, { name: 'Сава', left: 178000 }]);
-  assert.deepEqual(waitingFor(room({ away: { Богдан: HOLD + 5000 } }), ['Богдан'], HOLD), [{ name: 'Богдан', left: 0 }]);
-  assert.deepEqual(waitingFor(room(), ['Богдан'], HOLD), []);
-  assert.deepEqual(waitingFor(room({ away: { Сава: 5000 }, players: ['Аня', 'Богдан', 'Сава'] }), ['Богдан'], HOLD), []);   // not one we play with
+  assert.deepEqual(waitingFor(f, ['Богдан', 'Сава', 'Дана']), [{ name: 'Богдан', left: 175000, why: 'link', release: true }, { name: 'Сава', left: 178000, why: 'loading', release: false }]);
+  assert.deepEqual(waitingFor(room({ away: { Богдан: HOLD + 5000 } }), ['Богдан']), [{ name: 'Богдан', left: 0, why: 'link', release: true }]);
+  assert.deepEqual(waitingFor(room({ away: { Богдан: 2000 }, loading: { Богдан: NOW - 9000 } }), ['Богдан']), [{ name: 'Богдан', left: 178000, why: 'link', release: true }]);
+  assert.deepEqual(waitingFor(room(), ['Богдан']), []);
+  assert.deepEqual(waitingFor(room({ away: { Сава: 5000 }, players: ['Аня', 'Богдан', 'Сава'] }), ['Богдан']), []);   // not one we play with
+});
+
+// (phase 1b, integration: a guest cut off from the room's host sees everyone else away too, net/room.js presence; its
+// «Не чекати» for them did nothing: the word never reached the host, or reached it when they were back)
+test('«Не чекати» only where it works: the host for anyone; a guest for anyone while it hears the host; cut off, only for the host', () => {
+  const three = o => room({ me: 'Сава', players: ['Аня', 'Богдан', 'Сава'], role: 'guest', host: 'Аня', ...o });
+  const rel = f => Object.fromEntries(waitingFor(f, f.players.filter(p => p !== f.me)).map(x => [x.name, x.release]));
+  assert.deepEqual(rel(room({ players: ['Аня', 'Богдан', 'Сава'], away: { Богдан: 5000, Сава: 5000 } })), { Богдан: true, Сава: true });
+  assert.deepEqual(rel(three({ away: { Богдан: 5000 } })), { Богдан: true });
+  assert.deepEqual(rel(three({ away: { Аня: 5000, Богдан: 5000 } })), { Аня: true, Богдан: false });
+  assert.deepEqual(rel(three({ role: null, host: null, away: { Аня: 5000, Богдан: 5000 } })), { Аня: false, Богдан: false });   // looking for the room
+  assert.deepEqual(rel(three({ loading: { Аня: NOW - 5 } })), { Аня: false });   // opening the game: nothing to press
+  assert.equal(canRelease(three({ away: { Аня: 5000 } }), 'Аня'), true);
 });
 
 /* ---------- the round moves to another copy ---------- */
@@ -198,8 +232,10 @@ test('online clock: starts when we are online, keeps its start, and stops when w
 
 // Богдан plays with Аня, whose copy runs the round
 const pair = o => room({ me: 'Богдан', players: ['Аня', 'Богдан'], role: 'guest', host: 'Аня', ...o });
-const take = (f, { seated = f.players.filter(p => f.here(p) === G).slice(0, 2), runner = 'Аня', since = NOW - WAIT, now = NOW } = {}) =>
-  takeOver(f, { seated, runner, since, now, wait: WAIT });
+const take = (f, { seats = 2, runner = 'Аня', since = NOW - WAIT, now = NOW } = {}) => {
+  const s = seating(inGame(f, G, G), seats, f.me);
+  return takeOver(f, { inGame: s.inGame, seated: s.seated, runner, since, now, wait: WAIT });
+};
 
 test('takeover: never while our own copy runs the round, or nobody does', () => {
   assert.equal(take(pair({ away: { Аня: 60000 } }), { runner: 'Богдан' }), null);
@@ -228,24 +264,28 @@ test('takeover: nearby, two phones that lose each other never take over', () => 
   assert.equal(take(pair({ away: { Аня: 60000 }, role: 'host', host: 'Богдан', nearby: true })), null);
 });
 
-test('takeover: company, someone else in the room is here (seated, waiting or on the shelf), even nearby', () => {
+// (C4: only who has the game open counts; someone on the shelf or stale says nothing of the round's players)
+test('takeover: company, someone else who has the game open (waiting for a seat, or seated) is here, even nearby', () => {
   const trio = o => room({ me: 'Богдан', players: ['Аня', 'Богдан', 'Сава'], role: 'host', host: 'Богдан', nearby: true, away: { Аня: 12000 }, ...o });
   assert.equal(take(trio()), 'company');                                         // Сава waits for a seat
-  assert.equal(take(trio({ here: { Аня: G, Богдан: G, Сава: null } })), 'company');   // Сава is on the shelf
-  assert.equal(take(trio({ stale: ['Сава'] })), 'company');                      // a stale player is still in the room
+  assert.equal(take(trio(), { seats: 3 }), 'company');                          // Сава plays too
+  assert.equal(take(trio({ here: { Аня: G, Богдан: G, Сава: null } })), null);   // Сава is on the shelf: not company
+  assert.equal(take(trio({ here: { Аня: G, Богдан: G, Сава: 'other' } })), null);   // in another game: not either
+  assert.equal(take(trio({ loading: { Сава: STALE } })), null);                 // stale: out of the game, not company
   assert.equal(take(trio({ away: { Аня: 12000, Сава: 3000 } })), null);         // Сава dropped out too
   assert.equal(take(trio({ loading: { Сава: NOW - 3000 } })), null);            // Сава is still opening the game
   assert.equal(take(trio({ nearby: false, role: 'guest', host: 'Сава' }), { since: 0 }), 'company');
 });
 
+// Дана, waiting for a seat, holds the room (its host): whoever is seated hears her
 test('takeover: only the first seated player who is here takes the round over', () => {
-  const players = ['Аня', 'Сава', 'Богдан', 'Дана'], seated = ['Аня', 'Сава', 'Богдан'];
-  const f = (me, o) => room({ me, players, role: me === 'Сава' ? 'host' : 'guest', host: 'Сава', away: { Аня: 12000 }, ...o });
-  assert.equal(take(f('Сава'), { seated }), 'company');
-  assert.equal(take(f('Богдан'), { seated }), null);
-  assert.equal(take(f('Дана'), { seated }), null);                              // waiting: no seat
-  assert.equal(take(f('Богдан', { loading: { Сава: NOW - 2000 } }), { seated }), 'company');   // Сава still loading: the next one
-  assert.equal(take(f('Богдан', { away: { Аня: 12000, Сава: 500 } }), { seated }), 'company');
+  const players = ['Аня', 'Сава', 'Богдан', 'Дана'];
+  const f = (me, o) => room({ me, players, role: me === 'Дана' ? 'host' : 'guest', host: 'Дана', away: { Аня: 12000 }, ...o });
+  assert.equal(take(f('Сава'), { seats: 3 }), 'company');
+  assert.equal(take(f('Богдан'), { seats: 3 }), null);
+  assert.equal(take(f('Дана'), { seats: 3 }), null);                            // waiting: no seat
+  assert.equal(take(f('Богдан', { loading: { Сава: NOW - 2000 } }), { seats: 3 }), 'company');   // Сава still loading: the next one
+  assert.equal(take(f('Богдан', { away: { Аня: 12000, Сава: 500 } }), { seats: 3 }), 'company');
 });
 
 test('takeover: a runner still opening the game in a new tab counts as away', () => {
@@ -255,10 +295,28 @@ test('takeover: a runner still opening the game in a new tab counts as away', ()
 });
 
 // A guest cut off from the room's host only knows the others' presence as the host last told it: with the host
-// (who also runs the round) gone, a third player still looks here, and the guest splits the round (today: 'company').
-test('takeover: a guest cut off from the room\'s host cannot vouch for anyone', { todo: 'phase 2 (C4)' }, () => {
-  const f = room({ me: 'Богдан', players: ['Аня', 'Богдан', 'Сава'], role: 'guest', host: 'Аня', away: { Аня: 12000 } });
-  assert.equal(take(f, { seated: ['Аня', 'Богдан'], since: 0 }), null);
+// (who also runs the round) gone, a third player still looks here, and the guest would split the round. It waits for
+// a host again (internet: after HOST_WAIT the first player here holds the room; nearby: never, the room waits).
+test('takeover: a guest cut off from the room\'s host cannot vouch for anyone', () => {
+  const f = o => room({ me: 'Богдан', players: ['Аня', 'Богдан', 'Сава'], role: 'guest', host: 'Аня', away: { Аня: 12000 }, ...o });
+  assert.equal(take(f(), { since: 0 }), null);
+  assert.equal(take(f()), null, 'nor reached: it hears no host');
+  assert.equal(take(f({ nearby: true })), null);
+  assert.equal(take(f({ host: null })), null, 'its host gone from its links: nobody to hear');
+  assert.equal(take(f({ role: null, host: null })), null, 'looking for the room again');
+  // the round's runner is someone else, the room's host is gone: still nobody to vouch for
+  const g = room({ me: 'Богдан', players: ['Аня', 'Богдан', 'Сава', 'Дана'], role: 'guest', host: 'Дана', away: { Аня: 12000, Дана: 500 } });
+  assert.equal(take(g, { since: 0, seats: 3 }), null);
+  // a host again: as soon as Богдан holds the room (or hears its new host), Сава's company counts
+  assert.equal(take(f({ role: 'host', host: 'Богдан' }), { since: 0 }), 'company');
+  assert.equal(take(room({ me: 'Богдан', players: ['Аня', 'Богдан', 'Сава'], role: 'guest', host: 'Сава', away: { Аня: 12000 } }), { since: 0 }), 'company');
+});
+
+// What cuts a guest off is its link: a host still opening the game (back in a new tab) is heard all the same.
+test('takeover: a guest hears its host while that host is only loading', () => {
+  const f = room({ me: 'Богдан', players: ['Аня', 'Богдан', 'Сава'], role: 'guest', host: 'Сава', away: { Аня: 12000 }, loading: { Сава: NOW - 3000 } });
+  assert.equal(take(f), 'reached');
+  assert.equal(take(f, { since: 0 }), null, 'Сава loading is no company');
 });
 
 /* ---------- what the game hears when its players change ---------- */
@@ -365,15 +423,4 @@ test('versions: the note offers «Оновити» only on the older page, and n
   assert.equal(offerUpdate({ ...older, older: false }, { nearby: false }), false);   // the newer page has nothing newer to get
   assert.equal(offerUpdate(older, { nearby: true }), false);                         // a reload would end the room for every phone
   assert.equal(offerUpdate(null, { nearby: false }), false);
-});
-
-// A player whose place dropped (HOLD over, or «Не чекати») comes back: the room says 'join', not 'relinked', and
-// the shared state still has their old here:. Today they are seated and here at once, so the game goes on without
-// them; they should count as loading until a here: they write after joining arrives.
-test('arrival: back after their place dropped, with an old here:, a player is loading', { todo: 'phase 1b (D1)' }, () => {
-  const f = room({ players: ['Аня', 'Богдан'] });                  // here:Богдан is still G, from before
-  if (arrivesLoading(f, 'Богдан', 'join')) f.loading.set('Богдан', NOW);   // what together.js does on 'join'
-  assert.deepEqual(seats(f, 2).seated, ['Аня', 'Богдан']);
-  assert.deepEqual(absence(f, 'Богдан'), { ms: 1, why: 'loading' });
-  assert.equal(paused(f, ['Богдан']), true);
 });

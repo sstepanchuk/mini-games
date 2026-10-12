@@ -41,6 +41,19 @@ describe('internet rooms: linking up, messages, a full room, leaving, «Не ч�
     assert.match(await C.send({ t: 'p' }), /a message needs a string t/);
   });
 
+  // (phase 1b review: room.lag merged its figures with reduce(Math.max), whose index and array arguments made it NaN as
+  // soon as two links counted: the slowest of two guests at the host, or one player's two links while a new tab takes
+  // over; a game that keeps its picture behind by a NaN stops it for good)
+  test('the delay to the slowest player, or to one (room.lag), is a number of ms, also at a host with two guests', T, async t => {
+    const W = world(t);
+    const [A, B, C] = await room(W, 'rooms8', ['Аня', 'Богдан', 'Сава']);
+    await sleep(1000);                                       // (a few pings measured)
+    for (const [X, n] of [[A, undefined], [A, 'Сава'], [B, undefined], [B, 'Аня'], [C, 'Богдан']]) {
+      const v = await X.lag(n);
+      assert.ok(Number.isFinite(v) && v >= 0, (await X.state()).me + ' → ' + (n || 'the slowest') + ': ' + v);
+    }
+  });
+
   test('a full room says so; a place that comes free is taken', T, async t => {
     const W = world(t);
     const [A, B] = await room(W, 'rooms3', ['Аня', 'Богдан'], { max: 2 });
@@ -106,7 +119,7 @@ describe('internet rooms: linking up, messages, a full room, leaving, «Не ч�
     assert.deepEqual(s.map(x => x.role), ['host', 'guest', 'guest', 'guest', 'guest']);
   });
 
-  test('strangers: the host asks them to say hello again, a guest says we are not together; once in 2 s each', T, async t => {
+  test('strangers: the host asks them to say hello again, a guest says we are not together (a bye that keeps every place); once in 2 s each', T, async t => {
     const W = world(t);
     const [A, B] = await room(W, 'rooms6', ['Аня', 'Богдан']);
     const { topic } = await A.info('rooms6');
@@ -119,7 +132,7 @@ describe('internet rooms: linking up, messages, a full room, leaving, «Не ч�
     assert.ok(await until(() => said(A.session, eve).length && said(B.session, eve).length && said(A.session, mal).length, 3000), 'every one is answered');
     const host = said(A.session, eve)[0], guest = said(B.session, eve)[0];
     assert.equal(host.t, 'host'); assert.equal(host.u, 1); assert.equal(host.c, 2);
-    assert.equal(guest.t, 'bye'); assert.equal(guest.menu, 1);
+    assert.equal(guest.t, 'bye'); assert.equal(guest.menu, undefined, 'not final: nobody left for good (room.js, the places invariant)');
     assert.equal(said(A.session, mal)[0].u, 1);
     S.publish(topic, { t: 'here', to: A.session }, eve);     // again at once: not answered again
     await sleep(600);

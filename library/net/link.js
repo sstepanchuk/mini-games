@@ -8,17 +8,20 @@
 // every pulse: "I have everything up to here"); until then it is sent again, by whatever path works, with growing
 // pauses. So nothing is lost to a dead direct link, brokers that are reconnecting, or a phone that was offline for
 // a minute. The receiver runs them exactly once and in order: a message that overtook a missing one waits for it.
+// That holds for one link: when a link starts over (a new one with the same player, or more than OUTBOX_MAX not
+// acknowledged: the mode's restart), what was not acknowledged is gone, and the room says 'relinked' so that the
+// game sends the full picture again.
 // A reliable message becomes JSON once, before it gets its number (wire): one that cannot (a cycle, a BigInt)
 // throws a TypeError at the call and takes no number, so nothing after it waits for it; and what is kept and sent
 // again is that JSON read back, which a later change to the caller's object cannot touch.
 import { BROKERS, TIMING } from './config.js';
 import { bestBrokers, brokerDiag, kickBrokers, pubData, tendBrokers } from './brokers.js';
 import { closeRtc, dcFresh, dcHear, dcLive, dcQuiet, probeLink, startRtc } from './rtc.js';
-import { holdOver, hostPeer, linkedPeers, weakChanged } from './room.js';
+import { awaySince, holdOver, hostPeer, linkedPeers, weakChanged } from './room.js';
 
 const RELAY_EVERY = 33;                                // a "latest" stream goes through the brokers at most this often, ms
 const ACK_DELAY = 25;                                  // reliable messages that came: say so this soon (with the next ones)
-const OUTBOX_MAX = 5000;                               // reliable messages not yet acknowledged: more means they are gone
+const OUTBOX_MAX = 5000;                               // reliable messages not yet acknowledged: more, and the link starts over
 const HOLD_MAX = 4096;                                 // messages that overtook a missing one, waiting for it
 const RESEND_PER_TICK = 64;
 
@@ -35,12 +38,11 @@ export function resetPaths(P) {
 // traffic, and nothing waits behind older ones. latest: true or a stream name.
 export function send(P, m, { fast = false, latest = false } = {}) {
   const N = P.N;
-  if (N.closed || !P.linked) return;
+  if (N.closed || !P.linked || (!N.relay && !P.pc)) return;   // (nearby, a link whose direct link closed carries nothing more: pairing again makes a new one)
   if (!fast) {
     m = wire(m);                                       // (throws before it takes a number)
     m._x = ++P.tx;                                     // (a copy of its own: the same message may go to several players)
-    P.outbox.push({ m, at: performance.now(), n: 1 });
-    if (P.outbox.length > OUTBOX_MAX) { queueMicrotask(() => { if (P.linked) N.peerGone(P); }); return; }   // they have not heard us for ages (not now: we may be in a loop over the links)
+    P.outbox.push({ m, at: performance.now(), n: 1 });   // (more than OUTBOX_MAX: the link starts over, see watchPeer)
   }
   transmit(P, m, fast, fast && latest ? (latest === true ? '' : String(latest)) : null);
 }
@@ -113,7 +115,7 @@ export function deliver(P, m, viaRelay) {
   if (!Number.isInteger(x) || x < P.rxNext) return;   // a copy that came by the other path, or a resend we already have
   if (m.t === 'bye' && P.byeX !== x) {                 // their tab closed (menu: they left for good): at once, whatever is missing
     P.byeX = x;                                        // (it still takes its place in the order below, or nothing after it would run)
-    N.byeFrom(P, m.menu === 1);
+    N.byeFrom(P, m.menu === 1, m.moved === 1);
     if (N.closed || !P.linked) return;
   }
   ackSoon(P);                                          // (also for one that waits: they learn what we still miss)
@@ -213,7 +215,7 @@ export function refresh(P) {
 // Detailed connection state for bug reports (not shown to players).
 export function diag(N) {
   const f = v => v == null ? '—' : Math.round(v) + ' ms';
-  const head = ['room: ' + (N.relay ? 'internet' : 'nearby') + ', role: ' + (N.role || '—') + ', players: ' + N.members.map(m => m.n + (m.a ? ' (away)' : '')).join(', ') + ' (at most ' + N.max + ')'];
+  const head = ['room: ' + (N.relay ? 'internet' : 'nearby') + ', role: ' + (N.role || '—') + ', players: ' + N.members.map(m => m.n + (awaySince(N, m) ? ' (away)' : '')).join(', ') + ' (at most ' + N.max + ')'];
   if (N.relay) head.push('brokers: ' + brokerDiag(N));
   return head.concat(linkedPeers(N).map(P => {
     const used = P.via === 'p2p' ? (P.turn ? 'direct link through a TURN relay' : P.turn === false ? 'direct' : 'direct link') : 'brokers';
@@ -235,12 +237,13 @@ export function watch(N) {
   if (N.closed) return;
   // Our own tab was asleep (phone locked, timers throttled): the silence was ours, not theirs.
   // Give the connections a few seconds to come back before judging the others. Away for longer than anyone
-  // waits: they have let us go, so we find our way back (the mode's longSleep; true: it started over).
+  // waits for the room's host: the others may have moved on, so the mode finds our way back (longSleep; true: it
+  // started over).
   if (slept) {
     N.graceUntil = now + TIMING.GRACE;
     for (const P of N.peers.values()) P.lastSeen = now;
     kick(N);
-    if (gap > N.lostAfter && N.longSleep()) return;
+    if (gap > TIMING.HOST_WAIT && N.longSleep(gap)) return;
   }
   if (N.relay) tendBrokers(N, now);
   holdOver(N, now);                                    // places kept too long go
@@ -261,6 +264,8 @@ function watchPeer(P, now) {
     if (dc) sendDirect(P, p);
     if (!dc || P.via !== 'p2p' || !dcFresh(P) || dcQuiet(P) || P.pN % 6 === 0) sendRelay(P, p);   // through the brokers when the game goes that way, the direct link is quiet, and now and then to measure
   }
+  if (P.outbox.length > OUTBOX_MAX) N.restart(P);     // they have not heard us for ages: the link starts over (the mode's)
+  if (N.closed || !P.linked) return;
   resend(P, now);
   if (now < N.graceUntil) return;
   const quiet = now - P.lastSeen;

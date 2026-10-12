@@ -11,7 +11,8 @@
 //                                          library's room (together.js), and A.open(game), A.game(), A.gsend(m) → true |
 //                                          false, A.snapshot(s), A.share(k, v) …;
 //                                          A.near(name): a nearby one (rtc), paired with A.pair('offer' | 'answer' | 'finish', code)
-//   await A.state(), A.events(), A.got(), A.net({ up: false }), A.send(m, opts, then), A.release(n), A.leave(), A.kill() …
+//   await A.state(), A.events(), A.got(), A.net({ up: false }), A.send(m, opts, then), A.release(n), A.lag(n), A.leave(), A.kill(),
+//   A.listeners() …
 //   await until(async () => …, ms)         poll a condition (truthy → it; deadline → false)
 //   const S = W.spy()                      S.seen: [{ topic, url, m }]; S.publish(topic, m, session): to every broker
 //   await room(W, code, names, o)          tabs for these players, linked one after another and settled
@@ -101,6 +102,7 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
         sendAs: (m, as, opts) => call('send', { m, opts, as }),    // m, whose toJSON says it is `as`
         sendAll: (list, opts) => call('send', { list, opts }),
         release: n => call('release', { n }),
+        lag: n => call('lag', { n }),                      // room.lag(n): one-way delay, ms (n: a name, or the slowest)
         leave: final => call('leave', { final }),
         net: o => call('net', o),
         errors: () => call('errors'),
@@ -116,7 +118,8 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
         siteData: on => call('siteData', { on }),          // the browser blocks the page's site data (false) or allows it
         reloadDone: () => call('reloadDone'),              // the shell's reload, its offline copy in place: 'reload' | 'stay' | null
         stored: k => call('stored', { k }),                // sessionStorage[k] (JSON), as the next page would find it
-        freeze: ms => call('freeze', { ms }),              // the tab stops for ms (→ when it runs again)
+        freeze: ms => call('freeze', { ms }),              // the tab stops for ms (→ when it runs again, on the clock of its events)
+        listeners: () => call('listeners'),                // the page's listeners on window and document now: { 'window:pagehide': 1, … }
         kick: () => call('kick'),
         // the tab is killed (a crash, a phone that dies): nothing more goes out
         kill: () => w.terminate(),

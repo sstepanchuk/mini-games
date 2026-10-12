@@ -6,8 +6,9 @@
      (roomstate.js): the same for everyone, whoever passes the messages on.
    - Each game gets the room as ihroteka.room, with as many seats as it has (game.json "players"): the first
      players to have it open, in the room's order, play; anyone after them waits for a seat. A player who
-     dropped out keeps their seat while the room keeps their place: the game pauses, and the library shows who
-     we wait for, with a way not to (invite.js).
+     dropped out keeps their seat while the room keeps their place, and one who is back (in a new tab or device, or
+     after their place dropped) keeps it while their game opens there: the game pauses, and the library's card says
+     whom we wait for and why (rules.absence; invite.js), with a way not to wait for one who dropped out.
    - A round outlives the device that runs it: the game hands the library snapshots (room.snapshot) and every
      player keeps the latest. If the player whose copy runs the round has been away for AUTH_WAIT, the next one
      here runs it on from the snapshot (event 'resume'); whoever comes back simply plays on. A game closed mid-round
@@ -37,6 +38,10 @@
    did); chunked lib-state is plain lib-state; lib-snap before lib-state changes nothing for it. It writes no wire:
    key: its copies speak wire 1 (rules.sameWire), as every game does in this release, so it is seated with anyone
    (once a game raises its number, not in that game).
+   And with phase 1b's: a player back after their place dropped counts as loading until a here: of theirs comes; a
+   library from before 1b, back on the same page, never writes it again: its greeting (lib-state from it, with the
+   here: we know) counts instead (onLibMessage), so the game waits for that, not for as long as a place is kept. (A
+   page of 1b or later greets with a here: of its own naming a game only while it has that game open: see greet.)
    The screens for all this are in invite.js; it follows the room through onChange.
    ===================================================================== */
 import { HOLD, joinNearby, joinRoom, NAME, PROTO, TIMING, validRoomCode } from '../net/index.js';
@@ -74,8 +79,8 @@ let myHere = null;                                       // the game we have ope
 let ch = null;                                           // the open game's channel (ihroteka.room)
 let replaced = null;                                     // { kind, code, name }: this player went on in another tab
 const snaps = new Map();                                 // game → { s, c, a, p }: a round's latest snapshot (s: null, a tombstone)
-const loading = new Map();                               // name → since when: back in a new tab or device, its game not open yet
-const stale = new Set();                                 // names whose new tab did not open their game for as long as a place is kept
+const loading = new Map();                               // name → since when: back (a new tab or device, or after their place
+                                                         //   dropped), its game not open there yet (rules.arrivesLoading)
 const GKEY = /^[\w-]{1,40}$/;                            // a game's shared key (see channel: shared, share)
 const listeners = new Set();
 
@@ -100,7 +105,8 @@ export const validName = n => NAME.test(n);
 const send = (m, to) => { if (linked()) room.send(m, to === undefined ? undefined : { to }); };
 // the screens follow the room: fn(what) with what = linked | join | leave | away | relinked | peer-gone |
 // replaced | status | weak | stats | left
-//   (and version: a friend's version differs, or no longer does; see versionGap)
+//   (and version: a friend's version differs, or no longer does, see versionGap; waiting: whom the open game waits
+//   for, or why, changed, see waitingFor)
 export const onChange = fn => listeners.add(fn);
 const changed = what => { for (const fn of listeners) safe(fn, what); };
 
@@ -128,7 +134,7 @@ export function comeBack() {
 }
 export function leave() {
   const r = room;
-  room = null; st = null; snaps.clear(); loading.clear(); stale.clear(); gapKey = '';
+  room = null; st = null; snaps.clear(); loading.clear(); gapKey = '';
   session.set(REJOIN, null);                             // (a reload under way does not bring us back: we left)
   if (r) { r.leave(); setQuery(null); }
   update();
@@ -139,13 +145,13 @@ const remember = (k, v) => safe(() => localStorage.setItem(k, v));
 export const state = () => ({ site: SITE, kind: room && room.kind, role: room && room.role, linked: linked(), online: !!room && room.online, status: room && room.lastStatus,
   me: room && room.me, players: room ? room.players : [], away: room ? room.players.filter(p => room.away(p)) : [], view: st && st.get('view'), myHere,
   here: room && st ? Object.fromEntries(room.players.map(p => [p, p === room.me ? myHere : st.get('here:' + p) ?? null])) : {},
-  game: ch && { players: ch.seated, linked: ch.api.linked, role: ch.api.role, host: ch.api.host, waiting: ch.api.waiting },
+  game: ch && { players: ch.seated, linked: ch.api.linked, role: ch.api.role, host: ch.api.host, waiting: ch.api.waiting, waitingFor: waitingFor() },
   keys: st ? st.entries().map(([k]) => k) : [], snaps: Object.fromEntries([...snaps].map(([v, x]) => [v, { s: x.s, c: x.c, a: x.a, p: x.p }])),
   auth: st ? Object.fromEntries(st.entries().filter(([k]) => k.startsWith('auth:')).map(([k, e]) => [k.slice(5), e.v])) : {},   // game → whose copy runs its round
   version: { gap: versionGap(), reloading, offer: offerUpdate() } });
 
 function wire(r, kind) {
-  room = r; r.kind = kind; st = roomState(r.me); snaps.clear(); loading.clear(); stale.clear(); replaced = null; gapKey = '';
+  room = r; r.kind = kind; st = roomState(r.me); snaps.clear(); loading.clear(); replaced = null; gapKey = '';
   // Which game we have open. A new tab of a player who is in a game says nothing yet: it follows the room into
   // that game in a moment, and a "not in the game" meanwhile would end the round for everyone (see staleHere).
   if (myHere) st.set('here:' + r.me, myHere);           // (the room's view: whoever opened the room shows the way)
@@ -157,25 +163,36 @@ function wire(r, kind) {
   const on = (name, fn) => r.on(name, (...a) => { if (room === r) { safe(fn, ...a); changed(name); } });
   // Someone new, or back from another tab or device: the rounds (their snapshots, tombstones too), then everything
   // we know, in chunks of up to CAP bytes (players' wire numbers first: nobody is seated before their wire is known).
+  // Not a here: of ours naming a game while we have none open: an older tab of ours wrote it, it is no news of this
+  // one (from us, it would end the wait for our game to open: see onLibMessage, libraries from before phase 1b).
   const greet = p => {
     for (const [v, s] of snaps) send(snapMsg(v, s), p);
-    for (const e of chunks(st.entries().sort(([a], [b]) => b.startsWith('wire:') - a.startsWith('wire:')))) send({ t: 'lib-state', e }, p);
+    const news = ([k, e]) => k !== 'here:' + r.me || !!myHere || !e.v;
+    for (const e of chunks(st.entries().filter(news).sort(([a], [b]) => b.startsWith('wire:') - a.startsWith('wire:')))) send({ t: 'lib-state', e }, p);
   };
+  // Whoever comes in (back after their place dropped, or a room of ours started over) may hold our here: from before
+  // and count us as loading until we write one after they came (rules.arrivesLoading): if we have a game open, we say
+  // so again whenever a link starts ('linked', 'join', 'relinked': ours may be the link that is new to them). (Not a
+  // here: null meanwhile: a new tab on its way into its player's game would end the round, see above.)
+  const sayHere = () => { if (myHere) publish(st.set('here:' + r.me, myHere)); };
   on('linked', () => {
     if (r.role === 'host' && st.get('view') === undefined) publish(st.set('view', shell.current()));
+    sayHere();
     for (const p of r.players) if (p !== r.me) greet(p);
     update();
   });
-  on('join', p => { greet(p); if (rules.arrivesLoading(facts, p, 'join')) loading.set(p, performance.now()); update(); });
+  // Back after their place dropped: until a here: they wrote since arrives, their game is not open as far as we know.
+  on('join', p => { sayHere(); greet(p); if (rules.arrivesLoading(facts, p, 'join')) loading.set(p, performance.now()); update(); });
   // Back in a new tab or device: until their game is open there again, the game waits for them (see 'here' below).
   // The same tab after its link started over: its game is still there, it only needs the full picture again.
   on('relinked', (p, fresh) => {
+    sayHere();
     greet(p);
     if (rules.arrivesLoading(facts, p, 'relinked', fresh)) loading.set(p, performance.now());
     update();
     if (!fresh && ch && ch.others.includes(p) && !loading.has(p)) ch.emit('relinked', p);
   });
-  on('leave', p => { quitRounds(p); update(); });
+  on('leave', p => { loading.delete(p); quitRounds(p); update(); });
   on('away', update);
   on('players', update);                                // (the room's order changed: the seats may have)
   on('peer-gone', () => {
@@ -247,9 +264,13 @@ function onLibMessage(m, from) {
     if (keys.includes('view')) { const v = st.get('view'); if (ID(v) && v !== shell.current()) shell.follow(v); }
     if (keys.includes('here:' + room.me)) staleHere(st.get('view'));
     if (keys.includes('wire:' + room.me)) staleWires();
-    // a player back in a new tab has a game open there now: that copy of the game needs the full picture
-    for (const k of keys) if (k.startsWith('here:')) stale.delete(k.slice(5));
-    const back = keys.filter(k => k.startsWith('here:') && loading.delete(k.slice(5))).map(k => k.slice(5));
+    // a player back (in a new tab, or after their place dropped) says where they are now: no longer loading (nor
+    // stale); if it is our game, that copy of it needs the full picture. Also when it is the here: we knew, from them:
+    // a library from before phase 1b, back on the same page, greets with the one it had and never writes it again.
+    const said = keys.filter(k => k.startsWith('here:')).map(k => k.slice(5));
+    const h = st.get('here:' + from);
+    if (loading.has(from) && h && m.e.some(e => Array.isArray(e) && e[0] === 'here:' + from && knownEntry(e) && e[1].v === h)) said.push(from);
+    const back = [...new Set(said)].filter(p => loading.delete(p));
     if (keys.length) update();
     if (keys.some(k => k.startsWith('wire:'))) versionCheck();
     if (ch) {
@@ -318,32 +339,34 @@ const facts = {
   get players() { return room.players; },
   here: p => st.get('here:' + p),
   wire: (p, game) => p === room.me ? myWire(game) : (st.get('wire:' + p) || {})[game],
-  stale, loading,
+  loading,
   away: p => room.away(p),
-  weak: p => room.stats(p).weak,
   get nearby() { return room.nearby; },
   get role() { return room.role; },
   get host() { return room.host; },
+  hold: HOLD,
   get now() { return performance.now(); }
 };
 // who has this game open, in the room's order; a player who dropped out keeps their place here too
 const inGameOf = c => room ? rules.inGame(facts, c.id, myHere) : [];
-// dropped out (their place is kept), or back in a new tab or device whose game is not open yet: for how long, ms
+// dropped out (their place is kept), or back and their game not open yet (rules.absence): for how long, ms
 const awayMs = p => room ? rules.awayMs(facts, p) : 0;
 // whose copy runs the round: the one the shared state names (authOf), if they play; else the first who plays
 const authOf = c => st && st.get('auth:' + c.id);
 const runnerOf = c => rules.runnerOf(c.seated, authOf(c));
 // The runner has been away for AUTH_WAIT: the first player here who plays takes the round over, if they can show
 // it is not them who dropped out (rules.takeOver); only that one writes it, everyone sees it in the shared state.
-// A player whose new tab has not opened their game for as long as a place is kept goes stale (out of the game).
+// Counted again each second too: a player still opening the game for as long as a place is kept goes stale (out of
+// the game, rules.stale), with no event to say so.
 let onlineSince = 0;
 function watchRunner() {
   const now = performance.now();
   versionCheck();
   onlineSince = rules.onlineSince(onlineSince, !!room && room.online, now);
-  for (const p of rules.loadingTooLong(loading, now, HOLD)) if (loading.delete(p)) { stale.add(p); update(); }
-  if (!ch || !room || !ch.api.linked) return;
-  if (rules.takeOver(facts, { seated: ch.seated, runner: runnerOf(ch), since: onlineSince, now, wait: AUTH_WAIT })) { publish(st.set('auth:' + ch.id, room.me)); update(); }
+  if (!ch || !room) return;
+  update();
+  if (!ch || !ch.api.linked) return;
+  if (rules.takeOver(facts, { inGame: ch.inGame, seated: ch.seated, runner: runnerOf(ch), since: onlineSince, now, wait: AUTH_WAIT })) { publish(st.set('auth:' + ch.id, room.me)); update(); }
 }
 
 /* ---------- versions: the library's (PROTO) and each game's (wire) ---------- */
@@ -398,7 +421,7 @@ function channel(id, seats) {
   const handlers = new Map(), inbox = [], late = [], warned = new Set();
   let pending = null, sendTimer = null, lastSent = 0;     // the latest snapshot not sent yet (at most two a second)
   const c = {
-    id, seats, disposed: false, was: [], seen: '', weak: false, role: null, runner: null, own: false,
+    id, seats, disposed: false, was: [], seen: '', weak: false, wait: '', role: null, runner: null, own: false,
     inGame: [], seated: [], waiting: [], others: [],
     emit(name, ...a) {
       for (const fn of handlers.get(name) || []) safe(fn, ...a);
@@ -576,13 +599,17 @@ function update() {
   c.maybeResume();
   const weak = c.api.linked && rules.paused(facts, c.others);
   if (weak !== c.weak) { c.weak = weak; c.emit('weak', weak); }
+  const wait = waitingFor().map(x => x.name + ':' + x.why).join();
+  if (wait !== c.wait) { c.wait = wait; changed('waiting'); }
   versionCheck();
 }
 
-// for the screens: the players we wait for in the open game (dropped out, their seat kept) → [{ name, left ms }]
+// For the screens (the card over the game, invite.js): the players we wait for in the open game, of those we play
+// with (rules.absence): dropped out, their seat kept ('link'), or back and opening the game ('loading')
+// → [{ name, left: ms, why, release: whether «Не чекати» works from here }]
 export function waitingFor() {
   if (!ch || !room || !ch.api.linked) return [];
-  return rules.waitingFor(facts, ch.others, HOLD);
+  return rules.waitingFor(facts, ch.others);
 }
 // nobody waits for this player any longer: their place goes
 export const release = p => { if (room) room.release(p); };

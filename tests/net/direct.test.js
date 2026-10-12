@@ -1,6 +1,6 @@
 // The direct link (library/net/rtc.js, link.js), in worker tabs with fake WebRTC data channels besides the fake
 // brokers (tests/support/fakertc.js): it opens and carries the room; gone silent or dropped, the room goes on
-// through the brokers and loses nothing, and a new direct link follows. The known bugs are { todo } tests.
+// through the brokers and loses nothing, and a new direct link follows.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { room, shows, sleep, until, world } from '../support/world.js';

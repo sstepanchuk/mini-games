@@ -20,9 +20,9 @@ Each scenario prints its checks (`✓`, `✗`, and `· todo` for a known bug tha
 any scenario failed.
 
 Needs Playwright with Chromium, from the project or global (`npm i -g playwright`, then `npx playwright install
-chromium`). `nearby3` opens the first game on the shelf and `version` opens Two Dragons, so they need the dev
-server with the plaintext games (`npm run unlock`): on the assembled site (`npm run dev -- site`) the games are
-locked and they fail; the others pass there too.
+chromium`). `nearby3` opens the first game on the shelf, and `version` and `card` open Two Dragons, so they need
+the dev server with the plaintext games (`npm run unlock`): on the assembled site (`npm run dev -- site`) the games
+are locked and they fail; the others pass there too.
 
 | scenario   | what                                                                                                  |
 |------------|-------------------------------------------------------------------------------------------------------|
@@ -32,7 +32,10 @@ locked and they fail; the others pass there too.
 | `nosig`    | the chip and status when no broker answers (the network itself up), and back                           |
 | `ui`       | the dialog: without internet only nearby, with internet two ways; a link and nearby both link up       |
 | `tabs`     | the same player in a new tab (host, then guest): «Ти граєш деінде», «Повернути сюди»                   |
-| `nearby3`  | three phones without internet: pairing, adding a player, a game followed by all, its seats, the host's phone gone |
+| `nearby3`  | three phones without internet: pairing, adding a player, a game followed by all, its seats, the host's phone gone: the card, and «Не чекати» for it ends the room on that phone, saying so |
+| `nearbybye` | nearby: a guest's page reloads: its goodbye keeps its place (the other phone's room goes on, the player away); paired again («З’єднатися знову»), back in its place |
+| `nearname` | nearby: a phone under the host's name, first with the host alone, then with a guest: the pairing ends at once on both phones, «Це ім’я вже в кімнаті»; the two stay together; «Спробувати ще» asks the newcomer for another name, and takes the host back to showing a code |
+| `card`     | the card over a game: «Чекаємо на Богдан… m:ss» built once (only the time changes, the screen reader hears only who and why, the focus stays on «Не чекати»); a new tab opening the game: «— повертається в гру», nothing to press; «Не чекати» lets his place go |
 | `version`  | a friend's copy of a game is newer (its wire): the older page reloads itself into the room, once; not seated together; the note, «Оновити» on the older page only |
 | `proto`    | a friend's library is newer (PROTO + 1, its bundle rewritten on the way): not linked; both pages say so; the older reloads itself into the room, once |
 

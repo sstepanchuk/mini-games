@@ -1,13 +1,14 @@
 /* =====================================================================
    The screens of playing together (together.js holds the room): the chip on the shelf, notes at the
-   bottom of the screen, the "Грати разом" dialog, the name a player comes in with, and the note over a game
-   while it waits for a player who dropped out. The dialog asks for the name, then checks for internet by itself:
+   bottom of the screen, the "Грати разом" dialog, the name a player comes in with, and the card over a game
+   while it waits for a player (the only «Чекаємо на …»: games say only their own reasons, such as a hidden tab or
+   a countdown). The dialog asks for the name, then checks for internet by itself:
    with internet there are two ways (a link, or nearby with QR codes), without it only nearby. Once together,
    more players can be added the same way (up to the room's limit). A friend on another version of the library or of
    the game (together.js versionGap) is told everywhere it shows: «Онови сторінку — у друга інша версія».
    ===================================================================== */
 import { hasInternet, newRoomCode, preload } from '../net/index.js';
-import { $, btn, copy, el, modal, para, toast } from './dom.js';
+import { $, btn, copy, el, modal, para, safe, toast } from './dom.js';
 import { Camera, drawQr } from './qr.js';
 import { comeBack, currentRoom, elsewhere, lastInternetCode, lastName, leave, linked, offerUpdate, onChange, release, startInternet, startNearby, updateNow, validName, versionGap,
   waitingFor } from './together.js';
@@ -21,6 +22,7 @@ export function initInvite(s) {
   shell = s;
   s.askName = askName;
   $('together').addEventListener('click', () => openDialog());
+  waitNote();                                            // (the card, hidden: its live region is there before it speaks)
   setInterval(waitNote, 1000);
   onChange(what => {
     const room = currentRoom();
@@ -31,7 +33,7 @@ export function initInvite(s) {
     if (what === 'peer-gone') setTimeout(() => { if (!linked()) toast(room && room.kind === 'nearby' ? 'Зв’язок обірвався' : 'Друзі вийшли'); }, 3000);
     if (what === 'replaced') queueMicrotask(goneElsewhere);
     if (what === 'version' && versionGap()) toast(UPDATE);
-    if (what === 'away' || what === 'leave' || what === 'left' || what === 'peer-gone' || what === 'version') waitNote();
+    if (/^(away|leave|left|peer-gone|version|waiting)$/.test(what)) waitNote();
     chip();
     if (dlg) refresh(what);
   });
@@ -62,23 +64,77 @@ function goneElsewhere() {
     btn('Закрити', () => m.close(), 'btn ghost'));
 }
 
-/* ---------- over a game: who we wait for ---------- */
-// A player who dropped out keeps their seat for a while: the game pauses, and this says who we wait for and how
-// much longer, with a way to stop waiting (their seat goes; the game goes on without them, if it can). A friend on
-// another version: that it takes a newer page (the older one reloads by itself when it can, or when its player asks).
+/* ---------- over a game: the card «Чекаємо на …» ---------- */
+// Whom the open game waits for, and why (together.js waitingFor, rules.absence):
+//   'link'     dropped out, their seat kept: «Чекаємо на X… 2:45» (the time their place is kept) and «Не чекати» (their
+//              place goes: the game goes on without them, if it can), where it works (rules.canRelease: not for others
+//              while we are cut off from the room's host). Nearby, a broken link does not come back by itself:
+//              «З’єднатися знову» (pairing again); and when X is the phone that holds the room (its host, the one who
+//              showed the code first), nothing here can go on without it: «Не чекати» ends the room on this device,
+//              saying so (owner, decision 5).
+//   'loading'  back, their game opening in a new tab or device: «Чекаємо на X — повертається в гру», with nothing to
+//              press (they did not drop out; owner, decision 4).
+// A friend on another version: «Онови сторінку — у друга інша версія», with «Оновити» on the older page.
+// The card is built once and stays (hidden while there is nothing to say): each second only the time changes. What a
+// screen reader hears is a live region of its own beside it (.sr), which changes only when who or why does; a row
+// stays while its player, reason and buttons do, so a focused «Не чекати» keeps its focus.
+let card = null;                                         // { box, say, said, rows: Map(name → { row, why, release, left }), gap, gapKey }
+const mmss = ms => { const s = Math.ceil(ms / 1000); return (s / 60 | 0) + ':' + String(s % 60).padStart(2, '0'); };
+const waitText = ({ name, why }) => 'Чекаємо на ' + name + (why === 'loading' ? ' — повертається в гру' : '…');
 function waitNote() {
-  const list = waitingFor(), stage = $('stage'), gap = versionGap();
-  let box = $('waiting');
-  if ((!list.length && !gap) || stage.hidden) { if (box) box.remove(); return; }
-  if (!box) { box = el('div', { id: 'waiting', className: 'waiting card', role: 'status' }); stage.append(box); }
-  const mmss = ms => { const s = Math.ceil(ms / 1000); return (s / 60 | 0) + ':' + String(s % 60).padStart(2, '0'); };
-  // nearby, a broken link does not come back by itself: show the way back (pairing again)
+  const stage = $('stage'), gap = versionGap(), list = stage.hidden ? [] : waitingFor();
+  if (!card || !card.box.isConnected) {
+    card = { box: el('div', { id: 'waiting', className: 'waiting card', hidden: true }), say: el('p', { className: 'sr', role: 'status' }), said: '', rows: new Map(), gap: null, gapKey: '' };
+    stage.append(card.box, card.say);
+  }
+  const shown = !stage.hidden && (list.length > 0 || !!gap);
+  for (const [name, r] of card.rows) if (!shown || !list.some(x => x.name === name && x.why === r.why && x.release === r.release)) dropRow(name);
+  for (const x of shown ? list : []) {
+    let r = card.rows.get(x.name);
+    if (!r) { r = waitRow(x); card.rows.set(x.name, r); card.box.insertBefore(r.row, card.gap); }
+    if (r.left) r.left.textContent = mmss(x.left);
+  }
+  const gk = shown && gap ? gap.key + (offerUpdate() ? '+' : '') : '';
+  if (gk !== card.gapKey) {
+    card.gapKey = gk;
+    if (card.gap) card.gap.remove();
+    card.gap = gk ? el('div', { className: 'wait-row' }, para(UPDATE), ...(offerUpdate() ? [btn('Оновити', updateNow, 'btn ghost')] : [])) : null;
+    if (card.gap) card.box.append(card.gap);
+  }
+  card.box.hidden = !shown;
+  const said = shown ? [...list.map(waitText), ...(gap ? [UPDATE] : [])].join('. ') : '';
+  if (said !== card.said) { card.said = said; card.say.textContent = said; }
+}
+// one waited player's row: the line (with the time, for a place that is kept) and what can be done
+function waitRow(x) {
+  const left = x.why === 'link' ? el('span', { className: 'left' }) : null;
   const near = currentRoom() && currentRoom().kind === 'nearby';
-  box.replaceChildren(...list.flatMap(({ name, left }) => [
-    para('Чекаємо на ' + name + '… ' + mmss(left)),
-    ...(near ? [para('Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.', 'fine'), btn('З’єднатися знову', repair)] : []),
-    btn('Не чекати', () => { release(name); box.remove(); }, 'btn ghost')]),
-    ...(gap ? [para(UPDATE), ...(offerUpdate() ? [btn('Оновити', updateNow, 'btn ghost')] : [])] : []));
+  const row = el('div', { className: 'wait-row' }, el('p', {}, waitText(x), ...(left ? [' ', left] : [])),
+    ...(x.why !== 'link' ? [] : [
+      ...(near ? [para('Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.', 'fine'), btn('З’єднатися знову', repair)] : []),
+      ...(x.release ? [btn('Не чекати', () => notWaiting(x.name), 'btn ghost')] : [])]));
+  return { row, why: x.why, release: x.release, left };
+}
+function dropRow(name) {
+  const r = card.rows.get(name);
+  card.rows.delete(name);
+  // (the player is back: whoever was about to press «Не чекати» goes on with the game)
+  if (r.row.contains(document.activeElement)) safe(() => $('stage').querySelector('iframe')?.focus());
+  r.row.remove();
+}
+// «Не чекати»: their place goes. Nearby, for the phone that holds the room (we are a guest there): there is no room
+// without it, so it ends here, saying why.
+function notWaiting(name) {
+  const room = currentRoom();
+  if (room && room.kind === 'nearby' && room.role === 'guest' && room.host === name) {
+    leave();
+    const m = modal();
+    m.show(el('h2', { textContent: 'Кімнату поруч закрито' }), para('Без телефона ' + name + ' кімната поруч далі не може.'),
+      btn('Закрити', () => m.close(), 'btn ghost'));
+    return;
+  }
+  release(name);
+  waitNote();
 }
 
 // Nearby, a link broke: pair again (the host shows its code, a guest scans it); the player is back in their place.
@@ -222,18 +278,24 @@ const WHY = {
   here: noNetwork('Цей пристрій'),
   there: noNetwork('Пристрій друга'),
   vpn: 'На одному з пристроїв увімкнено VPN (наприклад Tailscale): він може пускати навіть зв’язок із сусіднім пристроєм через свій тунель. Вимкніть VPN на час гри (або дозвольте в ньому доступ до локальної мережі — у Tailscale це «Allow local network access») і спробуйте ще.',
-  blocked: 'Пристрої в мережі, але вона не пускає їх одне до одного (так роблять деякі роутери, гостьові мережі та iPhone з iOS 18, що роздає точку доступу). Спробуйте іншу мережу Wi-Fi.'
+  blocked: 'Пристрої в мережі, але вона не пускає їх одне до одного (так роблять деякі роутери, гостьові мережі та iPhone з iOS 18, що роздає точку доступу). Спробуйте іншу мережу Wi-Fi.',
+  // the host said no (net/nearby.js): its own player has this name (one name, one place), or no place is left
+  name: 'Це ім’я вже в кімнаті. Тому, хто приєднується, треба увійти під іншим ім’ям.',
+  full: 'У цій кімнаті вже немає місць.'
 };
 
 function failed(pair) {
+  const why = pair.reason;
   dlg.screen = 'failed';
   if (dlg.camera) dlg.camera.stop();
-  const report = pair.report(), room = currentRoom();
-  if (room && room.linked) pair.cancel(); else leave();  // adding a player failed: those already here stay together
+  const report = pair.report(), room = currentRoom(), added = !!room && room.linked, joining = !room || room.role !== 'host';
+  if (added) pair.cancel(); else leave();               // adding a player failed: those already here stay together
   dlg.show(el('h2', { textContent: 'Не вдалося з’єднатися' }),
-    para(pair.reason === 'blocked' && pair.vpn ? WHY.vpn : WHY[pair.reason] || WHY.blocked),
-    btn('Спробувати ще', () => room && room.linked ? hostPairing() : show('nearby')),
-    ...(dlg.online && !(room && room.linked) ? [btn('Через посилання', viaLink, 'btn ghost')] : []),
+    para(why === 'blocked' && pair.vpn ? WHY.vpn : WHY[why] || WHY.blocked),
+    // (again as before: the room's host shows a code, a guest pairing again scans one; the name taken, whoever was
+    // coming in tries again under another one, and the phone that showed the code keeps its own)
+    btn('Спробувати ще', () => added ? (joining ? guestPairing() : hostPairing()) : why === 'name' && joining ? show('name') : show('nearby')),
+    ...(dlg.online && !added ? [btn('Через посилання', viaLink, 'btn ghost')] : []),
     btn('Скопіювати звіт для розробника', e => copy(report, e.target), 'btn ghost'),
     btn('Закрити', closeDialog, 'btn ghost'));
 }

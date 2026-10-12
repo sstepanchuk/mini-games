@@ -1,10 +1,10 @@
 // Whose copy runs a round (library/app/together.js with rules.js), in worker tabs that run the real library over
 // fake brokers (tests/support), with the room's timing scaled down (window.__timeScale 0.3: AUTH_WAIT and
 // HOST_WAIT 3 s). The round moves only when its runner has been gone for AUTH_WAIT, and only with proof that it
-// was the runner who dropped out: someone else here with us, or the brokers answering us all that time. The
-// runner back plays on as a guest. A round's snapshot: a game closed mid-round goes on from it when opened again,
-// with the same players ('resume' before 'linked'); a round that is over (the game said so, or one of its players
-// left for good) leaves a tombstone, and never comes back. The known bugs are { todo } tests of what should happen.
+// was the runner who dropped out: someone else with the game open here with us, or the brokers answering us all
+// that time. The runner back plays on as a guest. A round's snapshot: a game closed mid-round goes on from it when
+// opened again, with the same players ('resume' before 'linked'); a round that is over (the game said so, or one of
+// its players left for good) leaves a tombstone, and never comes back.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { room, sleep, until, world } from '../support/world.js';
@@ -106,11 +106,11 @@ describe('whose copy runs a round', { concurrency: 3 }, () => {
     assert.deepEqual((await C.state()).lib.auth, {});
   });
 
-  /* ---------- known bugs (phase 1) ---------- */
-  // Found by these tests: a player back from an outage on the same session, to a room's host that stayed linked with
-  // others, is greeted by nobody (together.js greets on 'linked', 'join' and 'relinked'; this is only 'away' → false),
-  // so it misses what changed meanwhile, auth:<game> among it: with three players, two copies run the round.
-  test('the runner back after the round moved on, in a room of three, learns it and plays on as a guest', { ...T, todo: 'phase 1b: today nobody greets it, and two copies run the round' }, async t => {
+  // Found by these tests (phase 0): a player back from an outage on the same session, to a room's host that stayed
+  // linked with others, was greeted by nobody (together.js greets on 'linked', 'join' and 'relinked'; this was only
+  // 'away' → false), so it missed what changed meanwhile, auth:<game> among it: with three players, two copies ran the
+  // round. Now the host says 'relinked' for the same tab on a new link (net/internet.js hello), and everyone greets it.
+  test('the runner back after the round moved on, in a room of three, learns it and plays on as a guest', T, async t => {
     const W = world(t, { scale: SCALE });
     const [A, B, C] = await room(W, 'run5', ['Аня', 'Богдан', 'Сава'], { lib: {} });
     await A.open('g');
@@ -342,9 +342,10 @@ describe('a round\'s snapshot', { concurrency: 3 }, () => {
     await A.snapshot({ round: 11 });
     assert.ok(await until(async () => (await snapOf(B))?.s?.round === 11, 3000));
     // Богдан cut off: his host is away for HOST_WAIT, so he says hello to Сава (whom he takes for the first one
-    // here); six hellos unanswered, and he looks for the room again: his list is only him (internet.js discover)
+    // here); six hellos unanswered, and he looks for the room again (internet.js discover: role null; before phase 1b
+    // his list was then only him, now every place stays)
     await B.net({ up: false });
-    assert.ok(await until(async () => (await B.state()).players.length === 1, 20000, 100), 'Богдан started over');
+    assert.ok(await until(async () => (await B.events()).some(e => e[1] === 'role' && e[2] === null), 20000, 100), 'Богдан started over');
     await B.net({ up: true });
     assert.ok(await until(async () => { const s = await B.state(); return s.linked && s.players.length === 3; }, 15000, 100), 'Богдан is back');
     await sleep(1000);

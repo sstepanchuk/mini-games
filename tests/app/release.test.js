@@ -72,4 +72,24 @@ describe('the previous release and this one in one game', { concurrency: 2 }, ()
       assert.deepEqual(a.filter(x => x.startsWith('resume')), [], 'a round that is over does not come back: ' + a);
     });
   }
+
+  // (phase 1b, D1: a player back after their place dropped counts as loading until a here: of theirs comes after it;
+  // a library from before that never writes one again on the same page, it only greets with the one it had: without
+  // counting that, the game waited as long as a place is kept, «— повертається в гру» with nothing to press)
+  test('a previous-release player whose place dropped comes back on the same page: the game waits only for their greeting', T, async t => {
+    if (!prev) { t.skip('no earlier release tag in this checkout'); return; }
+    const [A, B] = await pair(t, 'rel3', 'Богдан');
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    const { HOLD } = (await A.info()).timing;
+    await B.net({ up: false });
+    assert.ok(await until(async () => (await A.state()).away.includes('Богдан'), 5000));
+    await A.release('Богдан');                               // «Не чекати»: his place goes
+    assert.ok(await until(async () => (await A.state()).players.join() === 'Аня', 5000));
+    await B.net({ up: true });                               // his game open all along: back as a new player
+    const a = await until(async () => { const g = await A.game(); return g.linked && !g.weak && g.players.join() === 'Аня,Богдан' && g; }, HOLD / 4, 50);
+    assert.ok(a, 'Аня plays with Богдан again: ' + JSON.stringify((await A.state()).lib.game));
+    assert.equal(await A.gsend({ t: 'move', n: 3 }), true);
+    assert.ok(await until(async () => (await B.game()).got.some(([, m]) => m.t === 'move' && m.n === 3), 5000), 'what her game sends reaches his');
+  });
 });

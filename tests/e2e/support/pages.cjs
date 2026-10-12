@@ -40,6 +40,12 @@ async function frameOf(p, ready = () => !!window.ihroteka, timeout = 15000) {
 const libState = p => p.isClosed() ? Promise.resolve(null) : p.evaluate(() => window.__ihroteka.state());
 // the open dialog's text, or '' (whitespace collapsed)
 const dialogText = async p => p.isClosed() ? '' : p.evaluate(() => document.querySelector('.dialog')?.innerText.replace(/\s+/g, ' ').trim() || '');
+// the card over the game («Чекаємо на …», invite.js): whether it shows, its text (whitespace collapsed), its buttons,
+// and what its live region says to a screen reader (say)
+const waitCard = p => p.evaluate(() => {
+  const c = document.getElementById('waiting'), say = document.querySelector('#stage .sr[role=status]'), shown = !!c && !c.hidden;
+  return { shown, text: shown ? c.innerText.replace(/\s+/g, ' ').trim() : '', buttons: shown ? [...c.querySelectorAll('button')].map(b => b.textContent) : [], say: say ? say.textContent : null };
+});
 // one line of what a page shows (the library, then game(frame) → text if given)
 async function short(p, game) {
   if (p.isClosed()) return 'closed';
@@ -102,4 +108,4 @@ async function pair(H, G, { adding = false } = {}) {
 // → true once every one of these phones (or pages) is linked
 const allLinked = (xs, ms = 15000) => until(async () => (await Promise.all(xs.map(x => libState(x.p || x)))).every(s => s && s.linked), ms);
 
-module.exports = { enterName, openPage, createLink, frameOf, libState, dialogText, short, phone, pair, allLinked };
+module.exports = { enterName, openPage, createLink, frameOf, libState, dialogText, waitCard, short, phone, pair, allLinked };

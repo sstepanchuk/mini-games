@@ -13,21 +13,24 @@ and works offline. Hosted on GitHub Pages.
 - **Encrypted games.** Each game and its sources are sealed with one library key (AES-256-GCM). Each person has
   a password and an ECDH P-256 key pair; the password unlocks their private key, which unlocks the library key.
   Removing someone rotates the library key and re-encrypts every game.
-- **Together.** "Грати разом" connects up to 8 players for the whole library: whatever one opens, everyone's
-  library opens too. A player is the name they type on entering a room: the same name from another tab, browser
-  or device takes that player's place (the old one steps aside and can take it back with «Повернути сюди»). A
-  player who drops out keeps their place for 3 minutes; meanwhile the game pauses and the others see who they wait
-  for, the time left and «Не чекати». If the copy of the game that runs a round is gone for 10 s, the round goes
-  on in another player's copy from its last snapshot, when that player can tell it was not them who dropped out
-  (two phones nearby that lose each other wait for the runner instead). The dialog first checks by itself whether
-  there is internet (whether a broker answers: `navigator.onLine` also says yes on a hotspot without data). With
-  internet there are two ways: a link (public MQTT brokers find the friend; WebRTC goes direct when it can), or
-  nearby. Without it, only nearby: two devices on the same Wi-Fi or hotspot, one shows a QR code and the other
-  scans it, then the other way round (the first one adds more players the same way). If a nearby link is
-  impossible, the dialog says why (e.g. a phone sharing its hotspot cannot see that network in its browser) and
-  offers a report for debugging. Friends whose libraries (or copies of a game) are different versions are not
-  linked (or not seated together) and see «Онови сторінку — у друга інша версія»; the older page updates itself
-  when no game is open there (else its note offers «Оновити»), never in a nearby room.
+- **Together.** "Грати разом" connects up to 8 players for the whole library: whatever one opens, everyone's library
+  opens too. A player is the name they type on entering a room: the same name from another tab, browser or device
+  takes that player's place (the old one steps aside and can take it back with «Повернути сюди»). A player who drops
+  out keeps their place for 3 minutes; meanwhile the game pauses and a card over it says whom the others wait for and
+  why: one who dropped out, the time left and «Не чекати» (nearby, for the phone that holds the room, «Не чекати» ends
+  the room on this phone: «Без телефона X кімната поруч далі не може»), or one who is only opening the game again, in
+  a new tab or device («Чекаємо на X — повертається в гру», nothing to press). If the copy of the game that runs a
+  round is gone for 10 s, the round goes on in another player's copy from its last snapshot, when that player can tell
+  it was not them who dropped out (two phones nearby that lose each other wait for the runner instead). The dialog
+  first checks by itself whether there is internet (whether a broker answers: `navigator.onLine` also says yes on a
+  hotspot without data). With internet there are two ways: a link (public MQTT brokers find the friend; WebRTC goes
+  direct when it can), or nearby. Without it, only nearby: two devices on the same Wi-Fi or hotspot, one shows a QR
+  code and the other scans it, then the other way round (the first one adds more players the same way). If a nearby
+  link is impossible, the dialog says why (e.g. a phone sharing its hotspot cannot see that network in its browser, or
+  the newcomer has the name of the phone that holds the room: «Це ім’я вже в кімнаті») and offers a report for
+  debugging. Friends whose libraries (or copies of a game) are different versions are not linked (or not seated
+  together) and see «Онови сторінку — у друга інша версія»; the older page updates itself when no game is open there
+  (else its note offers «Оновити»), never in a nearby room.
 - **Offline.** A service worker keeps one complete copy of the site per version; the shelf, the games and nearby
   play work without a network. On a phone it installs as an app.
 
@@ -129,7 +132,8 @@ room.on('linked', () => …)            // we play with someone now (also fires 
     .on('join', name => …)            // one more player (games for more than two; in a game for two,
     .on('leave', name => …)           //   another partner is 'peer-gone' and then 'linked' again)
     .on('players', names => …)        // who plays now, in seat order (also when only who waits changed)
-    .on('weak', v => …)               // a player dropped out, went quiet or is opening the game in a new tab / is back: pause
+    .on('weak', v => …)               // a player dropped out, went quiet or is opening the game (in a new tab, or back
+                                      //   after their place dropped) / is back: pause
     .on('peer-gone', () => …)         // the round stops: our partner (or the runner) is gone, left for good or closed the game
     .on('relinked', name => …)        // a player's copy of the game is new (a new tab or device) or its link started over:
                                       //   send them the full state
@@ -143,7 +147,7 @@ room.me, room.players, room.waiting   // names: us, who plays (in seat order), w
 room.seats, room.seated               // how many seats the game has; whether we have one
 room.linked, room.weak                // we play with someone now; someone we play with is away or quiet (pause)
 room.role, room.host                  // 'host' (our copy runs the round), 'guest', or null (waiting); whose copy runs it
-room.away(name)                       // a player who dropped out (their place is kept): for how long, ms
+room.away(name)                       // a player we wait for (dropped out, their place kept; or opening the game): for how long, ms
 room.snapshot(state)                  // (the runner, about once a second) the round as it is, JSON-able; null: it is over
 room.shared('mode'), room.share('mode', 'race')   // what the game's players share: the same for everyone, whoever
                                       //   passes it on and whoever reloads (a chosen mode, a series score…)
@@ -161,15 +165,16 @@ before the game's code runs) still hears what it missed, once, in the order the 
 in order). `resume` comes before `linked` live too, and only while we play with someone: a game that hears `linked`
 already knows whether it goes on with a round or starts afresh.
 
-Seats come from the room's order (`room.players`), not from who runs the round; the same two players in another
-order (a shaky network may reorder the room) are still the same round. Whose copy runs a round is shared by the whole
-room (that copy names itself with the round's first snapshot, so the room's order does not move it). It moves only
-when that copy has been gone for 10 s, and only with proof that it was the runner who dropped out, not us: another
-player is here with us, or (over the internet) the brokers have answered us all that time and we are the room's host
-or hear it. Then the first seated player still here takes over and gets `resume` with the latest snapshot; everyone
-else gets `role`. Two phones nearby that lose each other cannot tell which of them dropped out, so there the round
-waits for its runner. A runner who comes back after the round went on elsewhere plays on as a guest (`role` →
-'guest').
+Seats come from the room's order (`room.players`), not from who runs the round; the same two players in another order
+(a shaky network may reorder the room) are still the same round. Whose copy runs a round is shared by the whole room
+(that copy names itself with the round's first snapshot, so the room's order does not move it). It moves only when
+that copy has been gone for 10 s, and only with proof that it was the runner who dropped out, not us: another player
+who has the game open (seated, or waiting for a seat) is here with us, or (over the internet) the brokers have
+answered us all that time; and only while we are the room's host or hear it (a player cut off from the room's host
+knows the others only as the host last told it: it vouches for nobody until it hears a host again). Then the first
+seated player still here takes over and gets `resume` with the latest snapshot; everyone else gets `role`. Two phones
+nearby that lose each other cannot tell which of them dropped out, so there the round waits for its runner. A runner
+who comes back after the round went on elsewhere plays on as a guest (`role` → 'guest').
 
 **Snapshots.** A game closed mid-round (the room went back to the shelf, a frame was closed or reloaded) waits: when
 it is open again, the copy that runs the round hears `resume` with the snapshot, if the players seated are the same
@@ -219,7 +224,9 @@ The room's code is `library/net/` (`room.js` describes the room and its rules) a
   room's order may change on a shaky network, a round's seats must not.
 - **Snapshot the round** about once a second (`room.snapshot`) from the runner; on `resume`, go on from it; on
   `role` → 'guest', drop your copy and ask for the full state.
-- **Pause on `weak`**, and send the full state on `relinked` and to a guest who asks.
+- **Pause on `weak`**, and send the full state on `relinked` and to a guest who asks. Whom the round waits for, and why,
+  the library says itself, in one card over the game («Чекаємо на …», with «Не чекати» when it makes sense): draw no
+  waiting message of your own, only your own reasons to pause (a hidden tab, a countdown).
 - **Show the others a little ahead**: predict both players to the moment your own input will reach the round
   (`room.lag()` is the one-way delay), and when a new state corrects the prediction, let the difference fade
   over ~0.1 s instead of jumping. The runner delays its own input and picture by `room.lag()`, so the round
@@ -235,10 +242,16 @@ A room is a star: everyone is linked to the room's host, which passes on what gu
 messages stay in the sender's outbox until acknowledged and go again by whatever path works (direct, or the
 brokers), so a network switch or a minute offline loses nothing; a player who goes quiet pauses the game for
 everyone after 1.5 s, and a silence the other path does not explain (a busy phone) never drops the direct link.
-A player who drops out keeps their place for 3 minutes (or until someone presses «Не чекати»). Over the internet,
-if the room's host is gone for 10 s, the first player still here takes over and the others follow; when the old
-host comes back, it joins as a guest. Nearby (no internet), the host pairs with each guest in turn; the guests hear
-each other through it, and no one else can take the host's part: the room waits for the host's phone.
+A player who drops out keeps their place for 3 minutes (or until someone presses «Не чекати»; a player cut off from
+the room's host has it only for the host: their word for anyone else could not reach it). A reload or a closed tab is
+dropping out too: of a player's own acts, only leaving the room gives the place up. One who comes back after their
+place went counts as opening the game until their page says which game it has open: the game waits for them, then
+hears `relinked`. Over the internet, if the room's host is gone for 10 s, the first player still here takes over and
+the others follow; when the old host comes back, it joins as a guest. Nearby (no internet), the host pairs with each
+guest in turn; the guests hear each other through it, and no one else can take the host's part: the room waits for
+the host's phone («Не чекати» for it ends the room on the phone where it is pressed). A phone whose page reloads pairs
+again («З’єднатися знову») and is back in its place; the host's phone too: each guest pairs with it again, and the
+room goes on.
 
 ## Security notes
 

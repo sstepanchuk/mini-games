@@ -28,15 +28,20 @@ process.on('unhandledRejection', say);
 
 const win = new EventTarget(), doc = new EventTarget();
 let hidden = false, siteData = true;                     // siteData: false, as a browser set to block it (cmds.siteData)
+// the listeners the page has on window and document now ('window:pagehide' → the set of them), cmds.listeners
+const live = new Map();
+const tracked = (on, target) => [(type, fn, o) => { const k = on + ':' + type; if (!live.has(k)) live.set(k, new Set()); live.get(k).add(fn); target.addEventListener(type, fn, o); },
+  (type, fn, o) => { const s = live.get(on + ':' + type); if (s) s.delete(fn); target.removeEventListener(type, fn, o); }];
+const [winOn, winOff] = tracked('window', win), [docOn, docOff] = tracked('document', doc);
 const storage = m => ({ getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: k => { m.delete(k); } });
 const local = storage(new Map()), session = storage(new Map());
 const blocked = s => () => { if (!siteData) throw new DOMException('The site data is blocked', 'SecurityError'); return s; };
 Object.assign(globalThis, {
   window: globalThis, self: globalThis, __pid: pid, __timeScale: scale,
-  addEventListener: win.addEventListener.bind(win), removeEventListener: win.removeEventListener.bind(win), dispatchEvent: win.dispatchEvent.bind(win),
+  addEventListener: winOn, removeEventListener: winOff, dispatchEvent: win.dispatchEvent.bind(win),
   document: {
     get hidden() { return hidden; }, get visibilityState() { return hidden ? 'hidden' : 'visible'; },
-    addEventListener: doc.addEventListener.bind(doc), removeEventListener: doc.removeEventListener.bind(doc),
+    addEventListener: docOn, removeEventListener: docOff,
     createElement() { throw new Error('tab.js: no DOM in a worker tab'); }
   },
   location: { href: 'http://127.0.0.1:8000/', origin: 'http://127.0.0.1:8000', pathname: '/', search: '' },
@@ -71,6 +76,7 @@ const follows = [];
 const gEvents = [], gGot = [], heard = [];               // heard: the names of what it heard, messages ('message:' t) too, in order
 const GAME_EVENTS = ['linked', 'join', 'leave', 'players', 'weak', 'peer-gone', 'relinked', 'role', 'resume', 'shared'];
 let seatsOf = {}, shell = false, later = false;          // later: the game's code starts listening only when told (glisten)
+let slow = false;                                        // slow: the game's page opens only when told (gameSlow off)
 const reloads = [];                                      // what together.js asked of the shell's reload: its still, or null
 // Go to a view (null: the shelf; else a game, which opens a moment later, as its frame would). byPeer: following.
 function go(id, byPeer = false) {
@@ -80,7 +86,7 @@ function go(id, byPeer = false) {
   view = id;
   if (byPeer) follows.push(id);
   T.viewChanged(id, byPeer);
-  if (id) setTimeout(() => { if (view === id && !game) openGame(id); }, 5);
+  if (id) setTimeout(() => { if (view === id && !game && !slow) openGame(id); }, 5);
 }
 // the game's page runs: it gets ihroteka.room and listens to everything a game may hear (at once, or when told)
 function openGame(id) {
@@ -134,6 +140,7 @@ const cmds = {
     if (!r) return null;
     return { session: config.me, me: r.me, role: r.role, host: r.host, players: r.players, away: r.players.filter(p => r.away(p)),
       linked: r.linked, weak: r.weak, online: r.online, direct: r.direct, version: r.versionMismatch ?? null, pairing: r.pair ? r.pair.pending : null,
+      reason: r.pair ? r.pair.reason : null,
       lib: T ? T.state() : null };
   },
   // what happened since: events [ms, name, ...args] and messages [from, m] (from: an index to read only the new ones)
@@ -152,6 +159,7 @@ const cmds = {
     return null;
   },
   release: ({ n }) => { need().release(n); },
+  lag: ({ n }) => need().lag(n),                          // room.lag: to one player (n), or the slowest
   leave: ({ final = true } = {}) => { if (T) T.leave(); else need().leave(final); },   // (the library always leaves for good)
   kick: () => { need().kick(); },
   // the page closes: it says goodbye (pagehide), and is gone: nothing more goes out or comes in
@@ -165,7 +173,10 @@ const cmds = {
   // what the page keeps in sessionStorage under k (JSON), as the next page in this tab would find it
   stored: ({ k }) => JSON.parse(session.getItem(k)),
   // the tab stops for ms (a locked phone, a frozen background tab): no timer, no message, then everything late at once
-  freeze: ({ ms }) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); },
+  // → when it runs again, on the clock of its events (log)
+  freeze: ({ ms: wait }) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait); return ms(); },
+  // how many listeners the page has on window and document now, by type ({ 'window:pagehide': 1, … }; none: left out)
+  listeners: () => Object.fromEntries([...live].filter(([, s]) => s.size).map(([k, s]) => [k, s.size])),
   net: o => { fake.set(o); return fake.state(); },
   netState: () => ({ ...fake.state(), dc: rtc && rtc.count }),
   killDc: () => { rtc.kill(); },                          // the phone's OS dropped the direct links
@@ -180,6 +191,8 @@ const cmds = {
   },
   // the game's next page runs its code late: it listens only when told (glisten), as a game that starts after the room
   gameLate: ({ on }) => { later = on; },
+  // the game's page is slow to open (a new tab or device loading it): it opens only when this is off again
+  gameSlow: ({ on }) => { slow = on; if (!on && view && !game) openGame(view); },
   glisten: () => { listen(); },
   // what the game calls → what the call returns (send, snapshot, share: whether it was done)
   gsend: ({ m, opts }) => game.send(m, opts),

@@ -7,11 +7,12 @@
      here(p)              the game p has open (their here: key in the shared state; null/undefined: none)
      wire(p, game)        the wire number of p's copy of that game (their wire: key; ours from our shelf), undefined
                           when their library does not say (older than the number: wire 1, see sameWire)
-     stale                names whose new tab or device did not open their game for as long as a place is kept
-     loading              name → since when (ms): back in a new tab or device, their game not open there yet
-     away(p)              the room's word: p dropped out (their place is kept), for how long, ms (0: here)
-     weak(p)              p's link went quiet
+     loading              name → since when (ms): back (in a new tab or device, or after their place dropped), their
+                          game not open there yet as far as we know (see arrivesLoading)
+     away(p)              the room's word: p dropped out (their place is kept), for how long, ms (0: here). A player
+                          whose link went quiet is away too (net/room.js presence): the room says so at once
      nearby, role, host   a nearby room (no internet); 'host' or 'guest' in the room; the room's host (a name)
+     hold                 how long a place is kept (net HOLD)
      now                  the clock of `loading` (performance.now()); away(p) is already a duration
    ===================================================================== */
 
@@ -22,10 +23,10 @@ export const CAP = 32 * 1024, SHARE_BYTES = 8000, SHARE_KEYS = 32;
 
 // Who has the game open, in the room's order (whoever came first, first): we do while we have it open (mine);
 // anyone else while their here: names it, they are not stale, and their copy speaks our wire. A player who dropped
-// out keeps their place here too.
+// out, or is still opening the game, keeps their place here too.
 export function inGame(f, game, mine) {
   if (mine !== game) return [];
-  return f.players.filter(p => p === f.me || (f.here(p) === game && !f.stale.has(p) && sameWire(f.wire(f.me, game), f.wire(p, game))));
+  return f.players.filter(p => p === f.me || (f.here(p) === game && !stale(f, p) && sameWire(f.wire(f.me, game), f.wire(p, game))));
 }
 // Two copies of a game play together only when their wire numbers (game.json "wire") are the same. A library that
 // does not say (undefined: older than the number) speaks wire 1, as every game did before the numbers (owner,
@@ -76,43 +77,54 @@ export const runnerOf = (seated, auth) => auth && seated.includes(auth) ? auth :
 // ours: 'host' (our copy runs it), 'guest', or null (we have no seat)
 export const roleOf = (seated, me, auth) => !seated.includes(me) ? null : runnerOf(seated, auth) === me ? 'host' : 'guest';
 
-// Why a player is not here: dropped out ('link': the room keeps their place) or back in a new tab or device whose
-// game is not open yet ('loading'); for how long, ms (at least 1). We are always here. → null | { ms, why }
+// Why a player is not here, and since when (on the clock of f.now): 'link', they dropped out (the room keeps their
+// place), or 'loading', they are back (in a new tab or device, or after their place dropped) and their game is not
+// open there yet. We are always here. The one answer to "whom do we wait for, and why": the pause (paused), the
+// takeover's proof (takeOver), who goes stale and the library's card (waitingFor) all ask it. → null | { since, why }
 export function absence(f, p) {
   if (p === f.me) return null;
   const ms = f.away(p);
-  if (ms) return { ms, why: 'link' };
-  return f.loading.has(p) ? { ms: Math.max(1, f.now - f.loading.get(p)), why: 'loading' } : null;
+  if (ms > 0) return { since: f.now - ms, why: 'link' };
+  return f.loading.has(p) ? { since: f.loading.get(p), why: 'loading' } : null;
 }
-export const awayMs = (f, p) => { const a = absence(f, p); return a ? a.ms : 0; };
-const isAway = (f, p) => awayMs(f, p) > 0;
+// for how long, ms (at least 1; 0: here)
+export const awayMs = (f, p) => { const a = absence(f, p); return a ? Math.max(1, f.now - a.since) : 0; };
+const isAway = (f, p) => !!absence(f, p);
+// Still opening the game for longer than a place is kept: their new tab or device never opened it. They stay in the
+// room, but out of the game (their seat goes to who waits), until they say where they are (a here: of theirs).
+export const stale = (f, p) => f.loading.has(p) && f.now - f.loading.get(p) > f.hold;
 
-// Whether a player who comes in counts as loading (their game not open on that device yet: they keep their seat
-// and the game waits) until their new here: arrives. Today only a player back in a new tab or device whose link
-// started over ('relinked', fresh) while the shared state says they have a game open. A 'join' (back after their
-// place dropped) with an old here: is seated at once: a known bug (tests/rules.test.js).
-export const arrivesLoading = (f, p, event, fresh) => event === 'relinked' && !!fresh && !!f.here(p);
-// players loading for longer than a place is kept (hold): their new tab never opened the game, they go stale
-export const loadingTooLong = (loading, now, hold) => [...loading].filter(([, t]) => now - t > hold).map(([p]) => p);
+// Whether a player who comes in counts as loading (they keep their seat and the game waits) until a here: they wrote
+// after it arrives: when the shared state says they have a game open (here:, written before) and either
+//   - 'relinked' with fresh: back in a new tab or device (that one has not opened the game yet), or
+//   - 'join': back after their place dropped (left, «Не чекати», or 3 minutes away): from any tab, the old here: is
+//     no news of what is open there now.
+// (Only a player may write their own here:, so nobody else can set it right: whoever comes in says it again, as
+// soon as they link, if they have a game open; see together.js sayHere.)
+export const arrivesLoading = (f, p, event, fresh) => (event === 'join' || (event === 'relinked' && !!fresh)) && !!f.here(p);
 
-// The game pauses while one of the players we play with went quiet or is still opening the game.
-export const paused = (f, others) => others.some(p => f.weak(p) || f.loading.has(p));
+// The game pauses while one of the players we play with is away (dropped out, went quiet, or is still opening the game).
+export const paused = (f, others) => others.some(p => isAway(f, p));
 
 // Since when we are online (the brokers answer us), on the clock of `now`; 0 while we are not.
 export const onlineSince = (since, online, now) => online ? since || now : 0;
 
 // The round's runner has been away for `wait`: do we run it on? Only the first seated player who is here takes
 // over (only that one writes it; everyone sees it in the shared state). Silence has two ends, though: only a
-// player who can show it is not them who dropped out takes over —
-//   - 'company': someone else (not the runner) in the room is here with us, or
+// player who can show it is not them who dropped out takes over, and only while they hold the room or hear whoever
+// does (a guest cut off from the room's host knows the others only as the host last told it: it vouches for nobody,
+// and waits for a host again) —
+//   - 'company': someone else who has the game open (inGame: seated or waiting for a seat; not the runner) is here
+//     with us, or
 //   - 'reached': through the internet, the brokers have answered us for `wait` (since: onlineSince, on the clock
-//     of `now`), and we are the room's host or hear it.
+//     of `now`).
 // Two phones nearby that lose each other cannot tell which of them it was: the round waits for its runner (on
 // either phone, taking over would split it in two, each going on alone). → 'company' | 'reached' | null
-export function takeOver(f, { seated, runner, since, now, wait }) {
+export function takeOver(f, { inGame, seated, runner, since, now, wait }) {
   if (!runner || runner === f.me || awayMs(f, runner) < wait) return null;
-  const company = f.players.some(p => p !== f.me && p !== runner && !isAway(f, p));
-  const reached = !f.nearby && since && now - since >= wait && (f.role === 'host' || (!!f.host && !isAway(f, f.host)));
+  if (f.role !== 'host' && !(f.host && !f.away(f.host))) return null;
+  const company = inGame.some(p => p !== f.me && p !== runner && !isAway(f, p));
+  const reached = !f.nearby && since && now - since >= wait;
   if (!company && !reached) return null;
   return seated.find(p => !isAway(f, p)) === f.me ? company ? 'company' : 'reached' : null;
 }
@@ -147,6 +159,15 @@ export const snapFits = (snap, seated) => !snap.p || sameSet(snap.p, seated);
 // closed the game, or is away, is not gone: the round waits for them (owner, decision 3).
 export const goneForGood = (was, players, me) => was.some(p => p !== me && !players.includes(p));
 
+// Whether «Не чекати» can let p's place go from here: the room's host lets it go, a guest asks the host (net/room.js
+// release), and anyone can stop waiting for the host itself. A guest cut off from the room's host can do only that:
+// its word for anyone else would reach the host later, if ever, when that player may well be back.
+export const canRelease = (f, p) => f.role === 'host' || p === f.host || (f.role === 'guest' && !!f.host && !f.away(f.host));
+
 // For the screens: the players we wait for (of those we play with: dropped out, their seat kept, or still opening
-// the game) → [{ name, left: ms until their place goes (hold) }]
-export const waitingFor = (f, others, hold) => others.filter(p => isAway(f, p)).map(p => ({ name: p, left: Math.max(0, hold - awayMs(f, p)) }));
+// the game) → [{ name, left: ms until their place goes (f.hold; loading: until they go stale), why: 'link' | 'loading',
+// release: «Не чекати» for them works from here (only for one who dropped out: canRelease) }]
+export const waitingFor = (f, others) => others.flatMap(p => {
+  const a = absence(f, p);
+  return a ? [{ name: p, left: Math.max(0, f.hold - awayMs(f, p)), why: a.why, release: a.why === 'link' && canRelease(f, p) }] : [];
+});
