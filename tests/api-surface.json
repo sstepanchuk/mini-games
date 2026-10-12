@@ -1,0 +1,13 @@
+{
+  "//": "What games see (README \"Game API\"), pinned by tests/api-surface.test.js, which reads it from the source. Change it on purpose, with the README, when the API changes.",
+  "version": 4,
+  "ihroteka": ["game", "home", "invite", "libraryUrl", "room", "version"],
+  "game": ["id", "players", "title"],
+  "room": {
+    "getters": ["direct", "host", "linked", "me", "nearby", "players", "role", "seated", "seats", "waiting", "weak"],
+    "methods": ["away", "diag", "frame", "invite", "kick", "lag", "on", "send", "share", "shared", "snapshot", "stats"],
+    "policies": ["pulse", "streaming"]
+  },
+  "events": ["join", "leave", "linked", "message", "peer-gone", "players", "pulse", "relinked", "resume", "role", "shared", "stats", "tick", "weak"],
+  "chainable": ["on"]
+}

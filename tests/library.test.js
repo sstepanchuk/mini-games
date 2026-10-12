@@ -1,5 +1,8 @@
-// End-to-end tests of the library tools and crypto, run against a scratch copy: npm test
-import { test, before, after } from 'node:test';
+// End-to-end tests of the library tools and crypto: npm test. A small library is made once (alice and bob with
+// generated passwords, one game, built), and each test works on its own copy of it (IHROTEKA_ROOT), so a test runs
+// alone (--test-name-pattern) or in any order, and nothing outside the copies changes. The tools never see a
+// VAULT_PASSWORD from the environment: only the made-up passwords of these copies.
+import { test, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -13,11 +16,14 @@ import * as vault from '../library/crypto.js';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(REPO, 'tools', 'cli.js');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
-let root;
-const pw = {};
+const ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^VAULT_PASSWORDS?$/.test(k)));
+let root;                                              // this test's copy
+let made, built;                                       // made once: the library with its game; the same, built
+const pw = {}, madePw = {};                            // this test's passwords; those of the library as made
+const dirs = [];
 
 const run = (args, password, input) => {
-  const r = spawnSync(process.execPath, [CLI, ...args], { env: { ...process.env, IHROTEKA_ROOT: root, VAULT_PASSWORD: password }, encoding: 'utf8', input });
+  const r = spawnSync(process.execPath, [CLI, ...args], { env: { ...ENV, IHROTEKA_ROOT: root, ...(password !== undefined && { VAULT_PASSWORD: password }) }, encoding: 'utf8', input });
   return { ok: r.status === 0, out: r.stdout + r.stderr };
 };
 const must = (args, password, input) => { const r = run(args, password, input); assert.ok(r.ok, r.out); return r.out; };
@@ -36,17 +42,31 @@ const game = (id, extra = {}) => {
   write(`games/${id}/preview.png`, PNG);
 };
 
+// a new scratch folder (a copy of `from`, if given), removed after the tests
+const scratch = from => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ihroteka-'));
+  dirs.push(dir);
+  if (from) fs.cpSync(from, dir, { recursive: true });
+  return dir;
+};
+// this test works on a fresh copy of `from`, with its passwords
+const use = from => { root = scratch(from); Object.assign(pw, madePw); };
+
 before(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), 'ihroteka-'));
+  root = made = scratch();
   fs.writeFileSync(file('package.json'), JSON.stringify({ homepage: 'https://example.github.io/lib/' }));
   const out = must(['init', 'alice', 'bob']);
-  for (const m of out.matchAll(/^\s+(\w+)\s+(\S+)$/gm)) pw[m[1]] = m[2];
+  for (const m of out.matchAll(/^\s+(\w+)\s+(\S+)$/gm)) madePw[m[1]] = m[2];
+  assert.ok(madePw.alice && madePw.bob, out);
   game('demo');
+  root = built = scratch(made);
+  must(['build'], madePw.alice);
 });
-
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+beforeEach(() => use(built));
+after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
 
 test('init, build and check', () => {
+  use(made);                                                                   // not built yet
   assert.ok(pw.alice && pw.bob);
   const k = kr();                                                              // a salt per person: no guess tests everyone at once
   assert.equal(new Set(k.people.map(p => p.salt)).size, 2);
@@ -205,19 +225,57 @@ test('remove-game takes a game off the shelf', () => {
   assert.match(must(['check']), /1 game/);
 });
 
+// `node tools/cli.js dev …` in this test's copy; `first` resolves with what it said first (its address, or why not)
+function devServer(...args) {
+  const server = spawn(process.execPath, [CLI, 'dev', ...args], { env: { ...ENV, IHROTEKA_ROOT: root } });
+  let out = '';
+  const first = new Promise(resolve => {
+    const said = d => { out += d; resolve(out); };
+    server.stdout.on('data', said); server.stderr.on('data', said); server.on('exit', () => resolve(out));
+  });
+  const stop = () => new Promise(resolve => {
+    if (server.exitCode !== null || server.signalCode !== null) return resolve();
+    server.once('exit', resolve); server.kill();
+  });
+  return { first, stop };
+}
+const get = (port, p) => new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path: p }, res => {
+  let body = '';
+  res.setEncoding('utf8').on('data', d => { body += d; }).on('end', () => resolve({ status: res.statusCode, body }));
+}).on('error', reject));
+const somePort = () => String(18000 + Math.floor(Math.random() * 1000));
+
 test('dev server stays inside its folder and survives bad requests', async () => {
-  const port = 18000 + Math.floor(Math.random() * 1000);
-  const server = spawn(process.execPath, [CLI, 'dev', String(port)], { env: { ...process.env, IHROTEKA_ROOT: root } });
-  await new Promise(r => server.stdout.once('data', r));
-  const get = p => new Promise(r => http.get({ host: '127.0.0.1', port, path: p }, res => { res.resume(); r(res.statusCode); }));
+  const port = somePort(), dev = devServer(port);
   try {
+    assert.match(await dev.first, new RegExp(':' + port + '/'));
+    const status = async p => (await get(port, p)).status;
     fs.mkdirSync(file('games-backup'), { recursive: true }); fs.writeFileSync(file('games-backup/x'), 'x');
-    assert.equal(await get('/..%2fgames-backup/x'), 403);
-    assert.equal(await get('/%E0%A4%A'), 400);
-    assert.equal(await get('/'), 200);                                        // the library, around the games
-    assert.equal(await get('/demo/'), 200);
-    assert.equal(await get('/demo/?frame'), 200);                              // the game itself, inside the library's frame
-    assert.equal(await get('/lib/ihroteka.js'), 200);
-    assert.equal(await get('/icons/..%2f..%2fpackage.json'), 403);
-  } finally { server.kill(); }
+    assert.equal(await status('/..%2fgames-backup/x'), 403);
+    assert.equal(await status('/%E0%A4%A'), 400);
+    assert.equal(await status('/'), 200);                                     // the library, around the games
+    assert.equal(await status('/demo/'), 200);
+    assert.equal(await status('/demo/?frame'), 200);                           // the game itself, inside the library's frame
+    assert.equal(await status('/lib/ihroteka.js'), 200);
+    assert.equal(await status('/icons/..%2f..%2fpackage.json'), 403);
+    // a service worker left on this origin by the site is replaced by one that removes itself
+    const sw = await get(port, '/sw.js');
+    assert.equal(sw.status, 200);
+    assert.match(sw.body, /registration\.unregister\(\)/);
+  } finally { await dev.stop(); }
+});
+
+test('dev server serves the built site, on 8001 unless given a port', async () => {
+  const port = somePort(), dev = devServer('site', port);
+  try {
+    assert.match(await dev.first, new RegExp(':' + port + '/'));
+    assert.equal((await get(port, '/')).status, 200);
+    assert.equal((await get(port, '/demo/')).status, 200);
+    const sw = await get(port, '/sw.js');                                      // the site's own worker, as published
+    assert.equal(sw.status, 200);
+    assert.ok(sw.body.includes('"demo/game.bin"') && !sw.body.includes('unregister'));
+  } finally { await dev.stop(); }
+  // no port: 8001 (if something else has it, the server says so and stops: either way it is 8001)
+  const auto = devServer('site');
+  try { assert.match(await auto.first, /:8001\/|Port 8001 is busy/); } finally { await auto.stop(); }
 });

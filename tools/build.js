@@ -2,6 +2,7 @@
 // for anything here but bundling a game.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import * as esbuild from 'esbuild';
 import * as vault from '../library/crypto.js';
@@ -107,31 +108,43 @@ export async function bundleGame(id, g) {
 }
 
 /* ---------- the site's pages: one template (library/app/page.html) for the shelf and every game ---------- */
-// {{key}} is replaced (HTML-escaped; bootArgs as is); a line starting with {{?key}} stays only when key is set
+// {{key}} is replaced (HTML-escaped; bootArgs as is); a line starting with {{?key}} stays only when key is set.
+// version: the site's version (siteVersion), 'dev' when not given (the dev server).
 export function page(vals) {
+  vals = { ...vals, version: vals.version || 'dev' };
   return fs.readFileSync(path.join(P.app, 'page.html'), 'utf8')
     .replace(/^\{\{\?(\w+)\}\}(.*\n)/gm, (_, k, line) => vals[k] ? line : '')
     .replace(/\{\{(\w+)\}\}/g, (_, k) => k in vals ? (k === 'bootArgs' ? vals[k] : esc(vals[k])) : problem('page.html: unknown field ' + k));
 }
 const LIBRARY = { title: 'Ігротека', description: 'Наша маленька бібліотека ігор. Ігри відкриваються за паролем.', theme: '#e4e2f0' };
 
-export function gamePage(id, g) {
+// The site's version: the commit the library is built from and the day (UTC), e.g. "1a2b3c4 2026-10-12". Every page
+// carries it (<meta name="ihroteka-version">) and the library's diagnostics start with it (together.js).
+export function siteVersion() {
+  let commit = null;
+  try { commit = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: P.app, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); }
+  catch (e) { commit = process.env.GITHUB_SHA?.slice(0, 7); }   // no git: CI still says which commit
+  return (commit || 'unknown') + ' ' + new Date().toISOString().slice(0, 10);
+}
+const VERSION_TAG = /<meta name="ihroteka-version"[^>]*>/;
+
+export function gamePage(id, g, version) {
   const base = homepage();
   if (!/^https:\/\/[^/]+\/(.*\/)?$/.test(base.replace(/\/?$/, '/'))) problem('package.json "homepage" must be the absolute https URL of the site (link previews need it)');
   return page({
     title: g.title, description: g.description, shareTitle: g.shareTitle || g.title, shareDescription: g.shareDescription || g.description,
     imageUrl: base.replace(/\/?$/, '/') + id + '/' + g.image, imageAlt: g.imageAlt || g.title, emoji: g.emoji || '🎮', theme: g.theme || LIBRARY.theme,
-    base: '../', bootArgs: JSON.stringify({ game: id })
+    base: '../', bootArgs: JSON.stringify({ game: id }), version
   });
 }
 
 /* ---------- the site: library/app + vault/ → site/ (CI does this on every push) ---------- */
 const ICONS = ['icon-192.png', 'icon-512.png', 'maskable-512.png', 'apple-touch-icon.png'];
-async function libraryFiles() {
+async function libraryFiles(version) {
   const dir = P.app, js = (entry, banner) => esbuildText(path.join(dir, entry), { ...JS, ...(banner && { banner: { js: banner } }) }, 'library/app');
   const files = {
     'index.html': page({ ...LIBRARY, shareTitle: LIBRARY.title, shareDescription: LIBRARY.description, imageUrl: '', imageAlt: '', emoji: '🎲',
-      base: './', bootArgs: '{}' }),
+      base: './', bootArgs: '{}', version }),
     'lib/ihroteka.js': await js('index.js'),
     'lib/ihroteka.css': await esbuildText(path.join(dir, 'style.css'), {}, 'library/app'),
     'lib/qr-scan.js': await js('scan.js', '/*! jsQR © Cosmo Wolfe, Apache-2.0 */'),
@@ -150,11 +163,11 @@ async function libraryFiles() {
 export async function buildSite(out = P.site) {
   const problems = checkVault();
   if (problems.length) problem(problems.join('\n'));
-  const files = await libraryFiles(), games = vaultIds().map(id => [id, readManifest(id, vaultPath(id))]);
+  const version = siteVersion(), files = await libraryFiles(version), games = vaultIds().map(id => [id, readManifest(id, vaultPath(id))]);
   files['keyring.json'] = fs.readFileSync(P.keyring);
   files['library.json'] = JSON.stringify(games.map(([id, g]) => shelfEntry(id, g)));
   for (const [id, g] of games) {
-    files[id + '/index.html'] = gamePage(id, g);
+    files[id + '/index.html'] = gamePage(id, g, version);
     files[id + '/game.bin'] = fs.readFileSync(vaultPath(id, 'game.bin'));
     files[id + '/' + g.image] = fs.readFileSync(vaultPath(id, g.image));
   }
@@ -164,11 +177,12 @@ export async function buildSite(out = P.site) {
   return games.length;
 }
 
-// the offline copy: sw.js lists every file of the site; its version is a hash of them all
+// the offline copy: sw.js lists every file of the site; its version is a hash of them all (but the site's version
+// in the pages: a rebuild of the same site is no update for the devices)
 function serviceWorker(files) {
   const names = Object.keys(files).sort(), hash = crypto.createHash('sha256'), tpl = fs.readFileSync(path.join(P.app, 'sw.js'), 'utf8');
   hash.update(tpl);                                    // a new worker gets a new version too
-  for (const f of names) hash.update(f + '\0').update(files[f]);
+  for (const f of names) hash.update(f + '\0').update(f.endsWith('.html') ? files[f].replace(VERSION_TAG, '') : files[f]);
   const fonts = [...fs.readFileSync(path.join(P.app, 'page.html'), 'utf8').matchAll(/href="(https:\/\/fonts\.googleapis\.com\/[^"]+)"/g)].map(m => m[1].replace(/&amp;/g, '&'));
   const pages = names.map(f => f.replace(/(^|\/)index\.html$/, '$1'));   // a page is stored under its address
   return tpl

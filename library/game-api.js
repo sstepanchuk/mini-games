@@ -9,8 +9,11 @@
      ihroteka.game        { id, title, players: { min, max } }
      ihroteka.libraryUrl  absolute URL of the library
      ihroteka.home()      back to the shelf
-     ihroteka.room        the other players, through the room the whole library shares (see README "Game API")
-     ihroteka.invite()    open the library's "play together" dialog */
+     ihroteka.room        the other players, through the room the whole library shares (app/together.js: channel)
+     ihroteka.invite()    open the library's "play together" dialog
+   app/shell.js (api) builds it. tests/api-surface.json pins these names, the version (here, in shell.js and in
+   README), and ihroteka.room's members and events; README "Game API" documents every one of them. The build drops
+   this comment. */
 (function (game) {
   if (!game) return;
   var library = null;
