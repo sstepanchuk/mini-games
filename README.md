@@ -223,16 +223,21 @@ The room's code is `library/net/` (`room.js` describes the room and its rules) a
 - **Write who plays what into the round** when it starts (names per seat) and read your seat from there: the
   room's order may change on a shaky network, a round's seats must not.
 - **Snapshot the round** about once a second (`room.snapshot`) from the runner; on `resume`, go on from it; on
-  `role` → 'guest', drop your copy and ask for the full state.
+  `role` → 'guest', drop your copy and ask for the full state; on `role` → 'host' with no `resume` right after it (no
+  snapshot of the round reached you), there is no round to go on: leave no frozen picture of it.
 - **Pause on `weak`**, and send the full state on `relinked` and to a guest who asks. Whom the round waits for, and why,
   the library says itself, in one card over the game («Чекаємо на …», with «Не чекати» when it makes sense): draw no
-  waiting message of your own, only your own reasons to pause (a hidden tab, a countdown).
+  waiting message of your own, only your own reasons to pause (a hidden tab, a countdown, or a pause the runner's room
+  sees and yours does not: Two Dragons says the link is weak).
 - **Show the others a little ahead**: predict both players to the moment your own input will reach the round
   (`room.lag()` is the one-way delay), and when a new state corrects the prediction, let the difference fade
   over ~0.1 s instead of jumping. The runner delays its own input and picture by `room.lag()`, so the round
   feels the same for everyone.
 - **Keep settings in `room.share`** (the chosen mode, a series score): everyone sees the same, through reloads.
-- **Quitting mid-round ends it for everyone** (send a reliable message, the runner tells the rest).
+- **Quitting mid-round ends it for everyone** (send a reliable message, the runner tells the rest). It may miss a runner
+  whose copy is reopening (a new tab hears nothing until its game is open), and the round then goes on from its
+  snapshot, there or in your copy: remember the round you quit (its players and step) until the runner says it is over,
+  say it again when that round's state comes back, and end it with `room.snapshot(null)` if it moves to you.
 - **Keep the game's tests with the game** (`games/<id>/test/`): they are sealed with its sources, so a private game
   keeps them private. Two Dragons does.
 
