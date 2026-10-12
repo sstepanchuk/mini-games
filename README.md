@@ -25,7 +25,9 @@ and works offline. Hosted on GitHub Pages.
   nearby. Without it, only nearby: two devices on the same Wi-Fi or hotspot, one shows a QR code and the other
   scans it, then the other way round (the first one adds more players the same way). If a nearby link is
   impossible, the dialog says why (e.g. a phone sharing its hotspot cannot see that network in its browser) and
-  offers a report for debugging.
+  offers a report for debugging. Friends whose libraries (or copies of a game) are different versions are not
+  linked (or not seated together) and see «Онови сторінку — у друга інша версія»; the older page updates itself
+  when no game is open there (else its note offers «Оновити»), never in a nearby room.
 - **Offline.** A service worker keeps one complete copy of the site per version; the shelf, the games and nearby
   play work without a network. On a phone it installs as an app.
 
@@ -81,8 +83,8 @@ reverse tcp:8000 tcp:8000` (or chrome://inspect → Port forwarding).
 ```
 games/<id>/          <id> becomes the URL: /<id>/
   game.json          title, tagline, description, image (+ optional shareTitle,
-                     shareDescription, imageAlt, emoji, theme, players: "2" or "2-4")
-                     — validated on build
+                     shareDescription, imageAlt, emoji, theme, players: "2" or "2-4",
+                     wire: a whole number, 1 when not given; see "Game API") — validated on build
   index.html         <script type="module"> and <link rel="stylesheet"> are bundled inline
   preview.png        1200×630, used on the shelf and in link previews
 ```
@@ -100,12 +102,20 @@ section say the same.
 
 ```js
 ihroteka.version     // 4
-ihroteka.game        // { id, title, players: { min, max } }   (game.json "players": "2", "2-4", …)
+ihroteka.game        // { id, title, players: { min, max }, wire }   (game.json "players": "2", "2-4", …; "wire": 1, 2, …)
 ihroteka.libraryUrl  // the library's absolute address (its shelf)
 ihroteka.home()      // back to the shelf
 ihroteka.invite()    // the library's "play together" dialog (room.invite() is the same)
 ihroteka.room        // the other players (below)
 ```
+
+`game.wire` is the version of the game's messages and snapshots (game.json `"wire"`, 1 when not given). Raise it by
+hand, only when they change meaning (never per build): copies of the game with different numbers are not seated
+together, the players see «Онови сторінку — у друга інша версія», and the page with the lower number updates itself
+(its offline copy, then a reload back into the room) when no game is open there (a round may run in one, even alone:
+over a game the note offers «Оновити») and the room is not nearby, at most once per version in a session. The library
+does the same for its own version (`PROTO` in `library/net/config.js`: those rooms do not even link). A library from
+before the numbers says none: it counts as version 1.
 
 A room holds up to 8 players, each known by name. A game gets as many seats as its `players` says (2 when not
 given): the first players to have it open play, in the room's order; anyone else who opens it waits for a seat
@@ -120,11 +130,11 @@ room.on('linked', () => …)            // we play with someone now (also fires 
     .on('leave', name => …)           //   another partner is 'peer-gone' and then 'linked' again)
     .on('players', names => …)        // who plays now, in seat order (also when only who waits changed)
     .on('weak', v => …)               // a player dropped out, went quiet or is opening the game in a new tab / is back: pause
-    .on('peer-gone', () => …)         // the round is over: our partner left for good, or the runner did
+    .on('peer-gone', () => …)         // the round stops: our partner (or the runner) is gone, left for good or closed the game
     .on('relinked', name => …)        // a player's copy of the game is new (a new tab or device) or its link started over:
                                       //   send them the full state
     .on('role', r => …)               // the round now runs in another copy: 'host' (ours) or 'guest'
-    .on('resume', snap => …)          // we run the round now: go on from its last snapshot
+    .on('resume', snap => …)          // we run the round now: go on from its last snapshot (before 'linked', below)
     .on('shared', (key, value) => …)  // a shared value changed, ours too (below)
     .on('pulse', (g, from) => …)      // what another player's room.pulse returned (below)
     .on('stats', s => …)              // the links changed: room.stats() (the slowest player we play with)
@@ -134,7 +144,7 @@ room.seats, room.seated               // how many seats the game has; whether we
 room.linked, room.weak                // we play with someone now; someone we play with is away or quiet (pause)
 room.role, room.host                  // 'host' (our copy runs the round), 'guest', or null (waiting); whose copy runs it
 room.away(name)                       // a player who dropped out (their place is kept): for how long, ms
-room.snapshot(state)                  // (the runner, about once a second) the round as it is, JSON-able; null: no round
+room.snapshot(state)                  // (the runner, about once a second) the round as it is, JSON-able; null: it is over
 room.shared('mode'), room.share('mode', 'race')   // what the game's players share: the same for everyone, whoever
                                       //   passes it on and whoever reloads (a chosen mode, a series score…)
 room.send({ t: 'move', … });                  // to everyone who plays; reliable: exactly once, in order, even across an outage
@@ -142,24 +152,43 @@ room.send({ t: 'pos', … }, { fast: true });   // may be lost or reordered: num
 room.send({ t: 's', … }, { fast: true, latest: 's' })   // each one makes the previous one of stream 's' useless (a full
                                               //   state): through the brokers only the newest goes, ≤ 30 a second
 room.send({ t: 'card', … }, { to: name });    // to one player
+// send, share and snapshot → true when done, false when refused (not linked, no seat, too big…)
 ```
 
-Seats come from the room's order (`room.players`), not from who runs the round. Whose copy runs a round is
-shared by the whole room. It moves only when that copy has been gone for 10 s, and only with proof that it was the
-runner who dropped out, not us: another player is here with us, or (over the internet) the brokers have answered us
-all that time and we are the room's host or hear it. Then the first seated player still here takes over and gets
-`resume` with the latest snapshot; everyone else gets `role`. Two phones nearby that lose each other cannot tell
-which of them dropped out, so there the round waits for its runner. A runner who comes back after the round went
-on elsewhere plays on as a guest (`role` → 'guest').
+**Listening late.** A game that starts listening after things happened (it often does: the room may be linked
+before the game's code runs) still hears what it missed, once, in the order the room tells it live: `players`, then
+`resume` (if its copy runs a round on), then `linked`, then `weak` (true), then the messages kept for it (up to 64,
+in order). `resume` comes before `linked` live too, and only while we play with someone: a game that hears `linked`
+already knows whether it goes on with a round or starts afresh.
+
+Seats come from the room's order (`room.players`), not from who runs the round; the same two players in another
+order (a shaky network may reorder the room) are still the same round. Whose copy runs a round is shared by the whole
+room (that copy names itself with the round's first snapshot, so the room's order does not move it). It moves only
+when that copy has been gone for 10 s, and only with proof that it was the runner who dropped out, not us: another
+player is here with us, or (over the internet) the brokers have answered us all that time and we are the room's host
+or hear it. Then the first seated player still here takes over and gets `resume` with the latest snapshot; everyone
+else gets `role`. Two phones nearby that lose each other cannot tell which of them dropped out, so there the round
+waits for its runner. A runner who comes back after the round went on elsewhere plays on as a guest (`role` →
+'guest').
+
+**Snapshots.** A game closed mid-round (the room went back to the shelf, a frame was closed or reloaded) waits: when
+it is open again, the copy that runs the round hears `resume` with the snapshot, if the players seated are the same
+as when it was taken (a snapshot never goes on with someone else's seats). A round is over for good when its runner
+says so (`room.snapshot(null)`) or one of its players left the room for good (with the game open or not: back later,
+they start a new round): then every player keeps a tombstone in its place, so no older copy (say, kept by a player
+who waited for a seat) can bring it back.
 
 **Messages.** A message is a plain JSON-able object with a string `t`; any `t` will do (the library wraps a game's
-messages in its own, so the room's own types never clash with them). `send` does nothing while `room.linked` is
-false. `latest` counts only with `fast`, per player: `true` is one stream, a name is a stream of its own. Hand
-`send` and `snapshot` a value you will not change afterwards: neither copies it, a reliable message is sent again as
-it is then until it arrives, and a snapshot goes out up to half a second later. A reliable message that cannot
-become JSON (a cycle, a BigInt) is not refused at the call yet and stalls every later reliable message to that
-player (to be fixed, see [the roadmap](docs/ROADMAP.md)). `share` takes values of up to 8 000 characters as JSON,
-under keys of up to 40 letters, digits, `_` or `-`, and only from a player with a seat.
+messages in its own, so the room's own types never clash with them). `send` does nothing (→ false) while
+`room.linked` is false. `latest` counts only with `fast`, per player: `true` is one stream, a name is a stream of its
+own. The limits are at the call, in bytes of the value's JSON (UTF-8: a Cyrillic letter takes 2): a reliable message
+and a snapshot up to 32 KB (32 768 bytes), a shared value up to 8 000 bytes, and up to 32 keys per game (an old key
+may always change); over them, the call returns false and nothing goes out (on the dev server the console says why,
+once). A reliable message, a snapshot or a shared value that cannot become JSON (a cycle, a BigInt) is a
+`TypeError` at the call; each is taken as a copy, so changing the object afterwards changes nothing (and what the room
+hands the game, `resume`'s snapshot and shared values, is a copy of its own too). (A fast message is neither copied
+nor measured, as it may be lost anyway: hand it a value you will not change.) `share` takes keys of up to 40 letters,
+digits, `_` or `-`, and only from a player with a seat.
 
 **Links.** `room.lag(name?)` is the one-way delay in ms (to that player, or the slowest we play with);
 `room.stats(name?)` is `{ rtt, peerRtt, direct, relayed, turn, weak }` for that player's link, or the worst of

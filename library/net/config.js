@@ -41,13 +41,25 @@ const BASE = {
   GRACE: 5000,                                         // after our tab slept, nobody is judged this long (link.js)
   HOST_WAIT: 10000,                                    // the room's host away this long: the first player here takes over (internet.js)
   AUTH_WAIT: 10000,                                    // a round's runner away this long: the first player here runs it on (app/together.js)
-  HOLD: 180000                                         // a player who dropped out keeps their place this long; a link silent this long is gone
+  HOLD: 180000,                                        // a player who dropped out keeps their place this long; a link silent this long is gone
+  VERSION: 25000                                       // another library version not heard this long is forgotten (room.js otherVersion:
+                                                       //   longer than two of a host's announcements with guests, 10 s apart; outside the order)
 };
 const SCALE = Number.isFinite(window.__timeScale) && window.__timeScale > 0 ? window.__timeScale : 1;
 export const TIMING = Object.freeze(Object.fromEntries(Object.entries(BASE).map(([k, v]) => [k, v * SCALE])));
 if (!(TIMING.WEAK < TIMING.GRACE && TIMING.GRACE < TIMING.HOST_WAIT && TIMING.HOST_WAIT <= TIMING.AUTH_WAIT && TIMING.AUTH_WAIT < TIMING.HOLD)) {
   throw new Error('net: TIMING must keep WEAK < GRACE < HOST_WAIT <= AUTH_WAIT < HOLD');
 }
+
+// The library's wire version, said in every handshake as pv (internet: who, host, hello, hi; nearby: _h). Bump it
+// by hand, and only when what the libraries say to each other changes meaning: never per build, so friends whose
+// pages differ only in other ways still play together. Two players whose versions differ are not linked: the room
+// says status 'version', and room.versionMismatch is their number (room.js). A handshake without pv comes from a
+// library older than the number: it speaks version 1 (the wire of the release that introduced the number, whose
+// changes an old library ignores; see the headers of internet.js and nearby.js).
+export const PROTO = 1;
+// the version a handshake says it speaks: 1 when it says none; null when pv is not a version at all
+export const pvOf = m => m.pv === undefined ? 1 : Number.isSafeInteger(m.pv) && m.pv > 0 ? m.pv : null;
 
 const ABC = 'abcdefghjkmnpqrstuvwxyz23456789';      // no look-alikes (0/o, 1/l)
 const code = n => Array.from({ length: n }, () => ABC[Math.floor(Math.random() * ABC.length)]).join('');

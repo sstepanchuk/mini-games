@@ -1,15 +1,20 @@
 // What a game sees of the library's room (library/app/together.js: ihroteka.room), in worker tabs that run the real
 // library over fake brokers (tests/support): everyone follows into the game one opens; a game for two seats the
 // first two players and the third waits; a game's messages reach only who plays; a seat that comes free goes to who
-// waits; a player's new tab is waited for; shared values are the same for everyone.
+// waits; a player's new tab is waited for; shared values are the same for everyone. And what a game may hand the
+// room (A1): JSON (else a TypeError at the call), a reliable message of up to CAP bytes, a shared value of up to
+// 8 000 bytes and 32 keys per game, counted in UTF-8 bytes (Cyrillic: 2 a letter); what is refused never arrives
+// and stalls nothing.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { room, until, world } from '../support/world.js';
+import { room, sleep, until, world } from '../support/world.js';
+import { CAP, SHARE_BYTES, SHARE_KEYS } from '../../library/app/rules.js';
 
 const T = { timeout: 30000 };
 const games = tabs => Promise.all(tabs.map(x => x.game()));
 const heard = (g, ...ev) => g.events.some(e => ev.every((x, i) => JSON.stringify(e[i + 1]) === JSON.stringify(x)));
 const seats = g => g && [g.me, g.role, g.players.join(), g.waiting.join(), g.linked];
+const linkedAll = (...tabs) => until(async () => (await games(tabs)).every(g => g && g.linked), 5000);
 
 // (each test has its own network and tabs: they run side by side)
 describe('a game\'s room: following, seats, messages, a new tab, shared values', { concurrency: 3 }, () => {
@@ -74,5 +79,66 @@ describe('a game\'s room: following, seats, messages, a new tab, shared values',
     await C.lib('seat4', 'Сава');
     assert.ok(await until(async () => (await C.game()) && (await C.shared('mode')) === 'race' && (await C.shared('series'))?.Аня === 1, 5000),
       'Сава follows into the game and sees what the players share');
+  });
+});
+
+describe('what a game may hand the room', { concurrency: 3 }, () => {
+  test('a reliable message: not JSON is a TypeError at the call; over CAP bytes it is refused (→ false); neither stalls the next', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'cap1', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await linkedAll(A, B));
+    const cyclic = { t: 'loop' };
+    cyclic.self = cyclic;                                    // (a worker message keeps the cycle)
+    await assert.rejects(A.gsend(cyclic), /TypeError: ihroteka\.room\.send: not JSON/);
+    await assert.rejects(A.gsend({ t: 'big', n: 10n }), /TypeError/);
+    const fits = 'я'.repeat((CAP - 40) / 2), over = 'я'.repeat(CAP / 2);   // CAP / 2 letters: fewer characters than CAP, more bytes
+    assert.ok(over.length < CAP);
+    assert.equal(await A.gsend({ t: 'over', s: over }), false, 'over CAP: refused');
+    assert.equal(await A.gsend({ t: 'fits', s: fits }), true);
+    assert.equal(await A.gsend({ t: 'nobody' }, { to: 'Яків' }), false, 'to a player we do not play with: refused');
+    assert.equal(await A.gsend({ t: 'after' }), true);
+    assert.ok(await until(async () => (await B.game()).got.some(([, m]) => m.t === 'after'), 5000), 'what came after arrives');
+    await sleep(300);
+    assert.deepEqual((await B.game()).got.map(([f, m]) => f + ':' + m.t), ['Аня:fits', 'Аня:after']);
+    assert.equal((await B.game()).got[0][1].s, fits);
+    // a snapshot: only from the copy that runs the round (Аня's), and up to CAP bytes too
+    assert.deepEqual([await B.snapshot({ n: 1 }), await A.snapshot({ s: over }), await A.snapshot({ s: fits })], [false, false, true]);
+    await B.leave();                                         // nobody to play with: a message goes nowhere
+    assert.ok(await until(async () => !(await A.game()).linked, 5000));
+    assert.equal(await A.gsend({ t: 'alone' }), false, 'not linked: refused');
+  });
+
+  test('a shared value: up to 8 000 bytes as JSON, up to 32 keys per game (an old key may change)', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'cap2', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await linkedAll(A, B));
+    await assert.rejects(A.share('loop', { a: 1n }), /TypeError: ihroteka\.room\.share: not JSON/);
+    assert.equal(await A.share('big', 'я'.repeat(SHARE_BYTES / 2)), false);   // 4 000 letters: 8 002 bytes as JSON
+    assert.equal(await A.share('ok', 'я'.repeat(SHARE_BYTES / 2 - 1)), true); // 8 000
+    assert.equal(await A.share('a key with spaces', 1), false);
+    for (let i = 1; i < SHARE_KEYS; i++) assert.equal(await A.share('k' + i, i), true);   // 32 keys with 'ok'
+    assert.equal(await A.share('one-more', 1), false);
+    assert.equal(await A.share('k5', 'five'), true);         // a key it has may change
+    assert.ok(await until(async () => (await B.shared('k5')) === 'five', 3000));
+    await sleep(300);
+    assert.deepEqual([await B.shared('big'), (await B.shared('ok')).length, await B.shared('k31'), await B.shared('one-more')], [undefined, 3999, 31, undefined]);
+    assert.deepEqual([await A.shared('big'), await A.shared('one-more')], [undefined, undefined], 'nor on Аня\'s side');
+  });
+
+  test('the shared state takes only the keys it knows, each as it must look', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'cap3', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await linkedAll(A, B));
+    const at = Date.now() + 1000, e = (v, a = 'Богдан') => ({ v, c: at, a });
+    await B.send({ t: 'lib-state', e: [['junk', e(1)], ['g:g:fine', e(1)], ['here:Аня', e('g')], ['wire:Аня', e({ g: 2 })], ['wire:Богдан', e({ g: 'x' })],
+      ['wire:Богдан', e({ other: 3 })], ['auth:g', e('Богдан')], ['view', e('not a game!')]] });
+    assert.ok(await until(async () => (await A.shared('fine')) === 1, 3000));
+    const keys = (await A.state()).lib.keys;
+    assert.deepEqual(['junk', 'wire:Аня', 'auth:g'].map(k => keys.includes(k)), [false, false, true], keys.join(' '));
+    assert.ok(keys.includes('wire:Богдан'), 'a player\'s own wire numbers, from them');
+    assert.equal((await A.state()).lib.view, 'g', 'not a view that is no game');
   });
 });

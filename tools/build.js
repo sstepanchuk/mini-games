@@ -23,6 +23,11 @@ const FIELDS = {
   players: '?how many play together: "2", or a range such as "2-4" (1 to 8; 2 when not given)',
   theme: '?browser theme color, e.g. #e4e2f0'
 };
+// the one field that is a number, not a string
+const NUMBERS = {
+  wire: '?the version of the game\'s messages and snapshots: a whole number from 1 (1 when not given), raised by hand ' +
+    'only when they change; copies of the game with different numbers are not seated together (ihroteka.game.wire)'
+};
 const FORMAT = {
   image: v => /^[\w-]+\.png$/.test(v),
   emoji: v => [...v].length <= 4 && !/[\x00-\x7f]/.test(v),
@@ -31,15 +36,17 @@ const FORMAT = {
 };
 // "2" → { min: 2, max: 2 }, "2-4" → { min: 2, max: 4 }
 export const playersOf = (v = '2') => { const m = /^([1-8])(?:-([1-8]))?$/.exec(v); return m && { min: +m[1], max: +(m[2] || m[1]) }; };
+export const wireOf = g => g.wire ?? 1;
 // what the shelf knows about a game (library.json, and the dev server's list)
-export const shelfEntry = (id, g) => ({ id, title: g.title, tagline: g.tagline, image: g.image, emoji: g.emoji, players: playersOf(g.players) });
+export const shelfEntry = (id, g) => ({ id, title: g.title, tagline: g.tagline, image: g.image, emoji: g.emoji, players: playersOf(g.players), wire: wireOf(g) });
 export function readManifest(id, dir = path.join(P.games, id)) {
   const file = rel(path.join(dir, 'game.json'));
   if (!/^[a-z0-9][a-z0-9-]*$/.test(id) || RESERVED.has(id)) problem(rel(dir) + ': the folder name becomes the URL, so use lowercase letters, digits and dashes (and not ' + [...RESERVED].join(', ') + ')');
   let g;
   try { g = JSON.parse(fs.readFileSync(path.join(dir, 'game.json'), 'utf8').replace(/^\uFEFF/, '')); }
   catch (e) { problem(file + ': ' + e.message); }
-  for (const k of Object.keys(g)) if (!(k in FIELDS)) problem(file + ': unknown field "' + k + '"');
+  for (const k of Object.keys(g)) if (!(k in FIELDS) && !(k in NUMBERS)) problem(file + ': unknown field "' + k + '"');
+  if (g.wire !== undefined && !(Number.isSafeInteger(g.wire) && g.wire >= 1)) problem(file + ': "wire" must be a whole number from 1 (' + NUMBERS.wire.slice(1) + ')');
   for (const [k, about] of Object.entries(FIELDS)) {
     const optional = about.startsWith('?');
     if (g[k] === undefined && optional) continue;
@@ -54,7 +61,7 @@ export function readManifest(id, dir = path.join(P.games, id)) {
 export function withLibraryApi(html, id, g) {
   const api = fs.readFileSync(P.gameApi, 'utf8')
     .replace(/^\/\*[\s\S]*?\*\/\s*/, '')
-    .replace('/* GAME */ null', () => JSON.stringify({ id, title: g.title, players: playersOf(g.players) }).replace(/</g, '\\u003c'));
+    .replace('/* GAME */ null', () => JSON.stringify({ id, title: g.title, players: playersOf(g.players), wire: wireOf(g) }).replace(/</g, '\\u003c'));
   const at = /<meta charset[^>]*>/i.test(html) ? /<meta charset[^>]*>/i : /<head>/i;   // charset must stay near the top
   if (!at.test(html)) problem('games/' + id + '/index.html has no <head>');
   return html.replace(at, m => m + '\n<script>' + api.trim() + '</script>');

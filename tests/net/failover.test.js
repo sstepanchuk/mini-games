@@ -78,7 +78,7 @@ describe('the room\'s host going away', { concurrency: 3 }, () => {
   // Found by these tests (README: "when the old host comes back, it joins as a guest"): a host whose tab was frozen,
   // awake, counts its silent links as here for GRACE (link.js: watch), so it wins the merge (internet.js: 'host', more
   // players here) and the others move over to it again.
-  test('the host\'s tab frozen longer than HOST_WAIT: the next player takes over; awake, the old host joins as a guest', { ...T, todo: 'phase 1: today, awake, it keeps the room and the others move back to it' }, async t => {
+  test('the host\'s tab frozen longer than HOST_WAIT: the next player takes over; awake, the old host joins as a guest', { ...T, todo: 'phase 1b: today, awake, it keeps the room and the others move back to it' }, async t => {
     const W = world(t, { scale: SCALE });
     const [A, B, C] = await room(W, 'fail6', ['Аня', 'Богдан', 'Сава']);
     const { HOST_WAIT } = (await A.info()).timing;

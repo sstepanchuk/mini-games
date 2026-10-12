@@ -7,9 +7,11 @@
 //   const W = world(t, { scale, rtc })     scale: window.__timeScale of every tab (config.js TIMING); rtc: fake direct
 //                                          links (fakertc.js) besides the brokers
 //   const A = await W.tab('aaaa1111')      a tab; its session starts with this pid (sessions decide some elections)
-//   await A.join('room01', 'Аня')          a net-level room (library/net joinRoom); A.lib(code, name, seats): the library's
-//                                          room (together.js), and A.open(game), A.game(), A.gsend(m), A.snapshot(s) …
-//   await A.state(), A.events(), A.got(), A.net({ up: false }), A.send(m, opts), A.release(n), A.leave(), A.kill() …
+//   await A.join('room01', 'Аня')          a net-level room (library/net joinRoom); A.lib(code, name, seats, wires): the
+//                                          library's room (together.js), and A.open(game), A.game(), A.gsend(m) → true |
+//                                          false, A.snapshot(s), A.share(k, v) …;
+//                                          A.near(name): a nearby one (rtc), paired with A.pair('offer' | 'answer' | 'finish', code)
+//   await A.state(), A.events(), A.got(), A.net({ up: false }), A.send(m, opts, then), A.release(n), A.leave(), A.kill() …
 //   await until(async () => …, ms)         poll a condition (truthy → it; deadline → false)
 //   const S = W.spy()                      S.seen: [{ topic, url, m }]; S.publish(topic, m, session): to every broker
 //   await room(W, code, names, o)          tabs for these players, linked one after another and settled
@@ -87,13 +89,16 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
       const T = {
         pid, session, worker: w, call,
         join: (code, name, o = {}) => call('join', { code, name, ...o }),
-        lib: (code, name, seats) => call('lib', { code, name, seats }),
+        near: (name, o = {}) => call('near', { name, ...o }),     // a nearby room (world rtc), then pair('offer') …
+        pair: (step, code) => call('pair', { step, code }),
+        lib: (code, name, seats, wires) => call('lib', { code, name, seats, wires }),
         state: () => call('state'),
         log: (from, gfrom) => call('log', { from, gfrom }),
         events: async () => (await call('log')).events,
         // the messages this tab's room got, as 'from:t' or 'from:t:n' strings
         got: async () => (await call('log')).got.map(([f, m]) => f + ':' + m.t + (m.n !== undefined ? ':' + m.n : '')),
-        send: (m, opts) => call('send', { m, opts }),
+        send: (m, opts, then) => call('send', { m, opts, then }),
+        sendAs: (m, as, opts) => call('send', { m, opts, as }),    // m, whose toJSON says it is `as`
         sendAll: (list, opts) => call('send', { list, opts }),
         release: n => call('release', { n }),
         leave: final => call('leave', { final }),
@@ -108,6 +113,9 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
         info: (code, game) => call('info', { code, game }),
         killDc: () => call('killDc'),
         hide: on => call('hide', { on }),                  // the page hidden (a locked phone) or shown again
+        siteData: on => call('siteData', { on }),          // the browser blocks the page's site data (false) or allows it
+        reloadDone: () => call('reloadDone'),              // the shell's reload, its offline copy in place: 'reload' | 'stay' | null
+        stored: k => call('stored', { k }),                // sessionStorage[k] (JSON), as the next page would find it
         freeze: ms => call('freeze', { ms }),              // the tab stops for ms (→ when it runs again)
         kick: () => call('kick'),
         // the tab is killed (a crash, a phone that dies): nothing more goes out

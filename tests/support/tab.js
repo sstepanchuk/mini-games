@@ -27,8 +27,10 @@ process.on('uncaughtException', say);
 process.on('unhandledRejection', say);
 
 const win = new EventTarget(), doc = new EventTarget();
-let hidden = false;
-const store = new Map();
+let hidden = false, siteData = true;                     // siteData: false, as a browser set to block it (cmds.siteData)
+const storage = m => ({ getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: k => { m.delete(k); } });
+const local = storage(new Map()), session = storage(new Map());
+const blocked = s => () => { if (!siteData) throw new DOMException('The site data is blocked', 'SecurityError'); return s; };
 Object.assign(globalThis, {
   window: globalThis, self: globalThis, __pid: pid, __timeScale: scale,
   addEventListener: win.addEventListener.bind(win), removeEventListener: win.removeEventListener.bind(win), dispatchEvent: win.dispatchEvent.bind(win),
@@ -39,9 +41,10 @@ Object.assign(globalThis, {
   },
   location: { href: 'http://127.0.0.1:8000/', origin: 'http://127.0.0.1:8000', pathname: '/', search: '' },
   history: { state: null, replaceState() {}, pushState() {} },
-  localStorage: { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => { store.set(k, String(v)); }, removeItem: k => { store.delete(k); } },
   RTCPeerConnection: undefined
 });
+Object.defineProperty(globalThis, 'localStorage', { configurable: true, get: blocked(local) });
+Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, get: blocked(session) });
 let fake = null;
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { get onLine() { return !fake || fake.up; }, userAgent: 'node (tests/support/tab.js)' } });
 
@@ -65,9 +68,10 @@ const need = () => { const r = room(); if (!r) throw new Error('tab.js: no room 
 /* ---------- a library tab: the shell, as together.js sees it, and the open game ---------- */
 let view = null, game = null;
 const follows = [];
-const gEvents = [], gGot = [];
+const gEvents = [], gGot = [], heard = [];               // heard: the names of what it heard, messages ('message:' t) too, in order
 const GAME_EVENTS = ['linked', 'join', 'leave', 'players', 'weak', 'peer-gone', 'relinked', 'role', 'resume', 'shared'];
-let seatsOf = {}, shell = false;
+let seatsOf = {}, shell = false, later = false;          // later: the game's code starts listening only when told (glisten)
+const reloads = [];                                      // what together.js asked of the shell's reload: its still, or null
 // Go to a view (null: the shelf; else a game, which opens a moment later, as its frame would). byPeer: following.
 function go(id, byPeer = false) {
   if (id === view) return;
@@ -78,11 +82,14 @@ function go(id, byPeer = false) {
   T.viewChanged(id, byPeer);
   if (id) setTimeout(() => { if (view === id && !game) openGame(id); }, 5);
 }
-// the game's page runs: it gets ihroteka.room and listens to everything a game may hear
+// the game's page runs: it gets ihroteka.room and listens to everything a game may hear (at once, or when told)
 function openGame(id) {
   game = T.attachGame(id);
-  for (const ev of GAME_EVENTS) game.on(ev, (...a) => gEvents.push([ms(), ev, ...a]));
-  game.on('message', (m, from) => gGot.push([from, m]));
+  if (!later) listen();
+}
+function listen() {
+  for (const ev of GAME_EVENTS) game.on(ev, (...a) => { gEvents.push([ms(), ev, ...a]); heard.push(ev); });
+  game.on('message', (m, from) => { gGot.push([from, m]); heard.push('message:' + m.t); });
 }
 
 /* ---------- the commands ---------- */
@@ -94,33 +101,54 @@ const cmds = {
     watchRoom(netRoom);
     return config.me;
   },
+  // a nearby room of library/net (needs the world's fake direct links, rtc) → this tab's session; then its pairing:
+  // pair 'offer' → the host's code, 'answer' (code) → the guest's code, 'finish' (code) at the host
+  near({ name, max, game: g = 'test' }) {
+    if (netRoom) netRoom.leave();
+    netRoom = net.joinNearby({ game: g, name, max });
+    watchRoom(netRoom);
+    return config.me;
+  },
+  pair: ({ step, code }) => step === 'offer' ? need().pair.offer() : step === 'answer' ? need().pair.answer(code) : need().pair.finish(code),
   // the library's room (together.js: startInternet, as if from a room link) and a shell around it; seats: game id →
-  // seats (default 2). Again in the same tab: that room is left, as the library does.
-  async lib({ code, name, seats = {} }) {
+  // seats (default 2); wires: game id → its wire number on this tab's shelf (the first call only; none: the shell does
+  // not say, every game 1). Again in the same tab: that room is left, as the library does.
+  async lib({ code, name, seats = {}, wires }) {
     T = T || await import(lib('app/together.js'));
     seatsOf = seats;
     if (!shell) {
       shell = true;
-      T.initTogether({ current: () => view, follow: id => go(id, true), invite() {}, address: () => globalThis.location.href, seats: id => seatsOf[id] || 2, askName() {} });
+      T.initTogether({ current: () => view, follow: id => go(id, true), invite() {}, address: () => globalThis.location.href, seats: id => seatsOf[id] || 2, askName() {},
+        reload: still => { reloads.push(still || null); }, ...(wires && { wires: () => wires }) });
     }
     watchRoom(T.startInternet(code, name));
     return config.me;
   },
   open: ({ id }) => { go(id); },                          // open a game (or the shelf: null) ourselves
-  // this tab's session, the brokers, the room's topic (for a spy) and the room's timing (TIMING, scaled)
-  info: async ({ code, game: g = 'test' } = {}) => ({ session: config.me, urls: fake.urls, topic: code ? await config.roomTopic(g, code) : null, timing: config.TIMING }),
+  // this tab's session, the brokers, the room's topic (for a spy), the room's timing (TIMING, scaled) and the library's
+  // wire version (PROTO; undefined before it had one)
+  info: async ({ code, game: g = 'test' } = {}) => ({ session: config.me, urls: fake.urls, topic: code ? await config.roomTopic(g, code) : null, timing: config.TIMING,
+    proto: config.PROTO }),
   state() {
     const r = room();
     if (!r) return null;
     return { session: config.me, me: r.me, role: r.role, host: r.host, players: r.players, away: r.players.filter(p => r.away(p)),
-      linked: r.linked, weak: r.weak, online: r.online, direct: r.direct, lib: T ? T.state() : null };
+      linked: r.linked, weak: r.weak, online: r.online, direct: r.direct, version: r.versionMismatch ?? null, pairing: r.pair ? r.pair.pending : null,
+      lib: T ? T.state() : null };
   },
   // what happened since: events [ms, name, ...args] and messages [from, m] (from: an index to read only the new ones)
   log: ({ from = 0, gfrom = 0 } = {}) => ({ events: events.slice(from), got: got.slice(gfrom) }),
-  // room.send for each of list (or m), → the first error thrown (its message), or null
-  send({ m, list = [m], opts }) {
+  // room.send for each of list (or m), → the first error thrown ('TypeError: ' and its message), or null. then: what
+  // each message becomes right after it went, in place, nested objects too (a caller that changes what it sent); as:
+  // what each one says it is as JSON (its toJSON)
+  send({ m, list = [m], opts, then, as }) {
     const r = need();
-    for (const x of list) { try { r.send(x, opts); } catch (e) { return e.message || String(e); } }
+    const change = (x, o) => { for (const [k, v] of Object.entries(o)) if (v && typeof v === 'object' && x[k] && typeof x[k] === 'object') change(x[k], v); else x[k] = v; };
+    for (const x of list) {
+      if (as) Object.defineProperty(x, 'toJSON', { value: () => as });
+      try { r.send(x, opts); } catch (e) { return (e.name === 'TypeError' ? 'TypeError: ' : '') + (e.message || String(e)); }
+      if (then) change(x, then);
+    }
     return null;
   },
   release: ({ n }) => { need().release(n); },
@@ -129,6 +157,13 @@ const cmds = {
   // the page closes: it says goodbye (pagehide), and is gone: nothing more goes out or comes in
   pagehide: () => { win.dispatchEvent(new Event('pagehide')); fake.set({ up: false }); },
   hide: ({ on }) => { hidden = on; doc.dispatchEvent(new Event('visibilitychange')); },
+  // the browser lets the page keep site data (localStorage, sessionStorage) or blocks it: they throw
+  siteData: ({ on }) => { siteData = on; },
+  // the shell's reload (shell.js), once the newer offline copy is in place, for the latest one asked: 'reload' (the
+  // page reloads now), 'stay' (called off meanwhile) or null (none asked)
+  reloadDone: () => { const s = reloads.at(-1); return s === undefined ? null : !s || s() ? 'reload' : 'stay'; },
+  // what the page keeps in sessionStorage under k (JSON), as the next page in this tab would find it
+  stored: ({ k }) => JSON.parse(session.getItem(k)),
   // the tab stops for ms (a locked phone, a frozen background tab): no timer, no message, then everything late at once
   freeze: ({ ms }) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); },
   net: o => { fake.set(o); return fake.state(); },
@@ -141,12 +176,25 @@ const cmds = {
     if (!game) return null;
     const g = game;
     return { me: g.me, players: g.players, waiting: g.waiting, seats: g.seats, seated: g.seated, host: g.host, role: g.role,
-      linked: g.linked, weak: g.weak, events: gEvents.slice(), got: gGot.slice(), follows: follows.slice(), view };
+      linked: g.linked, weak: g.weak, events: gEvents.slice(), got: gGot.slice(), heard: heard.slice(), follows: follows.slice(), view };
   },
-  gsend({ m, opts }) { game.send(m, opts); },
-  gsnapshot({ s }) { game.snapshot(s); },
-  gshare({ k, v }) { game.share(k, v); },
-  gshared: ({ k }) => game.shared(k)
+  // the game's next page runs its code late: it listens only when told (glisten), as a game that starts after the room
+  gameLate: ({ on }) => { later = on; },
+  glisten: () => { listen(); },
+  // what the game calls → what the call returns (send, snapshot, share: whether it was done)
+  gsend: ({ m, opts }) => game.send(m, opts),
+  gsnapshot: ({ s }) => game.snapshot(s),
+  gshare: ({ k, v }) => game.share(k, v),
+  gshared: ({ k }) => game.shared(k),
+  // the game changes, in place, a value the library handed it (a game that keeps its state in it): that of its last
+  // 'resume', of its last 'shared' event for key k, or what room.shared(k) returns ('get') → whether there was one
+  gtouch({ ev, k, set }) {
+    const e = ev === 'get' ? null : [...gEvents].reverse().find(x => x[1] === ev && (ev === 'resume' || x[2] === k));
+    const v = ev === 'get' ? game.shared(k) : e && e[ev === 'resume' ? 2 : 3];
+    if (!v || typeof v !== 'object') return false;
+    Object.assign(v, set);
+    return true;
+  }
 };
 
 parentPort.on('message', async ({ id, cmd, args }) => {

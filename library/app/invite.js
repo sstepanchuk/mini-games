@@ -3,12 +3,16 @@
    bottom of the screen, the "Грати разом" dialog, the name a player comes in with, and the note over a game
    while it waits for a player who dropped out. The dialog asks for the name, then checks for internet by itself:
    with internet there are two ways (a link, or nearby with QR codes), without it only nearby. Once together,
-   more players can be added the same way (up to the room's limit).
+   more players can be added the same way (up to the room's limit). A friend on another version of the library or of
+   the game (together.js versionGap) is told everywhere it shows: «Онови сторінку — у друга інша версія».
    ===================================================================== */
 import { hasInternet, newRoomCode, preload } from '../net/index.js';
 import { $, btn, copy, el, modal, para, toast } from './dom.js';
 import { Camera, drawQr } from './qr.js';
-import { comeBack, currentRoom, elsewhere, lastInternetCode, lastName, leave, linked, onChange, release, startInternet, startNearby, validName, waitingFor } from './together.js';
+import { comeBack, currentRoom, elsewhere, lastInternetCode, lastName, leave, linked, offerUpdate, onChange, release, startInternet, startNearby, updateNow, validName, versionGap,
+  waitingFor } from './together.js';
+
+const UPDATE = 'Онови сторінку — у друга інша версія';   // (owner, decision 9)
 
 let shell = null;                                        // { address() → this view's address, with the room }
 let dlg = null;                                          // the open dialog: { screen, show, close, camera, scan, online, adding, name }
@@ -26,7 +30,8 @@ export function initInvite(s) {
     // (a moment later: when the room's host changes, everyone is back together in a second)
     if (what === 'peer-gone') setTimeout(() => { if (!linked()) toast(room && room.kind === 'nearby' ? 'Зв’язок обірвався' : 'Друзі вийшли'); }, 3000);
     if (what === 'replaced') queueMicrotask(goneElsewhere);
-    if (what === 'away' || what === 'leave' || what === 'left' || what === 'peer-gone') waitNote();
+    if (what === 'version' && versionGap()) toast(UPDATE);
+    if (what === 'away' || what === 'leave' || what === 'left' || what === 'peer-gone' || what === 'version') waitNote();
     chip();
     if (dlg) refresh(what);
   });
@@ -59,11 +64,12 @@ function goneElsewhere() {
 
 /* ---------- over a game: who we wait for ---------- */
 // A player who dropped out keeps their seat for a while: the game pauses, and this says who we wait for and how
-// much longer, with a way to stop waiting (their seat goes; the game goes on without them, if it can).
+// much longer, with a way to stop waiting (their seat goes; the game goes on without them, if it can). A friend on
+// another version: that it takes a newer page (the older one reloads by itself when it can, or when its player asks).
 function waitNote() {
-  const list = waitingFor(), stage = $('stage');
+  const list = waitingFor(), stage = $('stage'), gap = versionGap();
   let box = $('waiting');
-  if (!list.length || stage.hidden) { if (box) box.remove(); return; }
+  if ((!list.length && !gap) || stage.hidden) { if (box) box.remove(); return; }
   if (!box) { box = el('div', { id: 'waiting', className: 'waiting card', role: 'status' }); stage.append(box); }
   const mmss = ms => { const s = Math.ceil(ms / 1000); return (s / 60 | 0) + ':' + String(s % 60).padStart(2, '0'); };
   // nearby, a broken link does not come back by itself: show the way back (pairing again)
@@ -71,7 +77,8 @@ function waitNote() {
   box.replaceChildren(...list.flatMap(({ name, left }) => [
     para('Чекаємо на ' + name + '… ' + mmss(left)),
     ...(near ? [para('Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.', 'fine'), btn('З’єднатися знову', repair)] : []),
-    btn('Не чекати', () => { release(name); box.remove(); }, 'btn ghost')]));
+    btn('Не чекати', () => { release(name); box.remove(); }, 'btn ghost')]),
+    ...(gap ? [para(UPDATE), ...(offerUpdate() ? [btn('Оновити', updateNow, 'btn ghost')] : [])] : []));
 }
 
 // Nearby, a link broke: pair again (the host shows its code, a guest scans it); the player is back in their place.
@@ -90,6 +97,7 @@ function chip() {
   const room = currentRoom(), s = room && room.linked && room.stats(), b = $('together');
   b.classList.toggle('on', linked());
   b.textContent = !room ? 'Грати разом'
+    : versionGap() && !linked() ? UPDATE
     : linked() ? (room.weak ? 'Разом · зв’язок зник…' : 'Разом' + (room.players.length > 2 ? ' ' + room.players.length : '') + (s.rtt != null ? ' · ' + s.rtt + ' мс' : room.kind === 'nearby' ? ' · поруч' : ''))
     : room.kind === 'nearby' ? 'З’єднуюсь…'
     : /unavailable|no-signal/.test(room.lastStatus) ? 'Немає інтернету' : 'Чекаю на друга…';
@@ -103,7 +111,8 @@ const STATUS = {
   waiting: 'Чекаю, поки друг відкриє посилання…',
   joining: 'З’єднуюсь із другом…',
   full: 'У цій кімнаті вже немає місць.',
-  'peer-left': 'Друг вийшов. Посилання діє далі — чекаю…'
+  'peer-left': 'Друг вийшов. Посилання діє далі — чекаю…',
+  version: UPDATE + '.'
 };
 
 export function openDialog() {
@@ -142,6 +151,7 @@ function refresh(what) {
   if (d.screen === 'together') { if (!linked()) closeDialog(); else if (what === 'join' || what === 'leave' || what === 'away') show('together'); else d.state.textContent = stateText(room); }
   else if (d.screen === 'link') { if (!room || room.kind !== 'internet') show('menu'); else if (what === 'status') d.state.textContent = STATUS[room.lastStatus] || ''; }
   else if (room && room.kind === 'nearby' && room.lastStatus === 'failed' && what === 'status') failed(room.pair);
+  else if (room && room.kind === 'nearby' && room.lastStatus === 'version' && what === 'status') otherVersion();
 }
 const stateText = room => { const s = room.stats(); return room.weak ? 'Зв’язок зник, відновлюю…' : s.rtt != null ? 'Пінг: ' + s.rtt + ' мс' : ''; };
 // one more player: the same link, or (nearby) a new pairing that only the room's host can make
@@ -225,6 +235,17 @@ function failed(pair) {
     btn('Спробувати ще', () => room && room.linked ? hostPairing() : show('nearby')),
     ...(dlg.online && !(room && room.linked) ? [btn('Через посилання', viaLink, 'btn ghost')] : []),
     btn('Скопіювати звіт для розробника', e => copy(report, e.target), 'btn ghost'),
+    btn('Закрити', closeDialog, 'btn ghost'));
+}
+
+// nearby, the friend's phone runs another version of the library: the pairing ended (see net/nearby.js)
+function otherVersion() {
+  dlg.screen = 'version';
+  if (dlg.camera) dlg.camera.stop();
+  const room = currentRoom();
+  if (room && room.linked) room.pair.cancel(); else leave();
+  dlg.show(el('h2', { textContent: 'Інша версія' }), para(UPDATE + '.'),
+    para('Онови сторінку на тому пристрої, де Ігротека старіша (або на обох), і з’єднайтеся знову.', 'fine'),
     btn('Закрити', closeDialog, 'btn ghost'));
 }
 

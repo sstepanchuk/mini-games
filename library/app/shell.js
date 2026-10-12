@@ -14,7 +14,7 @@ const DOC = Math.random().toString(36).slice(2);       // marks this page's own 
 let backing = false, following = false, queued = null;
 
 /**
- * games         [{ id, title, tagline, image, emoji }]
+ * games         [{ id, title, tagline, image, emoji, players, wire }] (wire: game.json "wire"; 1 when not given)
  * initial       the game this page was opened at, if any
  * loader        game → Promise<{ srcdoc } | { src }>: its page (decrypted, or in dev from disk); rejects with
  *               error.cancelled when the player does not give the password
@@ -39,13 +39,34 @@ export function startShell({ games: list, initial, loader, signOut, whenSignedIn
     if (queued) { const [id, p] = queued; queued = null; go(id, p); }
   });
   $('busy').hidden = true;
-  const views = { current: () => current ?? null, follow: id => go(id, true), invite: openDialog, address: () => address(current), seats: id => find(id)?.players?.max || 2 };
+  const views = { current: () => current ?? null, follow: id => go(id, true), invite: openDialog, address: () => address(current), seats: id => find(id)?.players?.max || 2,
+    wires: () => Object.fromEntries(games.map(g => [g.id, wireOf(g)])), reload };
   initInvite(views);
   initTogether(views);
   show(initial && find(initial) ? initial : null);
 }
 
 const find = id => games.find(g => g.id === id);
+// a game's wire number (game.json "wire", bumped by hand when its messages change): 1 when not given (an older shelf)
+const wireOf = g => Number.isSafeInteger(g.wire) && g.wire > 0 ? g.wire : 1;
+
+// A friend runs a newer version (together.js versionCheck): this page fetches it, its offline copy first (the service
+// worker, up to 30 s: a reload before the new copy is in place would open this version again), then reloads; unless
+// still (when the page does it by itself) says by then that it is no longer the time.
+async function reload(still) {
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration(root.href);
+    if (reg) {
+      await reg.update();
+      const w = reg.installing || reg.waiting;
+      if (w) await new Promise(done => {
+        const t = setTimeout(done, 30000);
+        w.addEventListener('statechange', () => { if (w.state === 'activated' || w.state === 'redundant') { clearTimeout(t); done(); } });
+      });
+    }
+  } catch (e) {}
+  if (!still || still()) location.reload();
+}
 const fromAddress = () => { const id = location.pathname.slice(root.pathname.length).split('/')[0]; return find(id) ? id : null; };
 const address = id => new URL((id ? id + '/' : '') + query(), root).href;
 
@@ -116,7 +137,7 @@ function api(info) {
   const room = attachGame(current);
   return Object.freeze({
     version: 4,
-    game: Object.freeze({ id: g.id, title: g.title, players: Object.freeze({ ...(g.players || { min: 2, max: 2 }) }) }),
+    game: Object.freeze({ id: g.id, title: g.title, players: Object.freeze({ ...(g.players || { min: 2, max: 2 }) }), wire: wireOf(g) }),
     libraryUrl: root.href,
     home: () => go(null),
     room,

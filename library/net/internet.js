@@ -13,42 +13,56 @@
 // Messages on the room's topic: JSON to every broker. brokers.js adds f (the sender's session) and q (its number:
 // a copy through another broker is dropped); one with `to` is for that session only.
 //   k      a tab → itself      {ts} the brokers echo it: alive, and how fast (brokers.js; the others ignore it)
-//   who    newcomer → all      {n: name} anyone here? The host answers 'host' or 'full'; a tab still looking whose
-//                              session is smaller takes the room and answers 'host'
-//   host   host → all | one    {c: players here with it, u?} I hold the room: alone every 2.5 s, with guests every
-//                              10 s (two rooms on one code merge), and to whoever asks. u: 1, to a tab that talks as
-//                              if linked: I do not know you, say hello again
+//   who    newcomer → all      {n: name, pv} anyone here? The host answers 'host' or 'full'; a tab still looking
+//                              whose session is smaller takes the room and answers 'host'
+//   host   host → all | one    {c: players here with it, pv, u?} I hold the room: alone every 2.5 s, with guests
+//                              every 10 s (two rooms on one code merge), and to whoever asks. u: 1, to a tab that
+//                              talks as if linked: I do not know you, say hello again
 //   full   host → newcomer     no place left (it looks again in 2 s)
-//   hello  guest → host        {n: name, k: attempt} let me in (every 1.2 s until 'hi'; after 6, it looks again)
-//   hi     host → guest        {k, n: the host's name} linked (k: of the hello it answers)
+//   hello  guest → host        {n: name, k: attempt, pv} let me in (every 1.2 s until 'hi'; after 6, it looks again)
+//   hi     host → guest        {k, n: the host's name, pv} linked (k: of the hello it answers)
 //   go     host → its guests   {h: session} I give way to that host: join it (said twice)
 //   here   guest → its host    are we still together? (every 3 s while the host is quiet)
-//   moved  host → a tab        another tab of your player took your place: step aside (role 'out')
+//   moved  host → a tab        another tab of your player took your place: step aside (role 'out'; from our host only)
 //   bye    a tab → all | one   {menu?} it closes (leave, pagehide); menu: 1, its player left for good. To one tab: it
 //                              steps aside (leaveQuietly), it starts over and drops our link (dropAll, menu: 1), or
 //                              a guest tells a stranger we are not together (menu: 1)
 //   rtc    guest ⇄ host        {k: attempt, sdp | ice} direct link signalling (the guest offers, rtc.js)
-//   d      a tab → its peer    {d: [link messages]} through the brokers, in the pair's own mailbox: topic/d/from/to
+//   d      a tab → its peer    {d: [link messages], k} through the brokers, in the pair's own mailbox: topic/d/from/to.
+//                              k: the attempt of the link they belong to (P.k); one of another attempt is dropped
 // Messages on a link (with one tab: the direct channels, or inside 'd'). Fast ones may be lost; reliable ones carry
 // _x, their number, and go again until acknowledged (link.js):
 //   p      both, fast          {ts, a, rt?, g?, r?, w?} pulse and ping, 5 a second. a: their reliable ones we have;
 //                              rt: our ping; g: the game's pulse fields; r: 1, I cannot hear you directly; w: the
 //                              brokers that bring your data to me first
 //   q      both, fast          {ts} the ping's answer, by the path the ping came (each path is measured on its own)
-//   ak     both, fast          {a} their reliable ones we have, 25 ms after some came. (room.send does not refuse a
-//                              game's own 'ak' yet; sent fast, it would be taken for this)
+//   ak     both, fast          {a} their reliable ones we have, 25 ms after some came (more than we numbered: ignored)
 //   bye    both, reliable      {menu?} as on the topic; acted on at once, even if something before it is missing
 //   _r     host → guests, rel. {m: [[name, session, away ms], …]} the players
 //   _x     guest → host, rel.  {n} let n's place go («Не чекати»; the host does it only while n is away)
-//   (game) any, fast or rel.   the game's own (t: not one of these, not starting with '_'). A guest sends all of it
-//                              to the host, with _t: to whom ('*': everyone; none: the host only); the host passes
-//                              it on with _f: its author
-import { me, roomTopic, TIMING } from './config.js';
+//   (game) any, fast or rel.   the game's own (t: not one of these, not starting with '_': room.send refuses them).
+//                              A guest sends all of it to the host, with _t: to whom ('*': everyone; none: the host
+//                              only); the host passes it on with _f: its author
+//
+// Versions. pv is the library's wire version (config.js PROTO): who, host, hello and hi from another version are
+// not acted on (no link, no merge); the room says status 'version' and keeps their number (room.versionMismatch,
+// while it is heard: room.js otherVersion), and a host still answers such a 'who' with 'host', so the newcomer learns
+// ours. A handshake without pv is version 1. What a library from before PROTO (phase 0) does with each change since,
+// so that both still play together:
+//   pv on who, host, hello, hi    ignores it (an unknown field); a new library takes its handshakes as version 1
+//   k on 'd'                      ignores it; a new library takes a 'd' without k (from an old one) as ours
+//   'ak' refused by room.send     nothing on the wire (no library sends a game's own 'ak': games are wrapped, lib-g)
+//   ak above what we numbered     nothing on the wire: a new library ignores it, an old one acknowledges up to it
+//   r only in a pulse, 'moved'    nothing on the wire: only what an old library itself never sends is ignored
+//     only from our host
+//   reliable messages as JSON     nothing on the wire: a message that cannot become JSON is refused at the call
+//     once, before their number   instead of stalling the link
+import { me, PROTO, roomTopic, TIMING } from './config.js';
 import { closeBrokers, loadTransport, mailbox, openBrokers, pubOn } from './brokers.js';
 import { onRtc } from './rtc.js';
 import { deliver, resetPaths } from './link.js';
 import { closePeer, dropMember, guestMembers, hostPeer, linkedPeers, markLinked, memberOf, NAME, newPeer, newRoom,
-  presence, seatMember, setRole, startWatch, stop, unlink } from './room.js';
+  otherVersion, presence, seatMember, setRole, startWatch, stop, unlink } from './room.js';
 
 const ANNOUNCE = 2500, ANNOUNCE_LINKED = 4;            // the host says it is here every 2.5 s, every 10 s with guests
 
@@ -102,6 +116,8 @@ export function joinRoom({ game, code, name, max }) {
 
 const pub = (N, obj) => { if (!N.closed) pubOn(N, obj); };
 const here = N => N.members.filter(m => !m.a).length;   // players here (us included)
+const who = N => ({ t: 'who', n: N.name, pv: PROTO });
+const hostSays = (N, o) => ({ t: 'host', c: here(N), pv: PROTO, ...o });   // (o: to, u)
 const name = n => typeof n === 'string' && NAME.test(n) ? n : null;
 
 // Whether any broker works, told once per change while nobody is linked (when linked, 'weak' tells it):
@@ -119,8 +135,8 @@ function connected(N, c) {
   signal(N);
   for (const P of N.peers.values()) if (P.heard) { try { c.subscribe(mailbox(N, P.id, me), { qos: 0 }); } catch (e) {} }
   if (!N.ready) { N.ready = true; clearTimeout(N.failTimer); discover(N); }
-  else if (N.role === null) pub(N, { t: 'who', n: N.name });     // still looking: ask on this broker too
-  else if (N.role === 'host' && !N.linked) pub(N, { t: 'host', c: here(N) });   // waiting for guests: announce here too
+  else if (N.role === null) pub(N, who(N));         // still looking: ask on this broker too
+  else if (N.role === 'host' && !N.linked) pub(N, hostSays(N));   // waiting for guests: announce here too
 }
 
 // listen to the mailbox where P puts data for us (or stop)
@@ -135,12 +151,17 @@ function onMessage(N, m, c) {
   const from = m.f, P = N.peers.get(from) || null;
   switch (m.t) {
     case 'who':                                        // someone came in and asks whether anyone is here
+      if (otherVersion(N, m)) {                        // another library version: not one of us, but it learns ours
+        if (N.role === 'host') pub(N, hostSays(N, { to: from }));
+        break;
+      }
       if (N.role === 'host') {
         const known = name(m.n) && memberOf(N, m.n);
-        pub(N, known || N.members.length < N.max ? { t: 'host', c: here(N), to: from } : { t: 'full', to: from });
-      } else if (N.role === null && me < from) { becomeHost(N); pub(N, { t: 'host', c: 1, to: from }); }
+        pub(N, known || N.members.length < N.max ? hostSays(N, { to: from }) : { t: 'full', to: from });
+      } else if (N.role === null && me < from) { becomeHost(N); pub(N, hostSays(N, { to: from })); }
       break;
     case 'host': {                                     // someone holds the room
+      if (otherVersion(N, m)) break;                   // in another library version: not ours to join or merge with
       const c = Number.isInteger(m.c) && m.c > 0 ? m.c : 1;
       if (N.role === 'guest' && from === N.host) {     // our host says it does not know us: ask to join again
         if (N.linked && m.to === me && m.u) becomeGuest(N, from);
@@ -151,7 +172,7 @@ function onMessage(N, m, c) {
       else if (N.role === 'host') {                    // two hosts: fewer players here (or the greater session) gives way
         const mine = here(N);
         if (c > mine || (c === mine && from < me)) giveWay(N, from);
-        else pub(N, { t: 'host', c: mine, to: from });
+        else pub(N, hostSays(N, { to: from }));
       }
       break;
     }
@@ -162,10 +183,10 @@ function onMessage(N, m, c) {
       N.fullTimer = setTimeout(() => { if (!N.closed && !N.linked) discover(N); }, 2000);
       break;
     case 'hello':                                      // a player's tab says hello
-      if (N.role === 'host' && name(m.n)) hello(N, from, m.n, m.k);
+      if (N.role === 'host' && name(m.n) && !otherVersion(N, m)) hello(N, from, m.n, m.k);
       break;
     case 'hi':
-      if (N.role === 'guest' && N.host === from && P && !P.linked && m.k === P.k && name(m.n)) {
+      if (N.role === 'guest' && N.host === from && P && !P.linked && m.k === P.k && name(m.n) && !otherVersion(N, m)) {
         stop(N, 'helloTimer');
         P.name = m.n;
         guestMembers(N, m.n);
@@ -178,12 +199,12 @@ function onMessage(N, m, c) {
     case 'go':                                         // our host gives way to another one: join it
       if (N.role === 'guest' && from === N.host && typeof m.h === 'string' && m.h !== me) becomeGuest(N, m.h);
       break;
-    case 'moved':                                      // this player goes on in another tab
-      if (P) leaveQuietly(N);
+    case 'moved':                                      // this player goes on in another tab (as our host says)
+      if (P && from === N.host) leaveQuietly(N);
       break;
     case 'd':                                          // game data through the brokers (our mailbox from P)
       if (!P) { stranger(N, from); break; }
-      if (!Array.isArray(m.d)) break;
+      if (!Array.isArray(m.d) || (m.k !== undefined && m.k !== P.k)) break;   // (k: of another attempt, an older link)
       if (!P.linked) {                                 // a moment before 'hi'
         if (N.role === 'guest' && from === N.host) for (const x of m.d) if (P.early.length < 64) P.early.push(x);
         break;
@@ -214,7 +235,7 @@ function hello(N, from, n, k) {
   let P = N.peers.get(from);
   if (P && P.linked && P.name === n) {                 // linked already: our hi was lost, or they started over
     if (k !== P.k) resync(N, P, k);
-    pub(N, { t: 'hi', to: from, k, n: N.name });
+    pub(N, { t: 'hi', to: from, k, n: N.name, pv: PROTO });
     return;
   }
   if (m && m.s !== from) {                             // their place, from another tab: that one steps aside
@@ -226,7 +247,7 @@ function hello(N, from, n, k) {
   P = newPeer(N, from, n);
   P.k = k;
   listen(N, P, true);
-  pub(N, { t: 'hi', to: from, k, n: N.name });
+  pub(N, { t: 'hi', to: from, k, n: N.name, pv: PROTO });
   markLinked(P);                                       // linked first: the list of players that follows goes to them too
   seatMember(N, n, from);
 }
@@ -239,7 +260,7 @@ function stranger(N, from) {
   if (now - (told.get(from) || -1e9) < 2000) return;
   if (told.size > 32) told.clear();
   told.set(from, now);
-  if (N.role === 'host') pub(N, { t: 'host', c: here(N), to: from, u: 1 });
+  if (N.role === 'host') pub(N, hostSays(N, { to: from, u: 1 }));
   else if (N.role === 'guest') pub(N, { t: 'bye', menu: 1, to: from });
 }
 
@@ -250,8 +271,8 @@ function discover(N) {
   N.members = [{ n: N.name, s: me, a: 0 }];
   setRole(N, null);
   presence(N);
-  pub(N, { t: 'who', n: N.name });
-  setTimeout(() => { if (!N.closed && N.role === null) pub(N, { t: 'who', n: N.name }); }, 450);
+  pub(N, who(N));
+  setTimeout(() => { if (!N.closed && N.role === null) pub(N, who(N)); }, 450);
   N.whoTimer = setTimeout(() => { if (!N.closed && N.role === null) becomeHost(N); }, 1100);
 }
 
@@ -264,7 +285,7 @@ function becomeHost(N, keep = false) {
   presence(N);
   if (!N.linked) N.emit('status', 'waiting');
   let i = 0;                                           // alone: often, so friends find us; with guests: now and then (see the top)
-  const ann = () => { if (!N.closed && N.role === 'host' && (here(N) === 1 || i++ % ANNOUNCE_LINKED === 0)) pub(N, { t: 'host', c: here(N) }); };
+  const ann = () => { if (!N.closed && N.role === 'host' && (here(N) === 1 || i++ % ANNOUNCE_LINKED === 0)) pub(N, hostSays(N)); };
   ann();
   N.annTimer = setInterval(ann, ANNOUNCE);
 }
@@ -283,7 +304,7 @@ function becomeGuest(N, host) {
   const hello = () => {
     if (N.closed || H.linked || N.role !== 'guest' || N.host !== host) { clearInterval(N.helloTimer); return; }
     if (++tries > 6) { clearInterval(N.helloTimer); discover(N); return; }   // no answer: look around again
-    pub(N, { t: 'hello', to: host, n: N.name, k: H.k });
+    pub(N, { t: 'hello', to: host, n: N.name, k: H.k, pv: PROTO });
   };
   hello();
   N.helloTimer = setInterval(hello, 1200);

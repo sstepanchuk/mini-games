@@ -38,15 +38,16 @@
 // (another host), null (6 hellos unanswered: discover); 'host' → 'guest' (two hosts on one code: giveWay), 'host'
 // (a sleep longer than HOLD: role null without an event, then 'host' again); any → 'out'. Nearby, a room never
 // changes kind: null → 'host' or null → 'guest', and pairing again keeps it.
-import { me, TIMING } from './config.js';
+import { me, PROTO, pvOf, TIMING } from './config.js';
 import { closeRtc } from './rtc.js';
-import { deliver, diag, keepDirectAlive, kick, lag, refresh, resetPaths, send, stats, watch } from './link.js';
+import { deliver, diag, keepDirectAlive, kick, lag, refresh, resetPaths, send, stats, watch, wire } from './link.js';
 
-// Messages of the room itself on a link: p (pulse), q (ping answer), bye; and _r (the players), _h (nearby hello),
-// _x (a guest asks the host to let a player's place go). A game's message types must not start with '_' and be
-// none of these. (Nor 'ak', the link's acknowledgement: room.send does not refuse it yet, but one sent fast would
-// be taken for an acknowledgement. Every message, both modes: internet.js and nearby.js, at the top.)
-const RESERVED = new Set(['p', 'q', 'bye']);
+// Messages of the link and the room itself: p (pulse), q (ping answer), ak (acknowledgement), bye; and _r (the
+// players), _h (nearby hello), _x (a guest asks the host to let a player's place go). room.send refuses them, with a
+// TypeError at the call (a mistake in the code, like a message that cannot become JSON): a message type must not
+// start with '_' and be none of these. (The library wraps each game's messages in its own, 'lib-g', so a game may
+// use any t. Every message, both modes: internet.js and nearby.js, at the top.)
+const RESERVED = new Set(['p', 'q', 'ak', 'bye']);
 export const MAX_PLAYERS = 8;
 export const HOLD = TIMING.HOLD;                       // how long a player who dropped out keeps their place
 export const NAME = /^\S(?:.{0,22}\S)?$/u;             // a name: 1 to 24 characters, no spaces around
@@ -99,6 +100,9 @@ function modeHooks(mode, relay) {
  * @property {number} lostAfter      HOLD: a link silent this long is gone; a sleep of ours this long: longSleep
  * @property {boolean} closed        we left, or another tab took our place: nothing goes out any more
  * @property {Function} emit         (event, ...args): to the room's listeners
+ * @property {string} status         the status the listeners last heard ('' before the first)
+ * @property {?number} mismatch      another library version we met (config.js PROTO), until we link with someone or
+ *                                   it is not heard for TIMING.VERSION (otherVersion)
  * Brokers (internet rooms, brokers.js):
  * @property {string} topic          the room's topic (a hash of game and code)
  * @property {Array} clients         per broker, its MQTT client (null while it waits to retry); c._ok: subscribed,
@@ -136,6 +140,7 @@ function modeHooks(mode, relay) {
  * @property {*} failTimer           internet: no broker within 6 s; nearby: the pairing under way gives up
  * @property {*} fullTimer           internet: the room was full, look again
  * @property {*} watchTimer          the watchdog
+ * @property {*} versionTimer        another library version is forgotten (otherVersion)
  */
 
 /**
@@ -145,7 +150,8 @@ function modeHooks(mode, relay) {
  * @property {Room} N                our room
  * @property {string} id             their session (nearby: 'pairing.…' until their _h says)
  * @property {string} name           their player's name, once known ('' until then)
- * @property {number} [k]            internet: the guest's hello attempt this link belongs to
+ * @property {number} [k]            internet: the guest's hello attempt this link belongs to (each 'd' carries it)
+ * @property {boolean} [said]        nearby: our _h went out on this link
  * @property {number} [probeAt]      internet: when a guest last asked its quiet host 'here'
  * The link:
  * @property {boolean} linked        it counts: we hear each other
@@ -216,18 +222,18 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
   const hooks = modeHooks(mode, relay);
   const ev = emitter();
   const N = {
-    game, code, name, relay, lostAfter: HOLD, max: Math.max(2, Math.min(MAX_PLAYERS, max | 0 || MAX_PLAYERS)), emit: ev.emit, closed: false,
+    game, code, name, relay, lostAfter: HOLD, max: Math.max(2, Math.min(MAX_PLAYERS, max | 0 || MAX_PLAYERS)), closed: false,
     // brokers (brokers.js); seq starts from the clock, so numbers of a new connection never collide with what
     // the other players remember from our previous one
     topic: '', clients: [], br: [], seq: Date.now(), last: new Map(), ready: false, up: false, kickAt: -1e9, kAt: 0, winAt: 0, pubN: 0,
     // our role, the host's session (when we are a guest), the links (session → peer), the players
     // ({ n: name, s: session, a: away since, 0 while here }, in the order they came; ours has s = me)
     role: null, host: null, peers: new Map(), members: [{ n: name, s: me, a: 0 }], sent: '', told: [],
-    linked: false, weak: false, statsDue: false, strangers: new Map(),
+    linked: false, weak: false, statsDue: false, strangers: new Map(), status: '', mismatch: null,
     // the watchdog (link.js)
     lastWatch: 0, watchMs: 0, graceUntil: 0,
     // timers
-    whoTimer: null, annTimer: null, helloTimer: null, failTimer: null, fullTimer: null, watchTimer: null
+    whoTimer: null, annTimer: null, helloTimer: null, failTimer: null, fullTimer: null, watchTimer: null, versionTimer: null
   };
 
   const room = {
@@ -248,10 +254,16 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
     // The game's policy (replace these functions):
     streaming: () => false,                            // the host streams state every frame (a direct link counts as dead sooner)
     pulse: null,                                       // (now) => object: extra fields for the pulse sent 5 times a second
+    // another library version that we met (config.js PROTO): its number, until we link with someone or it is not
+    // heard for a while (otherVersion); else null
+    get versionMismatch() { return N.mismatch; },
     on(name, fn) { ev.on(name, fn); return room; },
-    // to everyone else, or { to: name }; also { fast, latest } (see link.js)
+    // To everyone else, or { to: name }; also { fast, latest } (see link.js). A TypeError at the call, whether
+    // anyone is linked or not: one of the room's own types (RESERVED), or a reliable message that cannot become JSON.
+    // (A reliable one is looked at as it goes out, its JSON: a toJSON cannot turn it into one of the room's own.)
     send(msg, { to, ...opts } = {}) {
-      if (!msg || typeof msg.t !== 'string' || RESERVED.has(msg.t) || msg.t[0] === '_') throw new Error('room: a message needs a string t, not starting with _ and other than ' + [...RESERVED].join(', '));
+      if (!opts.fast && msg && typeof msg === 'object') msg = wire(msg);   // (each link reads it back once more: what it numbers is its own)
+      if (!msg || typeof msg.t !== 'string' || RESERVED.has(msg.t) || msg.t[0] === '_') throw new TypeError('room: a message needs a string t, not starting with _ and other than ' + [...RESERVED].join(', '));
       if (to !== name) sendRoom(N, msg, to, opts);
     },
     // let the place of a player who dropped out go now (nobody wants to wait any longer)
@@ -268,7 +280,7 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
       for (const P of linkedPeers(N)) try { send(P, final ? { t: 'bye', menu: 1 } : { t: 'bye' }); } catch (e) {}
       N.closed = true; N.linked = false;
       N.close(final);
-      stop(N, 'watchTimer');
+      stop(N, 'watchTimer', 'versionTimer');
       for (const P of N.peers.values()) closePeer(P);
       removeEventListener('pagehide', onPageHide);
       document.removeEventListener('visibilitychange', onShow);
@@ -276,6 +288,16 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
     }
   };
   Object.assign(N, {
+    // The room's status as the listeners last heard it (N.status). A room alone, while a player of another library
+    // version is on its code (otherVersion), says 'version' instead of 'waiting': what the players need to know is
+    // that one of them must update the page.
+    emit(e, ...a) {
+      if (e === 'status') {
+        if (a[0] === 'waiting' && N.mismatch !== null && !N.linked) { if (N.status === 'version') return; a = ['version']; }
+        N.status = a[0];
+      }
+      ev.emit(e, ...a);
+    },
     streaming: () => safe(room.streaming),
     pulse: now => { try { return room.pulse && room.pulse(now); } catch (e) { console.error(e); return null; } },
     refresh: P => { refresh(P); N.statsDue = true; },
@@ -329,10 +351,31 @@ export function closePeer(P) {
   closeRtc(P);
 }
 
-// the link with P works: both hear each other
+// A handshake (internet: who, host, hello, hi; nearby: _h) from another library version (config.js PROTO), or with
+// a pv that is not a version: true, and the mode ignores it (no link with them). The room says 'version' (unless it
+// already does) and keeps their number as room.versionMismatch, until we link with someone or have not heard that
+// version for TIMING.VERSION (it left: a tab of it still on our code says so at least every 10 s, as a host); then a
+// room alone says 'waiting' again.
+export function otherVersion(N, m) {
+  const v = pvOf(m);
+  if (v === PROTO) return false;
+  if (v !== null && !N.closed) {
+    const was = N.mismatch;
+    N.mismatch = v;
+    stop(N, 'versionTimer');
+    N.versionTimer = setTimeout(() => {
+      N.versionTimer = null; N.mismatch = null;
+      if (!N.closed && N.relay && !N.linked && N.status === 'version' && N.role === 'host') N.emit('status', 'waiting');
+    }, TIMING.VERSION);
+    if (v !== was || N.status !== 'version') N.emit('status', 'version');
+  }
+  return true;
+}
+
+// the link with P works: both hear each other (and whatever version we met before, we have found our own)
 export function markLinked(P) {
   const N = P.N, first = !N.linked;
-  P.linked = true; N.linked = true;
+  P.linked = true; N.linked = true; N.mismatch = null; stop(N, 'versionTimer');
   P.lastSeen = performance.now();
   P.weak = false; P.weakAt = 0; P.rtcTries = 0; P.rtcNext = performance.now() + 300;
   resetPaths(P);

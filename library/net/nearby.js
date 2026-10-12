@@ -22,25 +22,33 @@
 // Messages (on a link only: there is no topic). The same as on an internet room's links (internet.js), through
 // the direct channels only, plus the hello. Fast ones may be lost; reliable ones carry _x, their number, and go
 // again until acknowledged (link.js):
-//   _h     both, on 'ctl'      {id: session, n: name} who is on this end, as soon as both channels open; the link
-//                              counts once it comes (the host seats them by name; a guest learns its host)
+//   _h     both, on 'ctl'      {id: session, n: name, pv} who is on this end, as soon as both channels open; the link
+//                              counts once it comes (the host seats them by name; a guest learns its host). pv: the
+//                              library's wire version (config.js PROTO); from another version the link does not
+//                              count: the pairing ends (status 'version', room.versionMismatch: their number), and
+//                              ours goes back first if it had not gone yet, so they learn it too
 //   p      both, fast          {ts, a, rt?, g?} pulse and ping, 5 a second. a: their reliable ones we have; rt: our
 //                              ping; g: the game's pulse fields
 //   q      both, fast          {ts} the ping's answer
-//   ak     both, fast          {a} their reliable ones we have, 25 ms after some came. (room.send does not refuse a
-//                              game's own 'ak' yet; sent fast, it would be taken for this)
+//   ak     both, fast          {a} their reliable ones we have, 25 ms after some came (more than we numbered: ignored)
 //   bye    both, reliable      {menu?} the tab closes; menu: 1, its player left for good. Acted on at once
 //   _r     host → guests, rel. {m: [[name, session, away ms], …]} the players
 //   _x     guest → host, rel.  {n} let n's place go («Не чекати»; the host does it only while n is away)
-//   (game) any, fast or rel.   the game's own (t: not one of these, not starting with '_'). A guest sends all of it
-//                              to the host, with _t: to whom ('*': everyone; none: the host only); the host passes
-//                              it on with _f: its author
-import { me, SENDER } from './config.js';
+//   (game) any, fast or rel.   the game's own (t: not one of these, not starting with '_': room.send refuses them).
+//                              A guest sends all of it to the host, with _t: to whom ('*': everyone; none: the host
+//                              only); the host passes it on with _f: its author
+// What a library from before PROTO (phase 0) does with each change since, so that both still pair and play:
+//   pv on _h                   ignores it (an unknown field); a new library takes an _h without pv as version 1
+//   the link's guards          nothing on the wire (room.send refuses 'ak'; an ak above what we numbered and an r
+//                              outside a pulse are ignored; a reliable message that cannot become JSON is refused at
+//                              the call): see internet.js, Versions
+import { me, PROTO, pvOf, SENDER } from './config.js';
 import { closeRtc, dcLive, openChannels, wireDc } from './rtc.js';
 import { ANSWER, OFFER, candidates, decode, describe, encode } from './code.js';
-import { closePeer, dropMember, guestMembers, linkedPeers, markLinked, NAME, newPeer, newRoom, renamePeer, seatMember, setRole, startWatch, stop, unlink, weakChanged } from './room.js';
+import { closePeer, dropMember, guestMembers, linkedPeers, markLinked, NAME, newPeer, newRoom, otherVersion, renamePeer, seatMember, setRole, startWatch, stop,
+  unlink, weakChanged } from './room.js';
 
-const GATHER_MS = 3000, CONNECT_MS = 20000;
+const GATHER_MS = 3000, CONNECT_MS = 20000, REFUSED_MS = 1000;   // REFUSED_MS: a link of another version closes after this
 
 export function joinNearby({ game, name, max }) {
   const { N, room } = newRoom({ game, name, max, relay: false, mode: {             // (the hooks: room.js)
@@ -51,12 +59,23 @@ export function joinNearby({ game, name, max }) {
   // a link that opens says who we are; one that closes leaves its player away (the watch: weak at once, gone
   // only when places are no longer kept — see the top)
   function onDirect(Q, open) {
-    if (open) { try { Q.dcC.send(JSON.stringify({ t: '_h', id: me, n: N.name })); } catch (e) {} }
+    if (open) say(Q);
+  }
+  function say(Q) {
+    Q.said = true;
+    try { Q.dcC.send(JSON.stringify({ t: '_h', id: me, n: N.name, pv: PROTO })); } catch (e) {}
   }
   // who is on the other end: now the link counts. The host seats them by name (a name it knows: their place,
-  // the old link steps aside); a guest learns the host's name.
+  // the old link steps aside); a guest learns the host's name. Another library version: the pairing ends (see the top).
   function onHello(Q, m) {
     if (Q.linked || N.closed || typeof m.id !== 'string' || !SENDER.test(m.id) || m.id === me) return;
+    if (otherVersion(N, m)) {
+      if (pvOf(m) === null) return;                    // (a pv that is no version: ignored, as any broken hello)
+      if (!Q.said) say(Q);
+      if (Q === P) { stop(N, 'failTimer'); note('another library version: ' + m.pv); P = null; }
+      setTimeout(() => unlink(Q), REFUSED_MS);         // (our _h on its way first)
+      return;
+    }
     if (typeof m.n !== 'string' || !NAME.test(m.n) || m.n === N.name) return;
     // the same player paired again (their old link broke): the new link takes over from the old one
     const olds = [...N.peers.values()].filter(X => X !== Q && (X.id === m.id || X.name === m.n));

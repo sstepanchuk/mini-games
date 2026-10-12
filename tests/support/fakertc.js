@@ -1,7 +1,9 @@
 // A fake WebRTC for worker tabs (tab.js, world option rtc): RTCPeerConnection with data channels between the tabs of
-// one world, over a BroadcastChannel of its own. As much as library/net/rtc.js uses: an offer and an answer (the
-// "SDP" only names the connection and its channels; signalling still goes through the fake brokers), no ICE
-// candidates, channels that open once both descriptions are set, send and close, getStats with nothing in it.
+// one world, over a BroadcastChannel of its own. As much as library/net/rtc.js and nearby.js use: an offer and an
+// answer (an SDP that only looks real: its ice-ufrag names the connection, so it survives a nearby code, code.js;
+// a=x-fake-channels names the channels, else they are 'fast' and 'ctl'; signalling goes through the fake brokers or
+// the codes), no ICE candidates as events, gathering complete at once, channels that open once both descriptions
+// are set (what comes before ours opened waits for it, as on a real link), send and close, getStats with nothing in it.
 // A message takes dcMs (5 ms); the ordered channel keeps its order, the unordered one ('fast') loses what the
 // network's loss says. Both ends drop everything while either tab's network or direct links are off (fakenet.js:
 // up, direct: a network switch, before the links fail); kill() closes this tab's links (the phone's OS dropped them),
@@ -23,7 +25,7 @@ export function install({ bus, pid, live, loss = () => 0, dcMs = 5 }) {
 
   class DataChannel {
     constructor(pc, label, { ordered = true } = {}) {
-      Object.assign(this, { pc, label, ordered, readyState: 'connecting', onopen: null, onclose: null, onmessage: null });
+      Object.assign(this, { pc, label, ordered, readyState: 'connecting', onopen: null, onclose: null, onmessage: null, early: [] });
     }
     send(s) {
       if (this.readyState !== 'open') throw new Error('InvalidStateError: the channel is not open');
@@ -35,20 +37,31 @@ export function install({ bus, pid, live, loss = () => 0, dcMs = 5 }) {
     close() { if (this.readyState === 'closed') return; this.readyState = 'closed'; later(() => this.onclose && this.onclose()); }
   }
 
+  // what a description says: its connection (ice-ufrag) and channels
+  const sdp = (pc, type) => ['v=0', 'o=- 1 2 IN IP4 127.0.0.1', 's=-', 't=0 0', 'a=group:BUNDLE 0', 'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
+    'c=IN IP4 0.0.0.0', 'a=candidate:1 1 udp 2122260223 192.168.77.' + (n % 250 + 1) + ' 50000 typ host generation 0', 'a=ice-ufrag:' + pc.id,
+    'a=ice-pwd:fakertcfakertcfakertc00', 'a=fingerprint:sha-256 ' + Array(32).fill('AB').join(':'), 'a=setup:' + (type === 'offer' ? 'actpass' : 'active'),
+    'a=mid:0', 'a=x-fake-channels:' + ([...pc.channels.keys()].join(',') || '-'), ''].join('\r\n');
+  const line = (s, k) => (String(s).match(new RegExp('^a=' + k + ':(\\S+)', 'm')) || [])[1];
+
   class PeerConnection {
     constructor() {
       Object.assign(this, { id: pid + '#' + (++n), remote: null, labels: [], channels: new Map(), connectionState: 'new', signalingState: 'stable',
-        localDescription: null, remoteDescription: null, onicecandidate: null, onconnectionstatechange: null, ondatachannel: null });
+        iceGatheringState: 'new', localDescription: null, remoteDescription: null, onicecandidate: null, onconnectionstatechange: null, ondatachannel: null });
       pcs.set(this.id, this);
     }
     createDataChannel(label, o) { const dc = new DataChannel(this, label, o); this.channels.set(label, dc); return dc; }
-    createOffer() { return Promise.resolve({ type: 'offer', sdp: 'fake ' + this.id + ' ' + [...this.channels.keys()].join(',') }); }
-    createAnswer() { return Promise.resolve({ type: 'answer', sdp: 'fake ' + this.id }); }
-    setLocalDescription(d) { this.localDescription = d; this.signalingState = d.type === 'offer' ? 'have-local-offer' : 'stable'; return Promise.resolve(); }
+    createOffer() { return Promise.resolve({ type: 'offer', sdp: sdp(this, 'offer') }); }
+    createAnswer() { return Promise.resolve({ type: 'answer', sdp: sdp(this, 'answer') }); }
+    setLocalDescription(d) {
+      this.localDescription = d; this.signalingState = d.type === 'offer' ? 'have-local-offer' : 'stable'; this.iceGatheringState = 'complete';
+      return Promise.resolve();
+    }
+    addEventListener() {}
     setRemoteDescription(d) {
-      const [, id, labels = ''] = String(d.sdp).split(' ');
+      const id = line(d.sdp, 'ice-ufrag'), labels = line(d.sdp, 'x-fake-channels') || 'fast,ctl';   // (a nearby code carries no channels)
       this.remoteDescription = d; this.remote = id;
-      if (d.type === 'offer') { this.labels = labels.split(',').filter(Boolean); this.signalingState = 'have-remote-offer'; }
+      if (d.type === 'offer') { this.labels = labels.split(',').filter(l => l !== '-'); this.signalingState = 'have-remote-offer'; }
       else { this.signalingState = 'stable'; if (live()) { post({ to: id, from: this.id, connect: true }); this.open(); } }   // the offerer: both sides are set
       return Promise.resolve();
     }
@@ -64,12 +77,16 @@ export function install({ bus, pid, live, loss = () => 0, dcMs = 5 }) {
       } else if (m.close) this.end('closed');
       else if (live()) {
         const dc = this.channels.get(m.label);
-        if (dc && dc.readyState === 'open') later(() => { if (dc.readyState === 'open' && live() && dc.onmessage) dc.onmessage({ data: m.s }); });
+        if (dc && dc.readyState === 'connecting') dc.early.push(m.s);   // sent the moment the other end opened: it waits for ours
+        else if (dc && dc.readyState === 'open') later(() => { if (dc.readyState === 'open' && live() && dc.onmessage) dc.onmessage({ data: m.s }); });
       }
     }
     open() {
       this.state('connected');
-      later(() => { for (const dc of this.channels.values()) if (this.connectionState === 'connected' && dc.readyState === 'connecting') { dc.readyState = 'open'; if (dc.onopen) dc.onopen(); } });
+      later(() => {
+        for (const dc of this.channels.values()) if (this.connectionState === 'connected' && dc.readyState === 'connecting') { dc.readyState = 'open'; if (dc.onopen) dc.onopen(); }
+        for (const dc of this.channels.values()) for (const s of dc.early.splice(0)) if (dc.readyState === 'open' && dc.onmessage) dc.onmessage({ data: s });
+      });
     }
     state(s) { if (this.connectionState === s) return; this.connectionState = s; if (this.onconnectionstatechange) later(() => this.onconnectionstatechange && this.onconnectionstatechange()); }
     // the connection ends: its channels close (they hear it at once, the connection's state a moment later)

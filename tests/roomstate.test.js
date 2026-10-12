@@ -56,3 +56,34 @@ test('seen moves the clock past a version from elsewhere', () => {
   s.seen(NaN);
   assert.ok(s.set('view', null)[1].c > far);
 });
+
+// A clock from elsewhere counts only as a safe integer at most a year ahead of ours: one wild value must not carry
+// every clock to where no later change can win (1e300; 2^52 - 1, a safe integer still far beyond any real clock).
+test('a wild clock is ignored: later changes still win', () => {
+  for (const wild of [1e300, 2 ** 52 - 1, Date.now() + 400 * 24 * 3600 * 1000, 1.5, Infinity]) {
+    const a = roomState('Аня'), b = roomState('Богдан');
+    assert.deepEqual(b.merge([['view', { v: 'junk', c: wild, a: 'Яків' }]]), [], 'refused: ' + wild);
+    assert.equal(b.get('view'), undefined);
+    b.seen(wild);                                                       // (a snapshot's version: the same rule)
+    assert.ok(b.next() < Date.now() + 1000, 'the clock did not move: ' + wild);
+    b.merge([a.set('view', 'dragons')]);
+    const later = b.set('view', null);                                  // a later change, as usual
+    assert.deepEqual(a.merge([later]), ['view'], 'it wins: ' + wild);
+    assert.equal(a.get('view'), null);
+  }
+});
+
+test('a device whose clock runs a month fast still counts, and the others write after it', () => {
+  const fast = Date.now() + 30 * 24 * 3600 * 1000;
+  const a = roomState('Аня'), b = roomState('Богдан');
+  assert.deepEqual(a.merge([['view', { v: 'dragons', c: fast, a: 'Богдан' }]]), ['view']);
+  assert.equal(a.get('view'), 'dragons');
+  const after = a.set('view', null);                                  // made after seeing it: later
+  assert.ok(after[1].c > fast);
+  b.merge([['view', { v: 'dragons', c: fast, a: 'Богдан' }]]);
+  assert.deepEqual(b.merge([after]), ['view']);
+  assert.equal(b.get('view'), null);
+  const s = roomState('Сава');
+  s.seen(fast);
+  assert.ok(s.next() > fast, 'seen takes it too');
+});

@@ -41,8 +41,8 @@ describe('the direct link', { concurrency: 3 }, () => {
     assert.ok(await direct(A, B, C), 'direct again: ' + await shows([A, B, C]));
   });
 
-  /* ---------- known bugs (phase 1) ---------- */
-  test('on the direct link too, a reliable message that cannot become JSON is refused at the call', { ...T, todo: 'phase 1a (A1): today the direct link drops it without a word, and every later one stalls' }, async t => {
+  // (phase 1a, A1: the direct link used to drop it without a word, and every later one stalled)
+  test('on the direct link too, a reliable message that cannot become JSON is refused at the call', T, async t => {
     const W = world(t, { rtc: true });
     const [A, B] = await room(W, 'dir3', ['Аня', 'Богдан']);
     assert.ok(await direct(A, B));
@@ -53,6 +53,18 @@ describe('the direct link', { concurrency: 3 }, () => {
     await A.send({ t: 'two' });
     await until(async () => (await B.got()).length >= 2, 3000);
     assert.deepEqual(await B.got(), ['Аня:one', 'Аня:two']);
-    assert.match(threw || '', /circular|cycl/i, 'the call throws');
+    assert.match(threw || '', /^TypeError: .*(circular|cycl)/i, 'the call throws');
+  });
+
+  // (phase 1a, A2: r: 1 in any fast message used to make the link doubt the direct path)
+  test('a game\'s fast message with r: 1 does not make the link doubt the direct path (only a pulse says so)', T, async t => {
+    const W = world(t, { rtc: true });
+    const [A, B] = await room(W, 'dir4', ['Аня', 'Богдан']);
+    assert.ok(await direct(A, B));
+    for (let i = 0; i < 20; i++) {
+      await B.send({ t: 'x', n: i, r: 1, w: [3, 2] }, { fast: true });
+      await sleep(50);
+      assert.equal((await A.state()).direct, true, 'still direct after ' + (i + 1));
+    }
   });
 });

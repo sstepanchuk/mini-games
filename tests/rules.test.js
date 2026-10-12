@@ -3,14 +3,16 @@
 // players change. The known bugs are { todo } tests of what should happen; phase 1 turns them green.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { absence, arrivesLoading, awayMs, inGame, loadingTooLong, onlineSince, paused, playersChange, roleOf, runnerOf, seating, takeOver, waitingFor } from '../library/app/rules.js';
+import { absence, arrivesLoading, awayMs, goneForGood, inGame, loadingTooLong, offerUpdate, onlineSince, paused, playersChange, reloadNow, roleOf, runnerOf, sameWire,
+  seating, snapFits, takeOver, versionGap, waitingFor } from '../library/app/rules.js';
 
 const G = 'dragons', WAIT = 10000, HOLD = 180000, NOW = 1000000;   // AUTH_WAIT and HOLD as the library has them
 // The room as together.js shows it to the rules. here: the game each player has open (everyone: G, unless given);
-// away: ms since a player dropped out; loading: since when (ms) a player's new tab has not opened the game.
-const room = ({ me = 'Аня', players = ['Аня', 'Богдан'], here, stale = [], loading = {}, away = {}, weak = [], nearby = false, role = 'host', host = players[0], now = NOW } = {}) => {
+// away: ms since a player dropped out; loading: since when (ms) a player's new tab has not opened the game; wire: the
+// wire number of each player's copy of G (not given: their library does not say).
+const room = ({ me = 'Аня', players = ['Аня', 'Богдан'], here, stale = [], loading = {}, away = {}, weak = [], nearby = false, role = 'host', host = players[0], now = NOW, wire = {} } = {}) => {
   const h = here || Object.fromEntries(players.map(p => [p, G]));
-  return { me, players, here: p => h[p], stale: new Set(stale), loading: new Map(Object.entries(loading)), away: p => away[p] || 0,
+  return { me, players, here: p => h[p], wire: (p, game) => game === G ? wire[p] : undefined, stale: new Set(stale), loading: new Map(Object.entries(loading)), away: p => away[p] || 0,
     weak: p => weak.includes(p), nearby, role, host, now };
 };
 // what together.js counts for the open game (recount)
@@ -36,6 +38,21 @@ test('in the game: what we have open counts for us, not our here: key (it may be
 test('in the game: a player who dropped out or is still loading keeps their place', () => {
   assert.deepEqual(inGame(room({ away: { Богдан: 60000 } }), G, G), ['Аня', 'Богдан']);
   assert.deepEqual(inGame(room({ loading: { Богдан: NOW - 5000 } }), G, G), ['Аня', 'Богдан']);
+});
+
+// (Дана's library is older than the numbers: it says none, and speaks wire 1, as every game did before them)
+test('in the game: not a player whose copy of the game speaks another wire number; one whose library does not say speaks 1', () => {
+  const players = ['Аня', 'Богдан', 'Сава', 'Дана'];
+  assert.deepEqual(inGame(room({ players, wire: { Аня: 2, Богдан: 1, Сава: 2 } }), G, G), ['Аня', 'Сава']);
+  assert.deepEqual(inGame(room({ me: 'Богдан', players, wire: { Аня: 2, Богдан: 1, Сава: 2 } }), G, G), ['Богдан', 'Дана']);
+  assert.deepEqual(inGame(room({ players, wire: { Аня: 1 } }), G, G), players, 'the release that brings the numbers: every game 1, all play');
+  assert.deepEqual(seats(room({ players: ['Аня', 'Богдан', 'Сава'], wire: { Аня: 1, Богдан: 2, Сава: 1 } }), 2).seated, ['Аня', 'Сава']);
+  assert.equal(sameWire(1, undefined), true);
+  assert.equal(sameWire(undefined, undefined), true);
+  assert.equal(sameWire(undefined, 3), false);
+  assert.equal(sameWire(2, undefined), false);
+  assert.equal(sameWire(2, 2), true);
+  assert.equal(sameWire(2, 3), false);
 });
 
 test('in the game: not a stale player (their new tab never opened the game), though they are still in the room', () => {
@@ -239,7 +256,7 @@ test('takeover: a runner still opening the game in a new tab counts as away', ()
 
 // A guest cut off from the room's host only knows the others' presence as the host last told it: with the host
 // (who also runs the round) gone, a third player still looks here, and the guest splits the round (today: 'company').
-test('takeover: a guest cut off from the room\'s host cannot vouch for anyone', { todo: 'phase 1' }, () => {
+test('takeover: a guest cut off from the room\'s host cannot vouch for anyone', { todo: 'phase 2 (C4)' }, () => {
   const f = room({ me: 'Богдан', players: ['Аня', 'Богдан', 'Сава'], role: 'guest', host: 'Аня', away: { Аня: 12000 } });
   assert.equal(take(f, { seated: ['Аня', 'Богдан'], since: 0 }), null);
 });
@@ -292,14 +309,68 @@ test('players: a player who drops out keeps their seat (the game pauses on weak;
 });
 
 // The room's order may change on a shaky network; the round's seats must not, and neither must the round.
-test('players: a game for two, the same pair in another order keeps the round', { todo: 'phase 1' }, () => {
+test('players: a game for two, the same pair in another order keeps the round', () => {
   assert.deepEqual(playersChange(2, ['Аня', 'Богдан'], ['Богдан', 'Аня'], 'Аня'), []);
+  assert.deepEqual(playersChange(2, ['Аня', 'Богдан'], ['Богдан', 'Аня'], 'Богдан'), []);
+});
+
+/* ---------- a round's snapshot ---------- */
+test('snapshot: fits the players seated now, as a set; one from an older library (no players) fits any', () => {
+  assert.equal(snapFits({ s: 1, p: ['Аня', 'Богдан'] }, ['Аня', 'Богдан']), true);
+  assert.equal(snapFits({ s: 1, p: ['Аня', 'Богдан'] }, ['Богдан', 'Аня']), true);
+  assert.equal(snapFits({ s: 1, p: ['Аня', 'Богдан'] }, ['Аня', 'Сава']), false);    // someone else's round
+  assert.equal(snapFits({ s: 1, p: ['Аня', 'Богдан'] }, ['Аня']), false);
+  assert.equal(snapFits({ s: 1, p: ['Аня', 'Богдан'] }, ['Аня', 'Богдан', 'Сава']), false);
+  assert.equal(snapFits({ s: 1 }, ['Аня', 'Сава']), true);
+});
+
+test('round over for good: one of its players is gone from the room (not one who only closed the game or is away)', () => {
+  assert.equal(goneForGood(['Аня', 'Богдан'], ['Аня'], 'Аня'), true);
+  assert.equal(goneForGood(['Аня', 'Богдан'], ['Аня', 'Богдан'], 'Аня'), false);
+  assert.equal(goneForGood(['Аня', 'Богдан'], ['Богдан', 'Сава'], 'Аня'), false);   // (never us: we left, the room is gone)
+  assert.equal(goneForGood([], ['Аня'], 'Аня'), false);
+});
+
+/* ---------- versions ---------- */
+const mine = (proto, w) => ({ proto, wires: g => w[g] });
+test('versions: another library version (PROTO) the room met; ours older when theirs is the higher number', () => {
+  assert.equal(versionGap(mine(1, {}), null, []), null);
+  assert.equal(versionGap(mine(1, {}), undefined, []), null);                          // an older net (no versionMismatch)
+  assert.deepEqual(versionGap(mine(1, {}), 2, []), { why: 'proto', game: null, theirs: 2, older: true, key: 'proto:2' });
+  assert.deepEqual(versionGap(mine(2, {}), 1, []), { why: 'proto', game: null, theirs: 1, older: false, key: 'proto:1' });
+});
+
+test('versions: a game\'s wire, for a game both libraries have; the one that makes us older first', () => {
+  const m = mine(1, { [G]: 2, other: 1 });
+  assert.equal(versionGap(m, null, [{ [G]: 2 }, undefined, { other: 1, notOurs: 5 }]), null);
+  assert.deepEqual(versionGap(m, null, [{ [G]: 1 }]), { why: 'wire', game: G, theirs: 1, older: false, key: 'wire:dragons:1' });
+  assert.deepEqual(versionGap(m, null, [{ [G]: 1 }, { other: 3 }]), { why: 'wire', game: 'other', theirs: 3, older: true, key: 'wire:other:3' });
+});
+
+test('versions: the older page reloads only with no round here, never nearby, once per version', () => {
+  const older = { older: true, key: 'proto:2' }, none = new Set();
+  assert.equal(reloadNow(older, { nearby: false, playing: false, done: none }), true);
+  assert.equal(reloadNow(null, { nearby: false, playing: false, done: none }), false);
+  assert.equal(reloadNow({ ...older, older: false }, { nearby: false, playing: false, done: none }), false);   // the newer one waits for the friend
+  assert.equal(reloadNow(older, { nearby: true, playing: false, done: none }), false);
+  assert.equal(reloadNow(older, { nearby: false, playing: true, done: none }), false);
+  assert.equal(reloadNow(older, { nearby: false, playing: false, done: new Set(['proto:2']) }), false);
+  assert.equal(reloadNow(older, { nearby: false, playing: false, done: new Set(['proto:3']) }), true);
+});
+
+test('versions: the note offers «Оновити» only on the older page, and never nearby', () => {
+  const older = { older: true, key: 'wire:dragons:2' };
+  assert.equal(offerUpdate(older, { nearby: false }), true);
+  assert.equal(offerUpdate(older, { nearby: false, playing: true }), true);          // (the player asks: even in a round)
+  assert.equal(offerUpdate({ ...older, older: false }, { nearby: false }), false);   // the newer page has nothing newer to get
+  assert.equal(offerUpdate(older, { nearby: true }), false);                         // a reload would end the room for every phone
+  assert.equal(offerUpdate(null, { nearby: false }), false);
 });
 
 // A player whose place dropped (HOLD over, or «Не чекати») comes back: the room says 'join', not 'relinked', and
 // the shared state still has their old here:. Today they are seated and here at once, so the game goes on without
 // them; they should count as loading until a here: they write after joining arrives.
-test('arrival: back after their place dropped, with an old here:, a player is loading', { todo: 'phase 1' }, () => {
+test('arrival: back after their place dropped, with an old here:, a player is loading', { todo: 'phase 1b (D1)' }, () => {
   const f = room({ players: ['Аня', 'Богдан'] });                  // here:Богдан is still G, from before
   if (arrivesLoading(f, 'Богдан', 'join')) f.loading.set('Богдан', NOW);   // what together.js does on 'join'
   assert.deepEqual(seats(f, 2).seated, ['Аня', 'Богдан']);

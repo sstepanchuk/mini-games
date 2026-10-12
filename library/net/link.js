@@ -2,12 +2,15 @@
 // the brokers. Each path's ping is measured on its own and all the time; messages take the faster one. Usually
 // that is the direct path, but a "direct" link through a far-away TURN relay can be slower than the brokers.
 //
-// Messages are plain objects with a string `t` ('p', 'q', 'bye' and those starting with '_' are the room's own).
-// Fast ones may be lost or reordered — the game numbers them itself if it cares. Reliable ones really are: each
-// gets a number `_x` and stays in our outbox until the other side acknowledges it (`a` in every pulse: "I have
-// everything up to here"); until then it is sent again, by whatever path works, with growing pauses. So nothing
-// is lost to a dead direct link, brokers that are reconnecting, or a phone that was offline for a minute. The
-// receiver runs them exactly once and in order: a message that overtook a missing one waits for it.
+// Messages are plain objects with a string `t` ('p', 'q', 'ak', 'bye' and those starting with '_' are the room's
+// own: room.js RESERVED). Fast ones may be lost or reordered — the game numbers them itself if it cares. Reliable
+// ones really are: each gets a number `_x` and stays in our outbox until the other side acknowledges it (`a` in
+// every pulse: "I have everything up to here"); until then it is sent again, by whatever path works, with growing
+// pauses. So nothing is lost to a dead direct link, brokers that are reconnecting, or a phone that was offline for
+// a minute. The receiver runs them exactly once and in order: a message that overtook a missing one waits for it.
+// A reliable message becomes JSON once, before it gets its number (wire): one that cannot (a cycle, a BigInt)
+// throws a TypeError at the call and takes no number, so nothing after it waits for it; and what is kept and sent
+// again is that JSON read back, which a later change to the caller's object cannot touch.
 import { BROKERS, TIMING } from './config.js';
 import { bestBrokers, brokerDiag, kickBrokers, pubData, tendBrokers } from './brokers.js';
 import { closeRtc, dcFresh, dcHear, dcLive, dcQuiet, probeLink, startRtc } from './rtc.js';
@@ -34,11 +37,21 @@ export function send(P, m, { fast = false, latest = false } = {}) {
   const N = P.N;
   if (N.closed || !P.linked) return;
   if (!fast) {
-    m = { ...m, _x: ++P.tx };                          // a copy: the same message may go to several players
+    m = wire(m);                                       // (throws before it takes a number)
+    m._x = ++P.tx;                                     // (a copy of its own: the same message may go to several players)
     P.outbox.push({ m, at: performance.now(), n: 1 });
     if (P.outbox.length > OUTBOX_MAX) { queueMicrotask(() => { if (P.linked) N.peerGone(P); }); return; }   // they have not heard us for ages (not now: we may be in a loop over the links)
   }
   transmit(P, m, fast, fast && latest ? (latest === true ? '' : String(latest)) : null);
+}
+// A reliable message as it travels: its JSON read back, a copy nobody else holds. One that cannot become JSON (a
+// cycle, a BigInt), or does not come back as an object with a string t (a toJSON that says otherwise), is a
+// TypeError, thrown at the call.
+export function wire(m) {
+  let c;
+  try { const s = JSON.stringify(m); c = s === undefined ? null : JSON.parse(s); } catch (e) { throw new TypeError('room: a reliable message must become JSON (' + e.message + ')'); }
+  if (!c || typeof c !== 'object' || Array.isArray(c) || typeof c.t !== 'string') throw new TypeError('room: a reliable message must become JSON: an object with a string t');
+  return c;
 }
 // by the path in use; while the direct link is not sure, through the brokers as well
 function transmit(P, m, fast, stream) {
@@ -55,9 +68,10 @@ function transmit(P, m, fast, stream) {
   if (wait <= 0) flushRelay(P);
   else if (!P.qTimer) P.qTimer = setTimeout(() => flushRelay(P), wait);
 }
-// The other side has everything up to `a`: those leave the outbox.
+// The other side has everything up to `a`: those leave the outbox. (More than we ever numbered is not an answer
+// to us: a stranger, or an acknowledgement from before our numbering started over.)
 function acked(P, a) {
-  if (!Number.isInteger(a)) return;
+  if (!Number.isInteger(a) || a > P.tx) return;
   let i = 0;
   while (i < P.outbox.length && P.outbox[i].m._x <= a) i++;
   if (i) P.outbox.splice(0, i);
@@ -85,7 +99,7 @@ export function flushRelay(P) {
   }
   if (!P.q.length || !P.N.relay) return;
   const d = P.q; P.q = [];
-  if (!P.N.closed) pubData(P.N, P, { t: 'd', to: P.id, d });
+  if (!P.N.closed) pubData(P.N, P, { t: 'd', to: P.id, d, k: P.k });   // k: the link's attempt (internet.js drops another one's)
 }
 
 /* ---------- receiving ---------- */
@@ -127,12 +141,12 @@ function ackSoon(P) {
 }
 
 // the link's own fast messages: pulse and ping (p), ping answer (q), "I have your messages up to a" (ak);
-// anything else fast is the game's
+// anything else fast is the game's (its fields mean nothing to the link: r and w count only in a pulse)
 function signals(P, m, viaRelay, now) {
   const N = P.N;
-  if (m.r === 1) P.suspect = now;                      // they say they cannot hear us directly
   if (m.t === 'ak') { acked(P, m.a); return; }        // they have our reliable messages up to a
   if (m.t === 'p') {                                   // pulse and ping
+    if (m.r === 1) P.suspect = now;                    // they say they cannot hear us directly
     if (!Number.isFinite(m.ts)) return;
     const q = { t: 'q', ts: m.ts };
     if (viaRelay) sendRelay(P, q); else sendDirect(P, q);   // answer by the same path, so each path is measured on its own

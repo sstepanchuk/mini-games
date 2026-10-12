@@ -1,12 +1,12 @@
 /* The library, as every game sees it: `window.ihroteka`.
    Not imported: the build (and `npm run dev`) inlines this script at the top of the game's <head>,
-   before any game code runs, with { id, title, players } from game.json in place of GAME. The library page runs the
-   game in a frame and hands it the API (see app/shell.js); a game page opened on its own,
+   before any game code runs, with { id, title, players, wire } from game.json in place of GAME. The library page
+   runs the game in a frame and hands it the API (see app/shell.js); a game page opened on its own,
    outside the library, gets no API: `window.ihroteka` is undefined there, so games treat it as optional.
 
    Contract (version 4: players are names, a round can move to another player's copy):
      ihroteka.version     4
-     ihroteka.game        { id, title, players: { min, max } }
+     ihroteka.game        { id, title, players: { min, max }, wire }   (wire: game.json "wire", 1 when not given)
      ihroteka.libraryUrl  absolute URL of the library
      ihroteka.home()      back to the shelf
      ihroteka.room        the other players, through the room the whole library shares (app/together.js: channel)

@@ -20,8 +20,9 @@ Each scenario prints its checks (`✓`, `✗`, and `· todo` for a known bug tha
 any scenario failed.
 
 Needs Playwright with Chromium, from the project or global (`npm i -g playwright`, then `npx playwright install
-chromium`). `nearby3` opens the first game on the shelf, so it needs the dev server with a plaintext game (`npm run
-unlock`): on the assembled site (`npm run dev -- site`) the games are locked and it fails; the others pass there too.
+chromium`). `nearby3` opens the first game on the shelf and `version` opens Two Dragons, so they need the dev
+server with the plaintext games (`npm run unlock`): on the assembled site (`npm run dev -- site`) the games are
+locked and they fail; the others pass there too.
 
 | scenario   | what                                                                                                  |
 |------------|-------------------------------------------------------------------------------------------------------|
@@ -32,6 +33,8 @@ unlock`): on the assembled site (`npm run dev -- site`) the games are locked and
 | `ui`       | the dialog: without internet only nearby, with internet two ways; a link and nearby both link up       |
 | `tabs`     | the same player in a new tab (host, then guest): «Ти граєш деінде», «Повернути сюди»                   |
 | `nearby3`  | three phones without internet: pairing, adding a player, a game followed by all, its seats, the host's phone gone |
+| `version`  | a friend's copy of a game is newer (its wire): the older page reloads itself into the room, once; not seated together; the note, «Оновити» on the older page only |
+| `proto`    | a friend's library is newer (PROTO + 1, its bundle rewritten on the way): not linked; both pages say so; the older reloads itself into the room, once |
 
 ## How they work
 

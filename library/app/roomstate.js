@@ -7,6 +7,13 @@
 //   view           the game everyone looks at (null: the shelf)
 //   here:<name>    the game this player has open (null: none); only they write it
 //   auth:<game>    whose copy of the game runs the round, once it moved (see together.js)
+//
+// A clock from elsewhere counts only if it is a whole number (a safe integer) at most a year ahead of our own wall
+// clock: one wild value (1e300, or 2^52 - 1, from a broken or hostile library) would otherwise carry every clock
+// with it to where nothing can come after, and no later change could win. A device whose clock runs days or months
+// fast still counts; one more than a year fast is not heard (its changes are ignored; tell its player to set the date).
+const YEAR = 365 * 24 * 3600 * 1000;
+export const validClock = c => Number.isSafeInteger(c) && c <= Date.now() + YEAR;
 const newer = (a, b) => !b || a.c > b.c || (a.c === b.c && a.a > b.a);
 
 export function roomState(me) {
@@ -24,7 +31,7 @@ export function roomState(me) {
     merge(entries) {
       const changed = [];
       for (const [k, e] of entries) {
-        if (typeof k !== 'string' || !e || !Number.isFinite(e.c) || typeof e.a !== 'string') continue;
+        if (typeof k !== 'string' || !e || !validClock(e.c) || typeof e.a !== 'string') continue;
         if (e.c > clock) clock = e.c;
         if (newer(e, doc.get(k))) { doc.set(k, { v: e.v, c: e.c, a: e.a }); changed.push(k); }
       }
@@ -33,6 +40,6 @@ export function roomState(me) {
     entries: () => [...doc],
     // a version for something else shared (a snapshot): after everything we have seen
     next: () => ++clock,
-    seen(c) { if (Number.isFinite(c) && c > clock) clock = c; }
+    seen(c) { if (validClock(c) && c > clock) clock = c; }
   };
 }
