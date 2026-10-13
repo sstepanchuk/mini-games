@@ -7,9 +7,15 @@
 // copy) and shows his answer, which Ганна takes. They are together, nearby. No password needed. Chromium (a fake
 // camera); needs the site: npm run site, then npm run dev -- site (E2E_SITE_URL); without it, it skips.
 'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
 const { SITE, launch, watch, scenario, check, step, until, w, skip, CHROMIUM } = require('../support/scenario.cjs');
 
 const SHELF = '#shelf:not([hidden])', NAME = '.dialog input.link';
+// the brokers' hosts (library/net/config.js): on that Wi-Fi they do not resolve, so the library's internet check
+// fails as it would there (a stand-in socket from Playwright would open first on a fast machine: «with internet»)
+const CONFIG = fs.readFileSync(path.join(__dirname, '../../../library/net/config.js'), 'utf8');
+const BROKER_HOSTS = [...CONFIG.matchAll(/url: 'wss:\/\/([^/:']+)/g)].map(m => m[1]);
 
 (async () => {
   if (!CHROMIUM) skip('a fake camera is Chromium\'s');
@@ -19,7 +25,8 @@ const SHELF = '#shelf:not([hidden])', NAME = '.dialog input.link';
   scenario('prod nearby: two phones without internet, from the offline copy', async () => {
     // a phone: the site once, then offline from its offline copy, then on a Wi-Fi with no way out
     async function phone(name) {
-      const b = await launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
+      const b = await launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream',
+        '--host-resolver-rules=' + BROKER_HOSTS.map(h => 'MAP ' + h + ' ~NOTFOUND').join(', ')] });
       const ctx = await b.newContext({ viewport: { width: 420, height: 860 }, permissions: ['camera'] }), p = watch(await ctx.newPage(), name);
       await p.goto(SITE);
       await p.waitForSelector(SHELF, { timeout: 15000 });
@@ -29,12 +36,14 @@ const SHELF = '#shelf:not([hidden])', NAME = '.dialog input.link';
       await p.reload();
       check(!!(await p.waitForSelector(SHELF, { timeout: 10000 }).catch(() => null)), name + ': the shelf offline, from the offline copy');
       await ctx.route('**/*', r => r.abort('internetdisconnected'));   // a Wi-Fi with no way out
-      await ctx.routeWebSocket(/.*/, ws => ws.close());
       await ctx.setOffline(false);
       await p.click('#together');
-      await w(300);
-      if (await p.isVisible(NAME) && !(await p.isVisible('text=Ввести код вручну'))) { await p.fill(NAME, name); await p.press(NAME, 'Enter'); }
-      check(!!(await p.waitForSelector('text=Показати код', { timeout: 15000 }).catch(() => null)), name + ': «Грати разом» offers nearby only');
+      // first the name, if the phone has none yet (on a slow machine the dialog takes a while: wait for one or the other)
+      const ask = p.locator(NAME), near = p.locator('text=Показати код');
+      await ask.or(near).first().waitFor({ timeout: 15000 }).catch(() => {});
+      if (await ask.isVisible() && !(await near.isVisible())) { await p.fill(NAME, name); await p.press(NAME, 'Enter'); }
+      const offered = !!(await near.waitFor({ timeout: 15000 }).then(() => true, () => false));
+      check(offered, name + ': «Грати разом» offers nearby only', offered ? undefined : await p.$eval('.dialog', d => d.innerText).catch(() => '(no dialog)'));
       const code = () => p.evaluate(() => document.querySelector('canvas.qr')?.dataset.code || '');
       const paste = async t => {
         await p.waitForSelector('text=Ввести код вручну', { timeout: 10000 });

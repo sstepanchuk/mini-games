@@ -6,7 +6,7 @@
 // address leads to the library. Nothing the page's Content-Security-Policy refuses, all the way. Needs the site:
 // npm run site, then npm run dev -- site (E2E_SITE_URL); without it, it skips.
 'use strict';
-const { SITE, launch, watch, scenario, check, step, until, w, skip } = require('../support/scenario.cjs');
+const { SITE, CHROMIUM, BROWSER, launch, watch, scenario, check, step, until, w, skip } = require('../support/scenario.cjs');
 
 const SHELF = '#shelf:not([hidden])', PW = '.dialog input[type=password]';
 
@@ -40,6 +40,13 @@ const SHELF = '#shelf:not([hidden])', PW = '.dialog input[type=password]';
     }, files.length), 20000);
     check(stored, 'every file of the site is in it (' + files.length + ')', stored);
 
+    // Playwright's WebKit fails any load with the network off, even one its service worker would answer ("WebKit
+    // encountered an internal error"): there the offline half is for a real iPhone (docs/ROADMAP.md)
+    if (!CHROMIUM) {
+      console.log('  · (' + BROWSER + ': the offline half is not run here)');
+      check(!refused.length, 'nothing refused by the Content-Security-Policy', refused);
+      return;
+    }
     step('offline');
     await w(500);
     await ctx.setOffline(true);

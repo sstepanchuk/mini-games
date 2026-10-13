@@ -61,8 +61,13 @@ async function launch(opt = {}) {
 
 const errs = [];                                       // uncaught errors on the pages (see watch)
 const labels = new WeakMap();                          // page → its label (see watch)
+// an uncaught error as it is reported: its kind (unless a plain Error), its message and where it was thrown
+const describe = e => {
+  const at = (e.stack || '').split('\n').map(l => l.trim()).find(l => /:\d+:\d+\)?$/.test(l));
+  return (e.name && e.name !== 'Error' ? e.name + ': ' : '') + e.message + (at ? ' @ ' + at : '');
+};
 // a page's uncaught errors fail the scenario
-const watch = (page, label) => { labels.set(page, label); page.on('pageerror', e => errs.push(label + ': ' + e.message)); return page; };
+const watch = (page, label) => { labels.set(page, label); page.on('pageerror', e => errs.push(label + ': ' + describe(e))); return page; };
 // E2E_PERF: what every page and frame counted, into that file
 async function perfReport() {
   const out = [];
