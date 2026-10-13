@@ -9,6 +9,9 @@
 //   - a round on one device, then a partner: the lobby, nothing of it sent; Start asks round.start
 //   - 'watch': only the runner's state of that round counts; the round moves here ('run' with an older snapshot):
 //     it goes on from the newer state it saw; 'end' not by the rules: the lobby says why
+//   - the library's waiting screen (<ihroteka-wait>, README "Waiting screens") under its title, empty: outside the
+//     library (here) never defined and taking no room; waiting for a seat, the lobby itself says nothing of it (the
+//     screen says it: screens and newgame3 on the real library)
 'use strict';
 const { launch, scenario, check, step, watch } = require('./support/scenario.cjs');
 const { newGame } = require('./support/newgame.cjs');
@@ -105,6 +108,24 @@ scenario('template: its page on the round\'s events (a stand-in library)', async
   check((await got(p)).sent.length === 0, 'and nothing of the round on one device went to Сава', await got(p));
   await p.click('#start');
   check((await got(p)).starts === 1 && (await view(p)).lobby, 'Start together: round.start (the round begins when the runner says)', [await got(p), await view(p)]);
+
+  step('the library\'s waiting screen: in its place, empty; waiting for a seat, the lobby says nothing of it');
+  p = await open();
+  const screen = await p.evaluate(() => {
+    const e = document.querySelector('ihroteka-wait');
+    return e && { count: document.querySelectorAll('ihroteka-wait').length, after: e.previousElementSibling?.tagName, before: e.nextElementSibling?.id,
+      defined: !!customElements.get('ihroteka-wait'), empty: !e.firstChild, room: e.getClientRects().length, showing: e.hasAttribute('showing') };
+  });
+  check(screen && screen.count === 1 && screen.after === 'H1' && screen.before === 'lobby', 'one <ihroteka-wait>, right under the title', screen);
+  check(screen && !screen.defined && screen.empty && !screen.room && !screen.showing, 'outside the library: never defined, empty, takes no room, no `showing`', screen);
+  await L(p, { linked: false, players: ['Богдан', 'Сава'], waiting: ['Аня'], seated: false });
+  await emit(p, 'players', ['Богдан', 'Сава']);
+  v = await view(p);
+  check(v.lobby && v.text === '' && !v.start, 'Аня waits for a seat: the lobby says nothing of it (the library\'s screen does), no Start', v);
+  await L(p, { linked: true, players: ['Богдан', 'Аня'], waiting: [], seated: true });
+  await emit(p, 'players', ['Богдан', 'Аня']);
+  v = await view(p);
+  check(v.lobby && v.text === 'Грають: Богдан, Аня.' && v.start, 'Сава leaves, Аня has his seat: «Грають: Богдан, Аня.», Start', v);
 
   step('a copy that watches: only the runner\'s state of that round; the round moves here; an end not by the rules');
   p = await open();

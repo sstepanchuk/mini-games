@@ -1,6 +1,7 @@
 // The API games see, pinned: window.ihroteka (what library/app/shell.js hands a game, and the contract at the top of
 // library/game-api.js), ihroteka.room (the channel's `api` object in library/app/together.js), ihroteka.round (the
-// `round` object in library/app/round.js) and the events a game can get from each. Everything is read from the
+// `round` object in library/app/round.js), the events a game can get from each, and the waiting screens a game places
+// (<ihroteka-wait>: game-api.js defines it, library/app/screens.js fills it). Everything is read from the
 // source, nothing is run. A member or an event added, renamed or removed fails here until tests/api-surface.json and
 // README's "Game API" say the same: an API change is made on purpose, with its docs.
 import { test } from 'node:test';
@@ -233,6 +234,38 @@ test('README "Game API" marks the room\'s round words of contract 4 deprecated, 
     assert.ok(SNAP.events.includes(e), "the room's event '" + e + "' is still there");
     assert.ok(lines.some(l => l.includes(".on('" + e + "'") && /deprecated/.test(l)), "README: .on('" + e + "' on a line that says deprecated");
   }
+});
+
+/* ---------- <ihroteka-wait>: game-api.js defines it; screens.js (its attribute, event and the markup's hooks) and
+   waiting.js (its kinds) say the rest ---------- */
+// `export const NAME = <literal>` (or an array of literals) of a module, by name
+function exported(file) {
+  const out = {};
+  for (const n of parse(file).body) {
+    if (n.type !== 'ExportNamedDeclaration' || n.declaration?.type !== 'VariableDeclaration') continue;
+    for (const d of n.declaration.declarations) {
+      if (d.init?.type === 'Literal') out[d.id.name] = d.init.value;
+      else if (d.init?.type === 'ArrayExpression' && d.init.elements.every(e => e?.type === 'Literal')) out[d.id.name] = d.init.elements.map(e => e.value);
+    }
+  }
+  return out;
+}
+
+test('<ihroteka-wait>: the element, its attribute and event, its kinds and the markup\'s hooks', () => {
+  const S = SNAP.screens, api = read('library/game-api.js');
+  assert.equal(api.match(/customElements\.define\('([a-z-]+)'/)?.[1], S.element, 'the element game-api.js defines ≠ tests/api-surface.json "screens"');
+  const screens = exported('library/app/screens.js'), waiting = exported('library/app/waiting.js');
+  assert.deepEqual([screens.ELEMENT, screens.ATTR, screens.EVENT], [S.element, S.attribute, S.event], 'screens.js ELEMENT, ATTR, EVENT ≠ tests/api-surface.json "screens"');
+  assert.deepEqual(sorted(screens.CLASSES), S.classes, 'screens.js CLASSES ≠ tests/api-surface.json "screens" classes');
+  assert.deepEqual(sorted(screens.DATA), S.data, 'screens.js DATA ≠ tests/api-surface.json "screens" data');
+  assert.deepEqual(sorted(waiting.KINDS), S.kinds, 'waiting.js KINDS ≠ tests/api-surface.json "screens" kinds');
+  const missing = [];
+  const has = (s, what = s) => { if (!README.includes(s)) missing.push(what); };
+  has('<' + S.element + '>'); has('[' + S.attribute); has("'" + S.event + "'");
+  for (const k of S.kinds) has('`' + k + '`');
+  for (const c of S.classes) has('.' + c);
+  for (const d of S.data) has('data-' + d);
+  assert.deepEqual(missing, [], 'missing from README "Game API"');
 });
 
 test('the notes name members of ihroteka.room; kick does nothing (phase 2, H1: the room checks its network itself)', () => {

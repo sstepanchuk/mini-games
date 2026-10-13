@@ -126,11 +126,13 @@ video.scan{width:100%;max-height:50vh;object-fit:cover;border:3px solid var(--in
   background:var(--ink);color:#fff;border-radius:12px;box-shadow:4px 4px 0 var(--pink);transition:opacity .4s;
 }
 .toast.out{opacity:0}
-/* the card over a game while it waits for a player (invite.js): a row per player, the time in even digits */
+/* the card over a game that shows none of its waiting screens (invite.js; the rows: waiting.js, screens.js paint): a row
+   per thing said, the time in even digits, buttons of a finger's size */
 .waiting{position:absolute;left:50%;bottom:max(16px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:2;gap:2px;padding:8px 14px;max-width:calc(100% - 24px);text-align:center}
 .wait-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 12px}
 .waiting p{margin:0;font-weight:700}
-.waiting .left{font-variant-numeric:tabular-nums}
+.waiting .wait-time{font-variant-numeric:tabular-nums}
+.waiting .btn{min-height:44px}
 /* for screen readers only (what they hear of the card: who and why, not the time) */
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .players{margin:0;padding-left:20px;text-align:left}

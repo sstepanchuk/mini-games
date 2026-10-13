@@ -5,11 +5,13 @@
 // link, Богдан opens it in another tab, Аня opens the game and both follow; they play the template's round (on
 // ihroteka.round) to its end (turns, the other's buttons off, the same number on both screens, one winner). Midway the
 // tab of the copy that does not run the round reloads and gets it back; then the runner's: the round goes on from its
-// snapshot ('run' with it). Runs on its own server: E2E_URL is only checked to be up, by run.cjs.
+// snapshot ('run' with it). Meanwhile the other one sees whom the round waits for in the library's waiting screen under
+// the game's title (<ihroteka-wait>, README "Waiting screens": «Чекаємо на …»), and never in the library's card over
+// the game (sampled every 100 ms on both pages). Runs on its own server: E2E_URL is only checked to be up, by run.cjs.
 'use strict';
 const { launch, scenario, check, step, until } = require('./support/scenario.cjs');
-const { openPage, createLink, enterName, libState, short } = require('./support/pages.cjs');
-const { newGame } = require('./support/newgame.cjs');
+const { openPage, createLink, enterName, libState, short, waitShown } = require('./support/pages.cjs');
+const { newGame, SCREENS, sampled } = require('./support/newgame.cjs');
 
 // what a player sees in the game's frame
 const view = f => f.evaluate(() => {
@@ -26,6 +28,7 @@ scenario('newgame: cli new, then two devnet tabs play it without internet', asyn
 
   const ctx = await (await launch()).newContext({ viewport: { width: 900, height: 700 } });
   const away = [];
+  await ctx.addInitScript(SCREENS);
   await ctx.route(u => new URL(u).host !== '127.0.0.1:' + port, r => { away.push(r.request().url()); return r.abort(); });   // no internet
   const A = await openPage(ctx, 'a', U2, { label: 'Аня', net: false });
   check(await A.evaluate(() => window.__devnet === true && !!document.getElementById('ihroteka-devnet')), 'devnet on the page, and its tag');
@@ -41,6 +44,9 @@ scenario('newgame: cli new, then two devnet tabs play it without internet', asyn
   const fa = await frame(A), fb = await frame(B);
   const lobby = async () => { const v = [await view(fa), await view(fb)]; return v.every(x => x && x.lobby && /Грають: (Аня, Богдан|Богдан, Аня)\./.test(x.text)) && v; };
   check(await until(lobby, 15000), 'both in its lobby: «Грають: …» the two of them', [await view(fa), await view(fb)]);
+  const nothing = async () => { const x = [await waitShown(A), await waitShown(B)]; return x.every(y => y.where === null && y.showing === null) && x; };
+  const calm = await until(nothing, 5000), sa = await A.evaluate(() => window.__ihroteka.screens());
+  check(calm && sa.adopted && sa.copies === 1 && sa.holder === -1, 'nothing to wait for: the game\'s waiting screen (one, placed: adopted) is empty, no `showing`', [sa, await nothing()]);
 
   step('a round, turn by turn');
   const F = { Аня: fa, Богдан: fb }, P = { Аня: A, Богдан: B }, NAMES = Object.keys(F);
@@ -67,13 +73,22 @@ scenario('newgame: cli new, then two devnet tabs play it without internet', asyn
   await turn(1); await turn(2); await turn(2);
 
   const runner = (await libState(A)).game.round.runner, guest = NAMES.find(n => n !== runner);
+  // what each player's pages sampled (support/newgame.cjs SCREENS), added up over a reload
+  const tally = Object.fromEntries(NAMES.map(n => [n, {}]));
+  const count = async n => { const s = await sampled(P[n]); for (const [k, x] of Object.entries(s || {})) tally[n][k] = (tally[n][k] || 0) + x; };
   for (const [name, what] of [[guest, 'the other copy'], [runner, 'the copy that runs the round']]) {
     step(name + '\'s tab (' + what + ') reloads mid-round');
+    const other = NAMES.find(n => n !== name), says = new RegExp('^Чекаємо на ' + name + '(… \\d+:\\d\\d( Не чекати)?| — повертається в гру)$');
+    await count(name);
     await P[name].reload();
+    const waits = await until(async () => { const x = await waitShown(P[other]); return x.where === 'screen' && says.test(x.text) && x; }, 10000);
+    check(waits && waits.say === waits.text.replace(/ \d+:\d\d( Не чекати)?$/, ''), other + '\'s game, meanwhile: «Чекаємо на ' + name + '…» in its waiting screen (a screen reader hears it, not the time)',
+      waits || await waitShown(P[other]));
     await enterName(P[name], name);                         // (the room's link asks for the name again)
     F[name] = await frame(P[name]);
-    const back = async () => { const x = await views(); return NAMES.every(n => x[n] && x[n].play && x[n].total === total) && await turns() && x; };
-    check(await until(back, 30000), 'the round goes on' + (name === runner ? ' from its snapshot' : '') + ': ' + total + ' on both, a turn to play', [await views(), await short(A), await short(B)]);
+    const back = async () => { const x = await views(); return NAMES.every(n => x[n] && x[n].play && x[n].total === total) && await turns() && await nothing() && x; };
+    check(await until(back, 30000), 'the round goes on' + (name === runner ? ' from its snapshot' : '') + ': ' + total + ' on both, a turn to play, nothing to wait for',
+      [await views(), await short(A), await short(B), await waitShown(P[other])]);
     await turn(1);
   }
   await turn(2);
@@ -83,4 +98,9 @@ scenario('newgame: cli new, then two devnet tabs play it without internet', asyn
   check(won && NAMES.every(n => n === won || v[n].say === 'Виграв: ' + won + '!'), 'one winner at 10: «Ти виграв!» / «Виграв: ' + won + '!»', v);
   check(v && NAMES.every(n => !v[n].steps.some(Boolean)), 'no more moves; «Ще раз» on both', v);
   check(away.every(u => /^https:\/\/fonts\.(googleapis|gstatic)\.com\//.test(u)), 'nothing but web fonts tried the internet (and got nothing)', away);
+  for (const n of NAMES) {
+    await count(n);
+    const s = tally[n];
+    check(s.n > 0 && s.screen > 0 && !s.card && !s.both && !s.many, n + '\'s pages: whom the round waited for, only ever in the game\'s screen (never the card, never both, never two copies), ' + s.n + ' samples', s);
+  }
 }, { timeout: 180000 });

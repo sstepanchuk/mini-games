@@ -1,8 +1,9 @@
 /* =====================================================================
    The screens of playing together (together.js holds the room): the chip on the shelf, notes at the
-   bottom of the screen, the "Грати разом" dialog, the name a player comes in with, and the card over a game
-   while it waits for a player (the only «Чекаємо на …»: games say only their own reasons, such as a hidden tab or
-   a countdown). The dialog asks for the name, then checks for internet by itself:
+   bottom of the screen, the "Грати разом" dialog, the name a player comes in with, and the library's card over a game,
+   for a game that shows none of its waiting screens (`<ihroteka-wait>`, screens.js: whom we wait for and why, a seat,
+   the version; games say only their own reasons, such as a hidden tab or a countdown). The dialog asks for the name,
+   then checks for internet by itself:
    with internet there are two ways (a link, or nearby with QR codes), without it only nearby (and only nearby on a page
    without Web Crypto, served over plain http: net/config.js secure; it says why). Once together,
    more players can be added the same way (up to the room's limit). A friend on another version of the library or of
@@ -11,10 +12,11 @@
 import { CODE_LENGTH, hasInternet, newRoomCode, preload, secure } from '../net/index.js';
 import { $, btn, copy, el, modal, para, safe, toast } from './dom.js';
 import { Camera, drawQr } from './qr.js';
-import { comeBack, currentRoom, elsewhere, lastInternetCode, lastName, leave, linked, offerUpdate, onChange, release, startInternet, startNearby, updateNow, validName, versionGap,
-  waitingFor } from './together.js';
+import { adopted, initScreens, paint, ready, show as showScreens } from './screens.js';
+import { comeBack, currentRoom, elsewhere, lastInternetCode, lastName, leave, linked, onChange, release, startInternet, startNearby, updateNow, validName, versionGap,
+  waitFacts } from './together.js';
+import { placeLines, sayOf, screen, UPDATE } from './waiting.js';
 
-const UPDATE = 'Онови сторінку — у друга інша версія';   // (owner, decision 9)
 // a page without Web Crypto (plain http: `npm run dev -- --lan`) has no internet rooms (net/config.js secure)
 const INSECURE = 'Через посилання можна грати лише на сторінці, відкритій через https: на цій адресі браузер вимикає шифрування.';
 
@@ -25,6 +27,7 @@ export function initInvite(s) {
   shell = s;
   s.askName = askName;
   $('together').addEventListener('click', () => openDialog());
+  initScreens(waitNote);                                 // (the game's screens ask for a pass: a copy came, the page parsed…)
   waitNote();                                            // (the card, hidden: its live region is there before it speaks)
   setInterval(waitNote, 1000);
   onChange(what => {
@@ -35,7 +38,7 @@ export function initInvite(s) {
     // (a moment later: when the room's host changes, everyone is back together in a second)
     if (what === 'peer-gone') setTimeout(() => { if (!linked()) toast(room && room.kind === 'nearby' ? 'Зв’язок обірвався' : 'Друзі вийшли'); }, 3000);
     if (what === 'replaced') queueMicrotask(goneElsewhere);
-    if (what === 'version' && versionGap()) toast(UPDATE);
+    if (what === 'version' && versionGap() && $('stage').hidden) toast(UPDATE);   // (over a game, its screen or the card says it)
     if (what === 'status' && room && room.status === 'unavailable' && !secure()) toast(INSECURE);   // (opened from a link)
     if (/^(away|leave|left|peer-gone|version|waiting)$/.test(what)) waitNote();
     chip();
@@ -68,63 +71,40 @@ function goneElsewhere() {
     btn('Закрити', () => m.close(), 'btn ghost'));
 }
 
-/* ---------- over a game: the card «Чекаємо на …» ---------- */
-// Whom the open game waits for, and why (together.js waitingFor, rules.absence):
-//   'link'     dropped out, their seat kept: «Чекаємо на X… 2:45» (the time their place is kept) and «Не чекати» (their
-//              place goes: the game goes on without them, if it can), where it works (rules.canRelease: not for others
-//              while we are cut off from the room's host). Nearby, a broken link does not come back by itself:
-//              «З’єднатися знову» (pairing again); and when X is the phone that holds the room (its host, the one who
-//              showed the code first), nothing here can go on without it: «Не чекати» ends the room on this device,
-//              saying so (owner, decision 5).
-//   'loading'  back, their game opening in a new tab or device: «Чекаємо на X — повертається в гру», with nothing to
-//              press (they did not drop out; owner, decision 4).
-// A friend on another version: «Онови сторінку — у друга інша версія», with «Оновити» on the older page.
+/* ---------- over a game: the card «Чекаємо на …», for a game that shows none of its waiting screens ---------- */
+// What the library says while the open game waits, and its buttons, are waiting.js's (screen: the words; from
+// together.js waitFacts: whom we wait for and why, our copy restoring its round, a seat, the version); where it shows
+// is screens.js's: in a copy of the game's <ihroteka-wait> that the player sees, else in this card over the game (every
+// row; for a game that never placed one, the card as it was: link and loading of whom we play with, and the version;
+// before the game's page has parsed, the version only: waiting.js placeLines). Never both.
 // The card is built once and stays (hidden while there is nothing to say): each second only the time changes. What a
-// screen reader hears is a live region of its own beside it (.sr), which changes only when who or why does; a row
-// stays while its player, reason and buttons do, so a focused «Не чекати» keeps its focus.
-let card = null;                                         // { box, say, said, rows: Map(name → { row, why, release, left }), gap, gapKey }
-const mmss = ms => { const s = Math.ceil(ms / 1000); return (s / 60 | 0) + ':' + String(s % 60).padStart(2, '0'); };
-const waitText = ({ name, why }) => 'Чекаємо на ' + name + (why === 'loading' ? ' — повертається в гру' : '…');
+// screen reader hears is one live region beside it (.sr), wherever the rows show, which changes only when who or why
+// does; a row stays while its player, reason and buttons do, so a focused «Не чекати» keeps its focus.
+let card = null;                                         // { box, say, said }
+const ACTS = { repair: () => repair(), release: name => notWaiting(name), update: () => updateNow() };
+// (once at a time: a game's 'showing' listener may change what is said, which asks for a pass again)
+let noting = false, again = false;
 function waitNote() {
-  const stage = $('stage'), gap = versionGap(), list = stage.hidden ? [] : waitingFor();
+  if (noting) { again = true; return; }
+  noting = true;
+  try { for (let n = 0; n < 4; n++) { again = false; noteOnce(); if (!again) break; } } finally { noting = false; }
+}
+function noteOnce() {
+  const stage = $('stage');
   if (!card || !card.box.isConnected) {
-    card = { box: el('div', { id: 'waiting', className: 'waiting card', hidden: true }), say: el('p', { className: 'sr', role: 'status' }), said: '', rows: new Map(), gap: null, gapKey: '' };
+    card = { box: el('div', { id: 'waiting', className: 'waiting card', hidden: true }), say: el('p', { className: 'sr', role: 'status' }), said: '' };
     stage.append(card.box, card.say);
   }
-  const shown = !stage.hidden && (list.length > 0 || !!gap);
-  for (const [name, r] of card.rows) if (!shown || !list.some(x => x.name === name && x.why === r.why && x.release === r.release)) dropRow(name);
-  for (const x of shown ? list : []) {
-    let r = card.rows.get(x.name);
-    if (!r) { r = waitRow(x); card.rows.set(x.name, r); card.box.insertBefore(r.row, card.gap); }
-    if (r.left) r.left.textContent = mmss(x.left);
-  }
-  const gk = shown && gap ? gap.key + (offerUpdate() ? '+' : '') : '';
-  if (gk !== card.gapKey) {
-    card.gapKey = gk;
-    if (card.gap) card.gap.remove();
-    card.gap = gk ? el('div', { className: 'wait-row' }, para(UPDATE), ...(offerUpdate() ? [btn('Оновити', updateNow, 'btn ghost')] : [])) : null;
-    if (card.gap) card.box.append(card.gap);
-  }
-  card.box.hidden = !shown;
-  const said = shown ? [...list.map(waitText), ...(gap ? [UPDATE] : [])].join('. ') : '';
+  const model = screen(stage.hidden ? null : waitFacts());
+  const held = showScreens(model, ACTS);                 // one of the game's screens holds the rows, or none does
+  const rows = placeLines(model.rows, { ready: ready(), adopted: adopted(), held });
+  const had = card.box.contains(document.activeElement);
+  paint(card.box, rows, ACTS);
+  // (a row that went held the focus: the player is back, whoever was about to press «Не чекати» goes on with the game)
+  if (had && !card.box.contains(document.activeElement)) safe(() => stage.querySelector('iframe')?.focus());
+  card.box.hidden = !rows.length;
+  const said = sayOf(held ? model.rows : rows);
   if (said !== card.said) { card.said = said; card.say.textContent = said; }
-}
-// one waited player's row: the line (with the time, for a place that is kept) and what can be done
-function waitRow(x) {
-  const left = x.why === 'link' ? el('span', { className: 'left' }) : null;
-  const near = currentRoom() && currentRoom().kind === 'nearby';
-  const row = el('div', { className: 'wait-row' }, el('p', {}, waitText(x), ...(left ? [' ', left] : [])),
-    ...(x.why !== 'link' ? [] : [
-      ...(near ? [para('Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.', 'fine'), btn('З’єднатися знову', repair)] : []),
-      ...(x.release ? [btn('Не чекати', () => notWaiting(x.name), 'btn ghost')] : [])]));
-  return { row, why: x.why, release: x.release, left };
-}
-function dropRow(name) {
-  const r = card.rows.get(name);
-  card.rows.delete(name);
-  // (the player is back: whoever was about to press «Не чекати» goes on with the game)
-  if (r.row.contains(document.activeElement)) safe(() => $('stage').querySelector('iframe')?.focus());
-  r.row.remove();
 }
 // «Не чекати»: their place goes. Nearby, for the phone that holds the room (we are a guest there): there is no room
 // without it, so it ends here, saying why.

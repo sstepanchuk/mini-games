@@ -3,11 +3,12 @@
 // copy of the game (E2E_GAME: Two Dragons by default) is one wire newer than it is (its shelf rewritten on the way),
 // Богдан's is as it is: Богдан's page, the older, reloads itself
 // back into the room (no name asked), once only; both know it; in the game they are not seated together, and both
-// see «Онови сторінку — у друга інша версія», with «Оновити» on the older page only. Needs the dev server with the
-// plaintext games (npm run unlock), or with the probe (npm run dev -- --probe, E2E_GAME=probe).
+// see «Онови сторінку — у друга інша версія» (the waiting message wherever it is: the card, or the game's
+// <ihroteka-wait>), with «Оновити» on the older page only. Needs the dev server with the plaintext games (npm run
+// unlock), or with the probe (npm run dev -- --probe, E2E_GAME=probe).
 'use strict';
 const { U, w, launch, watch, scenario, check, until, GAME } = require('./support/scenario.cjs');
-const { openPage, createLink, libState } = require('./support/pages.cjs');
+const { openPage, createLink, libState, waitShown } = require('./support/pages.cjs');
 const { fakeNet } = require('./support/fakenet.cjs');
 
 const UPDATE = /Онови сторінку — у друга інша версія/;
@@ -39,9 +40,9 @@ scenario('version: a friend\'s copy of the game is newer', async () => {
   await pa.click('a.game[href*="/' + GAME + '/"]');     // the room goes into the game
   await until(async () => (await libState(pb)).game && (await libState(pa)).game, 15000);
   await w(1500);
-  const note = p => p.evaluate(() => document.getElementById('waiting')?.innerText || '');
-  check(UPDATE.test(await note(pa)) && UPDATE.test(await note(pb)), 'the note over the game, on both', [await note(pa), await note(pb)]);
-  const offered = p => p.evaluate(() => [...document.querySelectorAll('#waiting button')].some(b => b.textContent === 'Оновити'));
+  const note = async p => { const x = await waitShown(p); return x.where === 'both' ? '' : x.text; };   // (two messages: none to count)
+  check(await until(async () => UPDATE.test(await note(pa)) && UPDATE.test(await note(pb)), 5000), 'the note over the game, on both (in one place)', [await waitShown(pa), await waitShown(pb)]);
+  const offered = async p => (await waitShown(p)).buttons.includes('Оновити');
   check(await offered(pb) && !await offered(pa), '«Оновити» on the older page only', { Аня: await offered(pa), Богдан: await offered(pb) });
   const [ga, gb] = [(await libState(pa)).game, (await libState(pb)).game];
   check(ga.players.join() === 'Аня' && gb.players.join() === 'Богдан' && !ga.linked && !gb.linked, 'not seated together', [ga, gb]);

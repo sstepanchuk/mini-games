@@ -17,10 +17,12 @@ and works offline. Hosted on GitHub Pages.
 - **Together.** "Грати разом" connects up to 8 players for the whole library: whatever one opens, everyone's library
   opens too. A player is the name they type on entering a room: the same name from another tab, browser or device
   takes that player's place (the old one steps aside and can take it back with «Повернути сюди»). A player who drops
-  out keeps their place for 3 minutes; meanwhile the game pauses and a card over it says whom the others wait for and
-  why: one who dropped out, the time left and «Не чекати» (nearby, for the phone that holds the room, «Не чекати» ends
-  the room on this phone: «Без телефона X кімната поруч далі не може»), or one who is only opening the game again, in
-  a new tab or device («Чекаємо на X — повертається в гру», nothing to press). If the copy of the game that runs a
+  out keeps their place for 3 minutes; meanwhile the game pauses and the library says whom the others wait for and
+  why, in the game's own waiting screen (`<ihroteka-wait>`), or in its card over a game that has none: one who dropped
+  out, the time left and «Не чекати» (nearby, for the phone that holds the room, «Не чекати» ends the room on this
+  phone: «Без телефона X кімната поруч далі не може»), or one who is only opening the game again, in a new tab or
+  device («Чекаємо на X — повертається в гру», nothing to press); a player of the round whose game is closed, a seat
+  to wait for and who plays now, a round coming back after a reload, too. If the copy of the game that runs a
   round is gone for 10 s, the round goes on in another player's copy from its last snapshot, when that player can tell
   it was not them who dropped out (two phones nearby that lose each other wait for the runner instead). The dialog
   first checks by itself whether there is internet (whether a broker answers: `navigator.onLine` also says yes on a
@@ -40,7 +42,8 @@ and works offline. Hosted on GitHub Pages.
 ```
 library/   everything that runs in the browser
   app/       the library page: shell, password, together (+ rules: who plays, who runs a round; round: ihroteka.round,
-             a game's rounds; trace: what happened lately, for bug reports), offline copy, page template, icons
+             a game's rounds; waiting, screens: the waiting screens a game puts in itself; trace: what happened
+             lately, for bug reports), offline copy, page template, icons
   net/       rooms for up to 8 players: internet (MQTT, sealed with the room's code, + WebRTC) and nearby (QR-paired
              WebRTC)
   crypto.js  keyring and sealed files (browser and Node)
@@ -118,7 +121,9 @@ From nothing to two players on screen, then on the shelf:
    sends), the others send their moves; it saves the round after each move (`round.save`) and ends it with
    `round.over`, goes on from the snapshot `run` brings, sends a new copy of a player everything on `rejoin`, and sets
    its one rule (`round.policy.endWhenSeatGone`: a player gone for good ends the round, as their turn would never
-   come). Buttons rather than a canvas where you can: they work with a keyboard and a screen reader.
+   come). Buttons rather than a canvas where you can: they work with a keyboard and a screen reader. Where the page
+   should say whom it waits for, it has `<ihroteka-wait></ihroteka-wait>` (the template's is under its title, seen
+   in the lobby and in a round): the library fills it; draw no such message yourself (see "Waiting screens").
 7. `game.json` (validated by the dev server and the build):
    - `title`, `tagline`, `description`, `image`; optional `shareTitle`, `shareDescription`, `imageAlt`, `emoji`,
      `theme`, `players` (`"2"` or `"2-4"`; 2 when not given);
@@ -162,6 +167,7 @@ ihroteka.home()      // back to the shelf
 ihroteka.invite()    // the library's "play together" dialog (room.invite() is the same)
 ihroteka.room        // the other players (below)
 ihroteka.round       // the game's rounds: who plays one, whose copy runs it, its snapshots (below, "The round")
+<ihroteka-wait>      // where the library says whom we wait for (below, "Waiting screens")
 ```
 
 `game.wire` is the version of the game's messages and snapshots (game.json `"wire"`, 1 when not given). Raise it by
@@ -408,6 +414,103 @@ function share() { round.save(G); lib.room.send({ t: 'board', g: G }); draw(); }
 startButton.onclick = () => round.start();               // false while a round is on
 ```
 
+### Waiting screens: `<ihroteka-wait>`
+
+Whom a game waits for, and why, the library says, in the same words and with the same buttons for every game (owner,
+decision 6 (c), «Спільний набір екранів»): in the game's own page, where the game puts `<ihroteka-wait></ihroteka-wait>`,
+or, for a game that has none, in the library's card over the game. Never both, and never next to a line of the game's
+own that says the same: at most one waiting message at any moment. The library decides the words, the facts and the
+buttons; the game decides where the screen sits and how it looks. It is part of contract 4 (additive, as
+`ihroteka.round` was: `ihroteka.version` stays 4): `game-api.js` defines the element in the game's own window before its
+page is parsed (`library/app/screens.js` does the rest); outside the library it is never defined, an empty unknown
+element that shows nothing.
+
+| kind        | what it says                                                       | buttons                                                    |
+|-------------|--------------------------------------------------------------------|------------------------------------------------------------|
+| `link`      | «Чекаємо на X… 2:45»: X dropped out, their place kept that long (nearby also «Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.») | nearby «З’єднатися знову» (pairing again); «Не чекати» (their place goes) where it works from here |
+| `loading`   | «Чекаємо на X — повертається в гру»: back in a new tab or device, their game not open there yet | none (owner, decision 4) |
+| `closed`    | «Чекаємо на X — зараз не в грі»: a player of our round, in the room, whose game is closed (after 2 s: following the room into a game takes a moment), while nobody we play with has it open | none: the game's own quit (`round.quit()`) is the way out |
+| `restoring` | «Повертаю гру з того місця, де ви зупинилися…»: our copy runs a saved round (a reload) and its snapshot has not come for 1 s (when it comes, the round runs on; one on no device ends it, `lost`, after 15 s) | none |
+| `seat`      | «Ти чекаєш на місце», and «Грають зараз: Аня і Богдан.» (while a round is on, its players still in the room) | none |
+| `version`   | «Онови сторінку — у друга інша версія»                             | «Оновити» on the older page (not nearby)                   |
+
+Rows come in that order (players we play with, then the round's own, then the rest); names are joined «Аня», «Аня і
+Богдан», «Аня, Богдан і Віра». A screen reader hears the rows (never the time) from one live region of the library's
+page, wherever they show; each second only the time changes.
+
+**Where it shows.** Put a copy wherever the player looks in each state of the game (in each menu panel, over the field):
+any number of copies, in static HTML or made later (`document.createElement('ihroteka-wait')`). The library puts its
+rows into one of them at a time, the holder: the one that holds them while it is still seen, else the first seen copy
+in document order. Seen: visible (not `display:none`, `visibility:hidden` or `opacity:0`), in the frame's view, and on
+top at the centre of its first row (a copy under the game's own overlay is not). Every other copy stays empty, and an
+empty copy takes no room. When no copy is seen, the card over the game says every row instead; a game that never placed
+the element gets the card as it always was (`link` and `loading` of whom we play with, and `version`), so a game built
+before the screens is never doubled. Until the game's page has parsed (`DOMContentLoaded`), only the version shows, on
+the card. While a library dialog is open, the holder stays as it is.
+
+**What it says now.** On every copy, the attribute `showing` is the kinds said now, each once, in row order
+(`showing="link version"`), wherever they show (this copy, another one, or the card); absent when nothing is said. Read
+it as the game's code starts (it is there by then); the event `showing` (a plain `Event` of the game's window, on every
+copy, no bubbling) fires when what is said changes (a row came or went, its who, why, buttons or players changed;
+never for the time), after the rows are in place: a listener sees the final page, and may move focus or show another
+copy. It waits for the game's page to have parsed: what is said as the game opens is heard then, once (a listener added
+as the game's scripts run hears it). A game quiets its own waiting lines with one selector:
+
+```js
+const libSays = () => !!document.querySelector('ihroteka-wait[showing]:not([showing=version])');   // players, the round, a seat
+for (const w of document.querySelectorAll('ihroteka-wait')) w.addEventListener('showing', draw);
+```
+
+**The markup** the library puts into the holder (the same as its card's; these hooks are pinned in
+`tests/api-surface.json` "screens"):
+
+```html
+<div class="wait-row" data-kind="link" data-name="Богдан">          <!-- data-name: a row about a player -->
+  <p>Чекаємо на Богдан… <span class="wait-time">2:45</span></p>     <!-- .wait-time: link only -->
+  <p class="fine">Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.</p>   <!-- nearby link; seat -->
+  <button type="button" class="btn">З’єднатися знову</button>
+  <button type="button" class="btn ghost">Не чекати</button>
+</div>
+```
+
+Its look is the game's: `.wait-row`, `.wait-time`, `.fine`, `.btn`, `.btn.ghost`, `data-kind`, `data-name` and
+`[showing~=seat]` for its own CSS (font, colour and box are inherited from where the copy sits), say `.wait
+[data-kind=seat] .fine{display:none}` to hide a line the game already shows. The library adds one `<style
+data-ihroteka-wait>` to the game's `<head>`: `ihroteka-wait:empty{display:none!important}`, and at zero specificity
+(`:where`: any rule of the game's wins) a block, rows that wrap and centre with a small gap, paragraphs without
+margins, a time that never breaks, and the small line on a line of its own. That style is there only inside the
+library: a game that gives the element a box (padding, a border, a background) also says
+`ihroteka-wait:empty{display:none}` itself (without `!important`), so its page opened on its own shows no empty box.
+
+**Rules for a game:**
+1. Leave the element empty: the library replaces anything put in it.
+2. Never set `display` with `!important`, or `display:contents`, on the element, nor `pointer-events:none` on it or
+   around it: the library would count it as unseen, and the card would say it instead.
+3. Put a copy where the player looks in each state. A copy under the game's own overlay counts as unseen, so the next
+   copy (or the card) takes the rows: a copy inside the layer that covers the others is found at once, and a layer
+   that appears over the holder without holding a copy is noticed within a second.
+4. Draw none of the six kinds yourself: hide your own pause or waiting lines while
+   `ihroteka-wait[showing]:not([showing=version])` exists (a version note alone is no waiting message).
+5. Keep it out of a `role=dialog aria-modal` layer unless a copy is inside that dialog, or a screen reader cannot reach
+   its buttons.
+
+A real-time game, the way Two Dragons does it: a copy in each menu panel, in flow, and one over the field, below the
+menu's overlay (positioned where a banner would be): with the menu open, the field's copy is covered and the open
+panel's holds the rows; with it closed, the field's. Its pause banner shows only its own reasons, and only while the
+library says nothing (`libSays()`), redrawn on `showing`. A turn-based one, the way Хрестики-нулики does: one copy right
+under its status line; the status says nothing of waiting for a seat or for a closed game, and the page redraws on
+`showing` (which also puts the focus back where it belongs).
+
+**Accessibility.** The copies are plain text and buttons in the game's reading and Tab order; what is said is
+announced once, from the library page's live region (the game's own status lines go quiet, which announces nothing).
+A row stays while only its time changes, so a focused «Не чекати» keeps its focus; a row that goes takes its focus
+with it (to the game's `<body>`): the `showing` event lets the game put it back. A screen that appears never takes
+the focus, and Esc does nothing to it (owner, decision 8).
+
+**On the dev server** the console says so, once: `ihroteka-wait: leave it empty: the library fills it` (something was
+put in a copy), and `ihroteka-wait: none of this game's waiting screens is seen (hidden, covered or out of view): the
+library's card over the game says it instead`.
+
 ### A multiplayer game on it, the way Two Dragons does it
 
 - **One copy runs the round** (`round.runs`): it steps the game at a fixed rate and sends the whole state to the
@@ -424,11 +527,12 @@ startButton.onclick = () => round.start();               // false while a round 
   pictures only from that runner (an old runner back after the round was quit must not pull you back in); on `rejoin`,
   send that player the full picture. A copy that runs the round on after a reload numbers its pictures above the old
   copy's (Two Dragons: from the snapshot's, plus a margin), so the others take them.
-- **Pause on `weak`**. Whom the round waits for, and why, the library says itself, in one card over the game
-  («Чекаємо на …», with «Не чекати» when it makes sense): draw no waiting message of your own, only your own reasons
-  to pause (a hidden tab, a countdown, or a pause the runner's room sees and yours does not: Two Dragons says the link
-  is weak). A partner whose game closed mid-round (`room.linked` false, `round.active` true): the round stands still
-  and goes on when they are back.
+- **Pause on `weak`**. Whom the round waits for, and why, the library says itself, in the game's `<ihroteka-wait>`
+  (or its card over a game that has none: «Чекаємо на …», with «Не чекати» when it makes sense; see "Waiting
+  screens"): draw no waiting message of your own, only your own reasons to pause (a hidden tab, a countdown, or a pause
+  the runner's room sees and yours does not: Two Dragons says the link is weak), and those only while the library says
+  nothing. A partner whose game closed mid-round (`room.linked` false, `round.active` true): the screen says «Чекаємо на
+  X — зараз не в грі» (after 2 s); the round stands still and goes on when they are back.
 - **Show the others a little ahead**: predict both players to the moment your own input will reach the round
   (`room.lag()` is the one-way delay), and when a new state corrects the prediction, let the difference fade
   over ~0.1 s instead of jumping. The runner delays its own input and picture by `room.lag()`, so the round
@@ -469,7 +573,9 @@ and change what the library keeps on the device (IndexedDB with the key that ope
 storage), call the library page directly (`parent.__ihroteka`, anything on `parent`), act as its player in the room,
 and send whatever it likes wherever it likes. `window.ihroteka` is a convenience, not a boundary. Only games of the
 library's own people belong on it. Sandboxed frames with a message API are an open decision, for when games come from
-other authors ([docs/ROADMAP.md](docs/ROADMAP.md), 23).
+other authors ([docs/ROADMAP.md](docs/ROADMAP.md), 23). The trust goes the other way too: the library page writes into
+the game's document (the rows of its waiting screens, one `<style data-ihroteka-wait>`, the `showing` attribute: see
+"Waiting screens"), as same-origin trusted code; the policy below has no `style-src`, so that style is allowed.
 
 What the page does close, against mistakes rather than against a game:
 - **Scripts.** The page's Content-Security-Policy (a `<meta>` in `library/app/page.html`; a game's `srcdoc` frame

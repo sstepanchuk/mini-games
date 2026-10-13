@@ -4,8 +4,9 @@ name: Browser tests
 # of its own, so they never hold up Deploy (pages.yml) while they prove themselves steady (docs/ROADMAP.md, phase 5:
 # then they block it). CI has no password, so no sealed game opens here: the dev server serves the probe instead
 # (tests/e2e/fixtures/probe, `dev --probe`; E2E_GAME=probe: it keeps its rounds the way of contract 4), `newgame` and
-# `newgame3` make a game with `cli new` (the template, on ihroteka.round) and play it in devnet tabs, and the production
-# path runs on the assembled site without opening a game (tests/e2e/prod).
+# `newgame3` make a game with `cli new` (the template, on ihroteka.round) and play it in devnet tabs, `screens` shows the
+# library's waiting screens in such a game (<ihroteka-wait>; the probe places none: `card` sees the library's card), and
+# the production path runs on the assembled site without opening a game (tests/e2e/prod).
 # Chromium runs the scenarios tagged @ci; WebKit those tagged @webkit (no fake camera there: nothing nearby).
 
 on:

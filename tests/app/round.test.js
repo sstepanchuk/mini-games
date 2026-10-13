@@ -475,7 +475,7 @@ describe('the round layer (ihroteka.round)', { concurrency: 3 }, () => {
     assert.deepEqual([await save(A, { n: 1 }), await save(B, { n: 2 }), await save(C, { n: 3 })], [true, false, false]);
     assert.ok(await until(async () => (await saveOf(B))?.s?.n === 1, 3000), 'Богдан keeps it');
     assert.deepEqual(await saveOf(B), { r: id, a: 'Аня', c: (await saveOf(B)).c, s: { n: 1 } });
-    assert.ok((await rec(B)).saved, 'the record says it was saved');
+    assert.ok(await until(async () => (await rec(B))?.saved, 3000), 'the record says it was saved');   // (it may come a moment after the snapshot)
     const at = Date.now() + 5000, fake = o => ({ t: 'lib-save', v: 'g', r: id, s: { n: 99 }, c: at, a: 'Аня', w: 1, ...o });
     await B.send(fake({ a: 'Богдан' }));                     // not its runner
     await B.send(fake({ r: 'zzzzzzzz' }));                   // another round

@@ -7,6 +7,7 @@
    ===================================================================== */
 import { $, copy, el, root, safe } from './dom.js';
 import { initInvite, openDialog } from './invite.js';
+import { attachScreens, detachScreens, waitScreen, state as screens } from './screens.js';
 import { attachGame, detachGame, gameError, initTogether, leave, openRound, pageError, query, report, state, viewChanged } from './together.js';
 import * as trace from './trace.js';
 
@@ -29,8 +30,11 @@ let backing = false, following = false, queued = null;
  */
 export function startShell({ games: list, initial, loader, signOut, whenSignedIn }) {
   games = list; load = loader;
-  // the game's page asks for the library API (see game-api.js); state and trace: for checks from the console and tests
-  window.__ihroteka = { attach: (win, info) => win === frame?.contentWindow ? api(info, win) : undefined, state, trace: trace.read };
+  // the game's page asks for the library API (see game-api.js), and says where its waiting screens are (<ihroteka-wait>:
+  // screens.js); state, screens and trace: for checks from the console and tests
+  window.__ihroteka = { attach: (win, info) => win === frame?.contentWindow ? api(info, win) : undefined,
+    waitScreen: (el, on) => { if (frame && el && el.ownerDocument === frame.contentDocument) waitScreen(el, on); },
+    screens, state, trace: trace.read };
   addEventListener('error', e => { if (notice(e)) trace.note('the page\'s ResizeObserver looped (a notice)'); else pageError(e.error, e); });
   addEventListener('unhandledrejection', e => pageError(e.reason));
   $('stage-report').addEventListener('click', e => copy(report(), e.target));
@@ -154,6 +158,7 @@ function closeFrame() {
   loads++;                                               // a load still running is for nothing now
   if (!frame) return;
   detachGame();
+  detachScreens();
   frame.remove();
   frame = null;
 }
@@ -179,6 +184,7 @@ function api(info, win) {
     if (win !== frame?.contentWindow) return;
     if (refusal(e.reason)) trace.note('the browser refused the game: ' + trace.error(e.reason) + ' (a notice)'); else gameError(e.reason);
   });
+  attachScreens(win);                                    // (its <ihroteka-wait>, as its page is parsed: screens.js)
   return Object.freeze({
     version: 4,
     game: Object.freeze({ id: g.id, title: g.title, players: Object.freeze({ ...(g.players || { min: 2, max: 2 }) }), wire: wireOf(g) }),

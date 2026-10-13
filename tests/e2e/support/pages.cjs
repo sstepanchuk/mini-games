@@ -40,12 +40,43 @@ async function frameOf(p, ready = () => !!window.ihroteka, timeout = 15000) {
 const libState = p => p.isClosed() ? Promise.resolve(null) : p.evaluate(() => window.__ihroteka.state());
 // the open dialog's text, or '' (whitespace collapsed)
 const dialogText = async p => p.isClosed() ? '' : p.evaluate(() => document.querySelector('.dialog')?.innerText.replace(/\s+/g, ' ').trim() || '');
-// the card over the game («Чекаємо на …», invite.js): whether it shows, its text (whitespace collapsed), its buttons,
-// and what its live region says to a screen reader (say)
+// the card over the game («Чекаємо на …», invite.js; only the card: see waitShown): whether it shows, its text
+// (whitespace collapsed), its buttons, and what its live region says to a screen reader (say)
 const waitCard = p => p.evaluate(() => {
   const c = document.getElementById('waiting'), say = document.querySelector('#stage .sr[role=status]'), shown = !!c && !c.hidden;
   return { shown, text: shown ? c.innerText.replace(/\s+/g, ' ').trim() : '', buttons: shown ? [...c.querySelectorAll('button')].map(b => b.textContent) : [], say: say ? say.textContent : null };
 });
+// The waiting message wherever it is (owner, decision 6 (c)): the library's card over the game (#waiting, invite.js),
+// or the copy of the game's own <ihroteka-wait> that holds the rows (library/app/screens.js: one at a time, rendered).
+// → { where: 'card' | 'screen' | 'both' (never: two messages) | null, text (whitespace collapsed), buttons, say (the
+// live region), showing (the first copy's attribute: the kinds said now, null: none), copies (how many the game has) }
+const waitShown = p => p.evaluate(() => {
+  const norm = t => t.replace(/\s+/g, ' ').trim(), c = document.getElementById('waiting'), say = document.querySelector('#stage .sr[role=status]');
+  const card = !!c && !c.hidden && !!c.firstElementChild;
+  let doc = null;
+  try { doc = document.querySelector('iframe.frame')?.contentDocument || null; } catch (e) {}
+  const all = doc ? [...doc.querySelectorAll('ihroteka-wait')] : [];
+  const held = all.find(x => x.firstElementChild && x.getClientRects().length > 0);
+  const box = held || (card ? c : null);
+  return { where: card && held ? 'both' : held ? 'screen' : card ? 'card' : null, text: box ? norm(box.innerText) : '',
+    buttons: box ? [...box.querySelectorAll('button')].map(b => b.textContent) : [], say: say ? say.textContent : null,
+    showing: all.length ? all[0].getAttribute('showing') : null, copies: all.length };
+});
+// whatever holds the rows: the card (in the page) or the game's copy that holds them (in its frame), as an
+// ElementHandle (its evaluate runs in its own document), or null
+async function waitBox(p) {
+  const card = await p.$('#waiting:not([hidden])');
+  if (card) return card;
+  const e = await p.$('iframe.frame'), f = e && await e.contentFrame();
+  if (!f) return null;
+  return (await f.evaluateHandle(() => [...document.querySelectorAll('ihroteka-wait')].find(x => x.firstElementChild && x.getClientRects().length > 0) || null)).asElement();
+}
+// press a button of the waiting message, wherever it is (the card's, else the game's screen's)
+async function clickWait(p, text) {
+  if (await p.isVisible('#waiting:not([hidden])')) return p.click('#waiting >> text=' + text);
+  const f = await (await p.$('iframe.frame')).contentFrame();
+  return f.click('ihroteka-wait:not(:empty) >> text=' + text);
+}
 // one line of what a page shows (the library, then game(frame) → text if given)
 async function short(p, game) {
   if (p.isClosed()) return 'closed';
@@ -108,4 +139,4 @@ async function pair(H, G, { adding = false } = {}) {
 // → true once every one of these phones (or pages) is linked
 const allLinked = (xs, ms = 15000) => until(async () => (await Promise.all(xs.map(x => libState(x.p || x)))).every(s => s && s.linked), ms);
 
-module.exports = { enterName, openPage, createLink, frameOf, libState, dialogText, waitCard, short, phone, pair, allLinked };
+module.exports = { enterName, openPage, createLink, frameOf, libState, dialogText, waitCard, waitShown, waitBox, clickWait, short, phone, pair, allLinked };

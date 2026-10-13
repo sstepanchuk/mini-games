@@ -2,12 +2,13 @@
 // Nearby, three devices with no internet (three browsers, real WebRTC, no brokers): the host pairs with one guest,
 // then adds another; the guests hear each other through the host; a game one guest opens is followed by everyone,
 // its seats going to the first players in the room's order (the rest wait). Then the host's phone is gone: the
-// guests keep the room and wait for it (its place is kept). The one who played with it sees the card «Чекаємо на
-// Ганна…» with «З’єднатися знову» and «Не чекати»; nothing goes on without the phone that holds the room, so «Не
-// чекати» ends the room on that phone, saying so (owner, decision 5).
+// guests keep the room and wait for it (its place is kept). The one who played with it sees «Чекаємо на Ганна…»
+// (the waiting message wherever it is: the card, or the game's <ihroteka-wait>) with «З’єднатися знову» and «Не
+// чекати»; nothing goes on without the phone that holds the room, so «Не чекати» ends the room on that phone, saying so
+// (owner, decision 5).
 'use strict';
 const { scenario, check, step, until } = require('./support/scenario.cjs');
-const { phone, pair, allLinked, libState, frameOf, waitCard } = require('./support/pages.cjs');
+const { phone, pair, allLinked, libState, frameOf, waitCard, waitShown, clickWait } = require('./support/pages.cjs');
 
 scenario('nearby3: three phones without internet', async () => {
   const H = await phone('hhhhhhhhhhhh', 'Ганна'), G1 = await phone('gggggggggggg', 'Гліб'), G2 = await phone('kkkkkkkkkkkk', 'Кіра');
@@ -50,12 +51,12 @@ scenario('nearby3: three phones without internet', async () => {
   for (const X of [G1, G2]) check(/зв’язок зник/.test(await X.p.textContent('#together')), X.name + '’s chip: «Разом · зв’язок зник…»', await X.p.textContent('#together'));
 
   step('Гліб, who played with Ганна, does not wait for her phone');
-  const c = await until(async () => { const x = await waitCard(G1.p); return x.shown && /^Чекаємо на Ганна… \d+:\d\d/.test(x.text) && x; }, 10000);
-  check(c, 'Гліб’s card: «Чекаємо на Ганна… m:ss»', await waitCard(G1.p));
+  const c = await until(async () => { const x = await waitShown(G1.p); return x.where && /^Чекаємо на Ганна… \d+:\d\d/.test(x.text) && x; }, 10000);
+  check(c && c.where !== 'both', 'Гліб’s message: «Чекаємо на Ганна… m:ss» (in one place)', await waitShown(G1.p));
   check(c && c.buttons.join() === 'З’єднатися знову,Не чекати', '… with «З’єднатися знову» and «Не чекати»', c && c.buttons);
   if (max < 3) check(!(await waitCard(G2.p)).shown, 'Кіра, waiting for a seat, has no card', await waitCard(G2.p));
-  await G1.p.click('#waiting >> text=Не чекати');
+  await clickWait(G1.p, 'Не чекати');
   check(await until(async () => !(await libState(G1.p)).kind, 5000), 'the nearby room ends on Гліб’s phone', await libState(G1.p));
   check(await until(async () => /Без телефона Ганна кімната поруч далі не може/.test(await G1.text()), 5000), 'saying «Без телефона Ганна кімната поруч далі не може»', await G1.text());
-  check(!(await waitCard(G1.p)).shown, 'no card any more', await waitCard(G1.p));
+  check(!(await waitShown(G1.p)).where, 'no message any more', await waitShown(G1.p));
 }, { timeout: 150000 });

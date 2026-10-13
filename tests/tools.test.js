@@ -1,8 +1,10 @@
 // The game author's tools, on a scratch copy of the repository (IHROTEKA_ROOT; no keyring, no password needed):
-// `cli new` makes a game from tools/template that the build takes and whose own tests pass; `remove-game` asks for
-// --yes and keeps the plaintext sources aside; game.json "api" is checked against the library's version; the build
-// warns about a string in a game's code that looks like a file next to it (on the site the game is one page), and
-// refuses a script from elsewhere (the site's policy would: README, Trust).
+// `cli new` makes a game from tools/template that the build takes and whose own tests pass (its waiting screen,
+// <ihroteka-wait>, under its title); `remove-game` asks for --yes and keeps the plaintext sources aside; game.json
+// "api" is checked against the library's version; the build warns about a string in a game's code that looks like a
+// file next to it (on the site the game is one page), and refuses a script from elsewhere (the site's policy would:
+// README, Trust); the library API it puts first in a game's page defines the game's waiting screens (<ihroteka-wait>)
+// only inside the library.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -13,7 +15,7 @@ import { spawnSync } from 'node:child_process';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ihroteka-tools-'));
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 process.env.IHROTEKA_ROOT = root;                      // (before the tools load: repo.js reads it once)
-const { readManifest, bundleGame, testGame, apiVersion, assetStrings } = await import('../tools/build.js');
+const { readManifest, bundleGame, testGame, apiVersion, assetStrings, withLibraryApi } = await import('../tools/build.js');
 const CLI = path.join(import.meta.dirname, '..', 'tools', 'cli.js');
 const ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^VAULT_PASSWORDS?$/.test(k)));
 const cli = (...args) => { const r = spawnSync(process.execPath, [CLI, ...args], { env: { ...ENV, IHROTEKA_ROOT: root }, encoding: 'utf8' }); return { ok: r.status === 0, out: r.stdout + r.stderr }; };
@@ -29,11 +31,42 @@ test('cli new: a game from the template, valid for the build, its own tests pass
   assert.deepEqual([g.title, g.players, g.wire, g.api], ['Демо <два>', '2-4', 1, apiVersion()]);
   const png = fs.readFileSync(file('games/demo2', g.image));
   assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [1200, 630], 'a 1200×630 cover');
-  assert.match(fs.readFileSync(file('games/demo2/index.html'), 'utf8'), /<title>Демо &lt;два&gt;<\/title>/);
+  const page = fs.readFileSync(file('games/demo2/index.html'), 'utf8');
+  assert.match(page, /<title>Демо &lt;два&gt;<\/title>/);
+  assert.match(page, /<h1>[^<]*<\/h1>\s*(<!--[\s\S]*?-->\s*)?<ihroteka-wait><\/ihroteka-wait>/, 'the library\'s waiting screen, empty, under its title (README "Waiting screens")');
   assert.ok(testGame('demo2') >= 1, 'its tests run, and pass');
   const warned = [], html = await bundleGame('demo2', g, { warn: m => warned.push(m) });
   assert.ok(/^<!doctype html>/i.test(html) && !/src="main\.js"/.test(html) && html.includes('window.ihroteka'), 'one page, the API first');
   assert.deepEqual(warned, [], 'nothing it names is missing on the site');
+});
+
+// (owner, decision 6 (c): README "Waiting screens"; the element is defined in the game's own window, before its page
+// is parsed, and only forwards to the library page: library/app/screens.js)
+test('the game\'s page: the library API first, and with it <ihroteka-wait>, defined only inside the library', () => {
+  const html = withLibraryApi('<!doctype html><html><head><meta charset="utf-8"><title>x</title></head><body></body></html>', 'demo9', { title: 'T' });
+  const api = html.match(/<meta charset="utf-8">\n<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(api, 'the first script, right after the charset meta');
+  const guard = api.indexOf('library && library.waitScreen'), define = api.indexOf("customElements.define('ihroteka-wait'");
+  assert.ok(guard > 0 && define > guard, 'defined there, behind its guard');
+  assert.ok(!api.includes('Contract (version'), 'the leading comment is dropped');
+  // the script itself, in a stand-in of a game's window: → what it defined, and what the element's callbacks told
+  const run = ({ parent, defined = false, ihroteka } = {}) => {
+    const defs = [], told = [];
+    class HTMLElement {}
+    const win = { customElements: { get: () => defined, define: (n, c) => defs.push([n, c]) } };
+    win.parent = parent ? { __ihroteka: { attach: () => ihroteka ?? {}, ...parent(told) } } : win;
+    new Function('window', 'HTMLElement', api)(win, HTMLElement);
+    for (const [, C] of defs) { const el = new C(); el.connectedCallback(); el.disconnectedCallback(); told.push(el instanceof HTMLElement); }
+    return { names: defs.map(([n]) => n), told, ihroteka: win.ihroteka };
+  };
+  const inLibrary = run({ parent: told => ({ waitScreen: (el, on) => told.push(on) }) });
+  assert.deepEqual(inLibrary.names, ['ihroteka-wait']);
+  assert.deepEqual(inLibrary.told, [true, false, true], 'connected, gone: told to the library page (an element of the game\'s own window)');
+  assert.deepEqual(run().names, [], 'a game page on its own: nothing');
+  assert.equal(run().ihroteka, undefined);
+  assert.deepEqual(run({ parent: () => ({}) }).names, [], 'a library page from before the screens: nothing');
+  assert.deepEqual(run({ parent: told => ({ waitScreen: () => told.push(1) }), defined: true }).names, [], 'defined already: not again');
+  assert.deepEqual(run({ parent: told => ({ waitScreen: () => told.push(1) }), ihroteka: false }).names, [], 'not our frame (no API): nothing');
 });
 
 test('cli new refuses what the build would refuse, and leaves nothing behind', () => {

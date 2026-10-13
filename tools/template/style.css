@@ -18,3 +18,9 @@ button:disabled { opacity: .4; cursor: default; }
 button:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
 .steps button { font-size: 1.6rem; min-width: 5rem; }
 #say { min-height: 1.4em; font-weight: 600; }
+/* екран очікування бібліотеки (<ihroteka-wait>): бібліотека заповнює його сама, а гра дає йому лише місце й вигляд
+   (його кнопки — звичайні button вище); порожній — без місця (і поза бібліотекою, де його ніхто не заповнить) */
+ihroteka-wait { margin: 0 0 1rem; padding: .5rem .75rem; border-radius: .75rem; background: var(--soft); font-weight: 600; }
+ihroteka-wait:empty { display: none; }
+ihroteka-wait .fine { font-size: .85em; font-weight: 400; opacity: .75; }
+ihroteka-wait .ghost { background: none; color: inherit; text-decoration: underline; }

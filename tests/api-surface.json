@@ -22,6 +22,15 @@
   },
   "roundEvents": ["end", "rejoin", "run", "start", "watch"],
   "roundChainable": ["off", "on"],
+  "screens": {
+    "//": "<ihroteka-wait>: the library's waiting screens, which a game puts in its page (README \"Waiting screens\")",
+    "element": "ihroteka-wait",
+    "attribute": "showing",
+    "event": "showing",
+    "kinds": ["closed", "link", "loading", "restoring", "seat", "version"],
+    "classes": ["btn", "fine", "ghost", "wait-row", "wait-time"],
+    "data": ["kind", "name"]
+  },
   "notes": {
     "frame": "an optional hint (phase 2, H1): while a game is played, the library keeps the direct link alive by itself",
     "kick": "does nothing since phase 2 (H1), kept for games that call it: the room checks its network by itself"

@@ -74,6 +74,7 @@ const { CAP, SHARE_BYTES } = rules;
 // (scaled as the room's TIMING: tests set window.__timeScale)
 const SCALE = Number.isFinite(globalThis.__timeScale) && globalThis.__timeScale > 0 ? globalThis.__timeScale : 1;
 export const LOST_WAIT = 15000 * SCALE;                 // a round whose snapshot is on no device ends this long after (owner)
+export const RESTORE_SHOW = 1000 * SCALE;               // our copy waits this long for its round's snapshot before the screens say so
 export const ASK_TTL = 5000 * SCALE;                    // a start asked of the runner: taken only this soon after asking
 const SAVE_EVERY = 500;                                  // a round's snapshots go to its players at most this often (the latest)
 const REASONS = new Set(['quit', 'over', 'gone', 'lost']);
@@ -319,6 +320,7 @@ export function rounds(ctx) {
       let ins = [];                                       // (our copy runs it) its other players in the game with us
       let asked = null;                                   // our start, asked of the runner: { n, to, until }
       let pending = null, timer = null, lastSent = 0;     // our latest save not sent yet (at most two a second)
+      let waitAt = 0;                                     // since when our copy waits for its round's snapshot ('wait'; 0: it does not)
       const room = () => c.disposed ? null : ctx.room();   // (a game closed: its round is nobody's to call)
       const rec = () => ctx.st() ? record(c.id) : undefined;
       const on = r => !!r && r.on && quits.get(c.id) !== r.id;   // a round on for us (not one we quit)
@@ -420,6 +422,7 @@ export function rounds(ctx) {
           trace.note('round ' + c.id + ' ' + r.id + ': quit, asked of ' + r.runner);
           sayQuit(c.id, r);
           hooks.update();
+          ctx.update();                                   // (and the room's pass: what the screens said of the round goes with it)
           return true;
         },
         on(name, fn) {
@@ -440,6 +443,7 @@ export function rounds(ctx) {
       function tell() {
         const r = room() ? rec() : undefined, me = room() && room().me;
         const part = r && me ? rules.roundPart(r, me, { quit: quits.get(c.id), have: !!snapOf(c.id, r) }) : null;
+        waitAt = part === 'wait' ? waitAt || performance.now() : 0;
         if (told.id && !told.over && (!part || r.id !== told.id)) {
           const e = endOf(told.id, r);
           told.over = true; told.part = null; told.closed = e.reason === 'closed';
@@ -470,6 +474,9 @@ export function rounds(ctx) {
       const hooks = {
         api: round,
         pol: () => ({ endWhenSeatGone: !!(round.policy && round.policy.endWhenSeatGone) }),
+        // our copy has waited RESTORE_SHOW for its round's snapshot (the screens say so: together.js waitFacts; the game
+        // hears nothing meanwhile, invariant 6). (tell runs on every update, and each second: watchRunner)
+        restoring: now => waitAt > 0 && now - waitAt >= RESTORE_SHOW,
         update() {
           if (c.disposed) return;
           tell();

@@ -29,7 +29,8 @@ test('the policy: scripts of the site, inline ones, blob: and the pinned MQTT cl
   assert.equal(all.length, 1, 'page.html says one policy');
   const csp = all[0];
   // a new directive is a decision: Two Dragons, the shelf, the password, the offline copy and nearby (camera, QR) are
-  // checked under it in the browser first, on the dev server and on the assembled site
+  // checked under it in the browser first, on the dev server and on the assembled site (a style-src too: the waiting
+  // screens put a <style> into a game's page, library/app/screens.js; under one, it would need adoptedStyleSheets)
   assert.deepEqual(Object.keys(csp).sort(), ['base-uri', 'object-src', 'script-src', 'worker-src']);
   assert.deepEqual([...csp['script-src']].sort(), ["'self'", "'unsafe-inline'", 'blob:', ...MQTT_LIB.urls].sort(),
     'script-src names exactly the MQTT_LIB urls of library/net/config.js (upgrade both together), and blob:');

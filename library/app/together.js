@@ -7,8 +7,9 @@
    - Each game gets the room as ihroteka.room, with as many seats as it has (game.json "players"): the first
      players to have it open, in the room's order, play; anyone after them waits for a seat. A player who
      dropped out keeps their seat while the room keeps their place, and one who is back (in a new tab or device, or
-     after their place dropped) keeps it while their game opens there: the game pauses, and the library's card says
-     whom we wait for and why (rules.absence; invite.js), with a way not to wait for one who dropped out.
+     after their place dropped) keeps it while their game opens there: the game pauses, and the library says whom we
+     wait for and why (waitFacts; the game's screens, or its card: invite.js, screens.js), with a way not to wait for
+     one who dropped out.
    - A round outlives the device that runs it: the game hands the library snapshots (room.snapshot) and every
      player keeps the latest. If the player whose copy runs the round has been away for AUTH_WAIT, the next one
      here runs it on from the snapshot (event 'resume'); whoever comes back simply plays on. A game closed mid-round
@@ -52,7 +53,8 @@
    library from before 1b, back on the same page, never writes it again: its greeting (lib-state from it, with the
    here: we know) counts instead (onLibMessage), so the game waits for that, not for as long as a place is kept. (A
    page of 1b or later greets with a here: of its own naming a game only while it has that game open: see greet.)
-   The screens for all this are in invite.js; it follows the room through onChange.
+   The screens for all this are in invite.js (and the waiting screens: waiting.js the words, screens.js where they
+   show); it follows the room through onChange.
    ===================================================================== */
 import { HOLD, joinNearby, joinRoom, NAME, PROTO, TIMING, validRoomCode } from '../net/index.js';
 import { safe } from './dom.js';
@@ -60,10 +62,15 @@ import { roomState, validClock } from './roomstate.js';
 import { rounds, validRecord } from './round.js';
 import * as rules from './rules.js';
 import * as trace from './trace.js';
+import { screen } from './waiting.js';
 
 const LIB = 'ihroteka';                                  // the room namespace of the whole library
 const LAST = 'ihroteka-room', LAST_NAME = 'ihroteka-name';   // the last room (its link keeps working) and name
 const AUTH_WAIT = TIMING.AUTH_WAIT;                      // a round's runner away this long: someone else runs it on
+// (scaled as the room's TIMING: tests set window.__timeScale)
+const SCALE = Number.isFinite(globalThis.__timeScale) && globalThis.__timeScale > 0 ? globalThis.__timeScale : 1;
+export const CLOSED_GRACE = 2000 * SCALE;                // a round's player out of the game this long before the screens name
+                                                         //   them (following the room into a game takes a moment)
 const ID = v => v === null || (typeof v === 'string' && /^[a-z0-9-]{1,40}$/.test(v));
 // the site's version, first in room.diag() and state() (the build writes it into the page, tools/build.js siteVersion;
 // 'dev' on the dev server, '?' where the page has none: an old page, a worker tab)
@@ -93,6 +100,7 @@ let replaced = null;                                     // { kind, code, name }
 const snaps = new Map();                                 // game → { s, c, a, p }: a round's latest snapshot (s: null, a tombstone)
 const loading = new Map();                               // name → since when: back (a new tab or device, or after their place
                                                          //   dropped), its game not open there yet (rules.arrivesLoading)
+const closedSince = new Map();                           // name → since when rules.roundWaits says 'closed' (waitFacts)
 const GKEY = /^[\w-]{1,40}$/;                            // a game's shared key (see channel: shared, share)
 const listeners = new Set();
 let budgetWarned = false;                                // (the relay budget: see wire, 'budget')
@@ -127,8 +135,8 @@ export const validName = n => NAME.test(n);
 const send = (m, to) => { if (linked()) room.send(m, to === undefined ? undefined : { to }); };
 // the screens follow the room: fn(what) with what = linked | join | leave | away | relinked | peer-gone |
 // replaced | status | weak | stats | left
-//   (and version: a friend's version differs, or no longer does, see versionGap; waiting: whom the open game waits
-//   for, or why, changed, see waitingFor)
+//   (and version: a friend's version differs, or no longer does, see versionGap; waiting: what the open game's screens
+//   say changed, see waitFacts)
 export const onChange = fn => listeners.add(fn);
 const changed = what => { for (const fn of listeners) safe(fn, what); };
 
@@ -156,7 +164,7 @@ export function comeBack() {
 }
 export function leave() {
   const r = room;
-  room = null; st = null; snaps.clear(); loading.clear(); R.clear(); gapKey = '';
+  room = null; st = null; snaps.clear(); loading.clear(); R.clear(); gapKey = ''; closedSince.clear();
   session.set(REJOIN, null);                             // (a reload under way does not bring us back: we left)
   if (r) { r.leave(); setQuery(null); trace.note('left the room'); }
   update();
@@ -168,6 +176,7 @@ export const state = () => ({ site: SITE, trace: trace.read(), kind: room && roo
   me: room && room.me, players: room ? room.players : [], away: room ? room.players.filter(p => room.away(p)) : [], view: st && st.get('view'), myHere,
   here: room && st ? Object.fromEntries(room.players.map(p => [p, p === room.me ? myHere : st.get('here:' + p) ?? null])) : {},
   game: ch && { players: ch.seated, linked: ch.api.linked, role: ch.api.role, host: ch.api.host, waiting: ch.api.waiting, waitingFor: waitingFor(),
+    screen: screen(waitFacts()),                         // what the game's screens say (waiting.js screen)
     round: { active: ch.round.api.active, id: ch.round.api.id, seats: ch.round.api.seats, runner: ch.round.api.runner, runs: ch.round.api.runs } },
   keys: st ? st.entries().map(([k]) => k) : [], snaps: Object.fromEntries([...snaps].map(([v, x]) => [v, { s: x.s, c: x.c, a: x.a, p: x.p }])),
   auth: st ? Object.fromEntries(st.entries().filter(([k]) => k.startsWith('auth:')).map(([k, e]) => [k.slice(5), e.v])) : {},   // game → whose copy runs its round
@@ -176,7 +185,7 @@ export const state = () => ({ site: SITE, trace: trace.read(), kind: room && roo
   version: { gap: versionGap(), reloading, offer: offerUpdate() } });
 
 function wire(r) {
-  room = r; st = roomState(r.me); snaps.clear(); loading.clear(); R.clear(); replaced = null; gapKey = '';
+  room = r; st = roomState(r.me); snaps.clear(); loading.clear(); R.clear(); replaced = null; gapKey = ''; closedSince.clear();
   trace.note('room: ' + r.kind + ', as ' + r.me);
   // Which game we have open. A new tab of a player who is in a game says nothing yet: it follows the room into
   // that game in a moment, and a "not in the game" meanwhile would end the round for everyone (see staleHere).
@@ -384,7 +393,7 @@ export function detachGame() {
   if (!ch) return;
   trace.note('game ' + ch.id + ' closed');
   ch.dispose();
-  ch = null; myHere = null;
+  ch = null; myHere = null; closedSince.clear();
   if (room) publish(st.set('here:' + room.me, null));
 }
 
@@ -703,17 +712,36 @@ function updateOnce() {
   c.maybeResume();
   const weak = c.api.linked && rules.paused(facts, c.others);
   if (weak !== c.weak) { c.weak = weak; c.emit('weak', weak); }
-  const wait = waitingFor().map(x => x.name + ':' + x.why).join();
+  // (what the screens say: whom we wait for and why, our seat, the version; the 1 s watchRunner update crosses
+  // CLOSED_GRACE and RESTORE_SHOW)
+  const wait = screen(waitFacts()).key;
   if (wait !== c.wait) { c.wait = wait; changed('waiting'); }
   versionCheck();
 }
 
-// For the screens (the card over the game, invite.js): the players we wait for in the open game, of those we play
-// with (rules.absence): dropped out, their seat kept ('link'), or back and opening the game ('loading')
+// For the screens (waitFacts): the players we wait for in the open game, of those we play with (rules.absence):
+// dropped out, their seat kept ('link'), or back and opening the game ('loading')
 // → [{ name, left: ms, why, release: whether «Не чекати» works from here }]
 export function waitingFor() {
   if (!ch || !room || !ch.api.linked) return [];
   return rules.waitingFor(facts, ch.others);
+}
+// For the screens (waiting.js screen; invite.js, screens.js): whom the open game waits for and why (waitingFor of whom
+// we play with; rules.roundWaits while nobody we play with has it open, a 'closed' one only after CLOSED_GRACE), our
+// copy waiting for its round's snapshot (round.js restoring), a seat we wait for and who plays now, another version
+// → { waits, restoring, seat, gap, offer, nearby } (waiting.js screen's facts)
+export function waitFacts() {
+  const gap = versionGap();
+  const f = { waits: [], restoring: false, seat: null, gap: gap && { key: gap.key, older: gap.older }, offer: offerUpdate(), nearby: !!room && room.kind === 'nearby' };
+  if (!ch || !room) { closedSince.clear(); return f; }
+  const now = performance.now(), r = ch.round.api;
+  const round = rules.roundWaits(facts, ch.id, r.active ? r.seats : null, ch.inGame, ch.others);
+  for (const p of [...closedSince.keys()]) if (!round.some(x => x.name === p && x.why === 'closed')) closedSince.delete(p);
+  for (const x of round) if (x.why === 'closed' && !closedSince.has(x.name)) closedSince.set(x.name, now);
+  f.waits = [...waitingFor(), ...round.filter(x => x.why !== 'closed' || now - closedSince.get(x.name) >= CLOSED_GRACE)];
+  f.restoring = ch.round.restoring(now);
+  if (!ch.api.seated && ch.waiting.includes(room.me)) f.seat = { players: rules.playingNow(R.frozen(ch.id), room.players, ch.seated) };
+  return f;
 }
 // nobody waits for this player any longer: their place goes
 export const release = p => { if (room) room.release(p); };

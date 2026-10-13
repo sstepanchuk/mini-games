@@ -174,6 +174,21 @@ export const waitingFor = (f, others) => others.flatMap(p => {
   const a = absence(f, p);
   return a ? [{ name: p, left: Math.max(0, f.hold - awayMs(f, p)), why: a.why, release: a.why === 'link' && canRelease(f, p) }] : [];
 });
+// For the screens: a round of ours is on (seats: its players; null when none is on for us) and nobody we play with has
+// the game open (others empty: in a game for two, the other player's game is closed). The round's other players in the
+// room who are not in the game with us → [{ name, left, why: 'link' (dropped out: as waitingFor, with the time and
+// release) | 'closed' (their game closed, another game open there, or a new tab of theirs that never opened it: stale),
+// release, round: true }]. Not one whose here: names this game and who is not stale: their copy speaks another wire
+// (the version row says so). Nobody while we have no seat in it, or while someone we play with has the game open (in
+// a game for 3+ seats the round goes on without them: the game's own rule, owner decision 1).
+export const roundWaits = (f, game, seats, inGame, others) => !seats || others.length || !seats.includes(f.me) ? [] : seats.flatMap(p => {
+  if (p === f.me || !f.players.includes(p) || inGame.includes(p)) return [];
+  if (f.away(p) > 0) return [{ name: p, left: Math.max(0, f.hold - awayMs(f, p)), why: 'link', release: canRelease(f, p), round: true }];
+  return f.here(p) === game && !stale(f, p) ? [] : [{ name: p, left: 0, why: 'closed', release: false, round: true }];
+});
+// Who plays now, for a player who waits for a seat: while a round is on (frozen: its seats), its players still in the
+// room (one whose game is closed keeps their seat); between rounds, who is seated.
+export const playingNow = (frozen, players, seated) => frozen ? frozen.filter(p => players.includes(p)) : seated.slice();
 
 /* ---------- the round layer (round.js): a round record of the game's (rec: { id, seats, runner, on, saved, … }) ---------- */
 // What our copy is in a round: 'run' (ours runs it: from its snapshot, have; or afresh, as it began, when its runner

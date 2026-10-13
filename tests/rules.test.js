@@ -4,8 +4,8 @@
 // on or ends it, a snapshot on no device.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { absence, arrivesLoading, awayMs, canRelease, everyoneHere, goneForGood, inGame, offerUpdate, onlineSince, paused, playersChange, reloadNow, roleOf, roundPart,
-  roundTaker, roundWriter, runnerOf, sameWire, seating, seatsGone, snapFits, snapshotLost, stale, takeOver, versionGap, waitingFor } from '../library/app/rules.js';
+import { absence, arrivesLoading, awayMs, canRelease, everyoneHere, goneForGood, inGame, offerUpdate, onlineSince, paused, playersChange, playingNow, reloadNow, roleOf,
+  roundPart, roundTaker, roundWaits, roundWriter, runnerOf, sameWire, seating, seatsGone, snapFits, snapshotLost, stale, takeOver, versionGap, waitingFor } from '../library/app/rules.js';
 
 const G = 'dragons', WAIT = 10000, HOLD = 180000, NOW = 1000000;   // AUTH_WAIT and HOLD as the library has them
 // The room as together.js shows it to the rules. here: the game each player has open (everyone: G, unless given);
@@ -221,6 +221,49 @@ test('«Не чекати» only where it works: the host for anyone; a guest fo
   assert.deepEqual(rel(three({ role: null, host: null, away: { Аня: 5000, Богдан: 5000 } })), { Аня: false, Богдан: false });   // looking for the room
   assert.deepEqual(rel(three({ loading: { Аня: NOW - 5 } })), { Аня: false });   // opening the game: nothing to press
   assert.equal(canRelease(three({ away: { Аня: 5000 } }), 'Аня'), true);
+});
+
+// (owner, decision 6 (c): the screens name a player of our round whose game is closed, while nobody we play with has it
+// open; one who dropped out meanwhile is waited for as one who dropped out: their place is running out)
+test('the round\'s waits: nobody with no round on for us, without a seat in it, or while someone we play with has the game open', () => {
+  const f = room({ here: { Аня: G, Богдан: null } }), mine = inGame(f, G, G);
+  assert.deepEqual(roundWaits(f, G, null, mine, []), []);
+  assert.deepEqual(roundWaits(f, G, ['Богдан', 'Сава'], mine, []), [], 'we have no seat in it');
+  assert.deepEqual(roundWaits(room({ players: ['Аня', 'Богдан', 'Сава'], here: { Аня: G, Богдан: null, Сава: G } }), G, ['Аня', 'Богдан', 'Сава'], ['Аня', 'Сава'], ['Сава']), [],
+    'a game for three: Сава plays on with us (the game\'s own rule)');
+});
+
+test('the round\'s waits: a player of it in the room with the game closed, another game open, or never opened in a new tab (stale): closed', () => {
+  const players = ['Аня', 'Богдан', 'Сава', 'Дана'];
+  const f = room({ players, here: { Аня: G, Богдан: null, Сава: 'other', Дана: G }, loading: { Дана: STALE } });
+  const all = roundWaits(f, G, players, inGame(f, G, G), []);
+  assert.deepEqual(all, ['Богдан', 'Сава', 'Дана'].map(name => ({ name, left: 0, why: 'closed', release: false, round: true })));
+});
+
+test('the round\'s waits: one who dropped out with the game closed: link, with the time left and «Не чекати» where it works', () => {
+  const f = room({ here: { Аня: G, Богдан: null }, away: { Богдан: 5000 } });
+  assert.deepEqual(roundWaits(f, G, ['Аня', 'Богдан'], ['Аня'], []), [{ name: 'Богдан', left: HOLD - 5000, why: 'link', release: true, round: true }]);
+  // a guest cut off from the room's host: «Не чекати» only for the host itself
+  const g = room({ me: 'Сава', players: ['Аня', 'Богдан', 'Сава'], role: 'guest', host: 'Аня', here: { Аня: null, Богдан: null, Сава: G }, away: { Аня: 5000, Богдан: 5000 } });
+  assert.deepEqual(roundWaits(g, G, ['Аня', 'Богдан', 'Сава'], ['Сава'], []).map(x => [x.name, x.why, x.release]), [['Аня', 'link', true], ['Богдан', 'link', false]]);
+  const h = room({ me: 'Аня', players: ['Аня', 'Богдан', 'Сава'], here: { Аня: G, Богдан: null, Сава: null }, away: { Богдан: 5000, Сава: 1000 } });
+  assert.deepEqual(roundWaits(h, G, ['Аня', 'Богдан', 'Сава'], ['Аня'], []).map(x => [x.name, x.why, x.release]), [['Богдан', 'link', true], ['Сава', 'link', true]], 'the host: anyone');
+});
+
+test('the round\'s waits: not one in the game with us, one whose copy speaks another wire (the version says so), one gone from the room, nor us', () => {
+  const f = room({ players: ['Аня', 'Богдан', 'Сава'], here: { Аня: G, Богдан: G, Сава: G }, wire: { Аня: 2, Богдан: 2, Сава: 1 } });
+  assert.deepEqual(inGame(f, G, G), ['Аня', 'Богдан']);
+  assert.deepEqual(roundWaits(f, G, ['Аня', 'Сава'], ['Аня', 'Богдан'], []), [], 'Сава has the game open, on another wire');
+  assert.deepEqual(roundWaits(room({ here: { Аня: G, Богдан: null } }), G, ['Аня', 'Богдан', 'Дана'], ['Аня'], []).map(x => x.name), ['Богдан'], 'Дана is gone from the room');
+  assert.deepEqual(roundWaits(room({ here: { Аня: G, Богдан: G } }), G, ['Аня', 'Богдан'], ['Аня', 'Богдан'], []), [], 'Богдан is in the game with us');
+  assert.ok(roundWaits(room({ here: { Аня: null, Богдан: null } }), G, ['Аня', 'Богдан'], [], []).every(x => x.name !== 'Аня' && x.round === true), 'never us; every one is the round\'s');
+});
+
+test('who plays now, for a player who waits for a seat: the round\'s seats still in the room, in its order; between rounds, who is seated', () => {
+  assert.deepEqual(playingNow(['Богдан', 'Дана', 'Аня'], ['Аня', 'Богдан', 'Сава'], ['Аня', 'Богдан']), ['Богдан', 'Аня']);
+  const seated = ['Аня', 'Богдан'], got = playingNow(null, ['Аня', 'Богдан', 'Сава'], seated);
+  assert.deepEqual(got, seated);
+  assert.notEqual(got, seated, 'a copy');
 });
 
 /* ---------- the round moves to another copy ---------- */

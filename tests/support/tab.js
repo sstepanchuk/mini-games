@@ -138,6 +138,8 @@ async function shellUp(seats, wires) {
   shell = true;
   T.initTogether({ current: () => view, follow: id => go(id, true), invite() {}, address: () => globalThis.location.href, seats: id => seatsOf[id] || 2, askName() {},
     reload: still => { reloads.push(still || null); }, gameError: () => { broke++; }, ...(wires && { wires: () => wires }) });
+  // (what the open game's screens say changed: together.js 'waiting', in the events as 'lib:waiting')
+  if (T.onChange) T.onChange(what => { if (what === 'waiting') events.push([ms(), 'lib:waiting']); });
 }
 
 /* ---------- the commands ---------- */
