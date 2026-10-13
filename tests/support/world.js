@@ -1,6 +1,9 @@
 // The test's side of worker tabs (tab.js). A world is one network: its tabs share the fake brokers (fakenet.js),
 // and a spy on it sees everything published and can publish anything (someone who watches a room's topic on a
-// public broker). Each world belongs to one test and is torn down when that test ends; an error inside any of its
+// public broker). The brokers' traffic is sealed (library/net/seal.js): a spy knows the code of every room the
+// world's tabs joined (or asked about: info), as a friend would, and reads and writes its packets as a tab does
+// (seal.js here); a stranger (spy({ stranger: true })) knows no code, sees the packets as they are and can send any
+// of them again. Each world belongs to one test and is torn down when that test ends; an error inside any of its
 // tabs (an exception from a timer or a listener, console.error) then fails that test, as a page error fails a
 // browser scenario.
 //
@@ -14,9 +17,12 @@
 //   await A.state(), A.events(), A.got(), A.net({ up: false }), A.send(m, opts, then), A.release(n), A.lag(n), A.leave(), A.kill(),
 //   A.listeners(), A.timers() …
 //   await until(async () => …, ms)         poll a condition (truthy → it; deadline → false)
-//   const S = W.spy()                      S.seen: [{ topic, url, m }]; S.publish(topic, m, session): to every broker
+//   const S = W.spy()                      S.seen: [{ topic, url, m, raw, sealed }] (m: opened if the spy knows the room);
+//                                          S.publish(topic, m, session, { plain }): sealed (if known) to every broker;
+//                                          S.send(topic, raw): a packet as it is (again)
 //   await room(W, code, names, o)          tabs for these players, linked one after another and settled
 import { Worker } from 'node:worker_threads';
+import { keysOf, openWith, sealWith } from './seal.js';
 
 const TAB = new URL('./tab.js', import.meta.url);
 let worlds = 0;
@@ -63,10 +69,26 @@ export async function room(W, code, names, o = {}) {
   return tabs;
 }
 
+// a sealed topic's room: the topic itself, or its mailboxes' (seal.js: 'ihroteka/s/' + 32 hex, then '/d/from/to')
+const roomOf = topic => topic.startsWith('ihroteka/s/') ? topic.slice(0, 43) : topic;
+
 export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
   const bus = 'tabs-' + process.pid + '-' + (++worlds);
   const tabs = [], spies = [];
   let urls = null;
+  // the rooms the tabs joined: sealed topic → key; and each sender's highest number on the bus (a spy that speaks as
+  // that sender takes one above it: the replay window, seal.js, takes no number twice nor one far below the highest)
+  const keys = new Map(), hi = new Map();
+  const know = (game, code) => { if (typeof code === 'string' && code) { const K = keysOf(game, code); keys.set(K.topic, K.key); } };
+  const watch = new BroadcastChannel(bus);
+  watch.onmessage = e => {
+    const s = e.data && e.data.s;
+    if (typeof s !== 'string') return;
+    const qi = s.lastIndexOf('"q":'), fi = s.lastIndexOf('"f":"', qi);
+    if (qi < 0 || fi < 0) return;
+    const f = s.slice(fi + 5, s.indexOf('"', fi + 5)), q = parseInt(s.slice(qi + 4), 10);
+    if (Number.isSafeInteger(q) && !(hi.get(f) >= q)) hi.set(f, q);
+  };
   const W = {
     bus,
     /** a new tab; net: fakenet switches to start with; library: another library/ folder to run (an older version);
@@ -90,10 +112,10 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
       const { session } = await ready;
       const T = {
         pid, session, worker: w, call,
-        join: (code, name, o = {}) => call('join', { code, name, ...o }),
+        join: (code, name, o = {}) => { know(o.game || 'test', code); return call('join', { code, name, ...o }); },
         near: (name, o = {}) => call('near', { name, ...o }),     // a nearby room (world rtc), then pair('offer') …
         pair: (step, code) => call('pair', { step, code }),
-        lib: (code, name, seats, wires) => call('lib', { code, name, seats, wires }),
+        lib: (code, name, seats, wires) => { know('ihroteka', code); return call('lib', { code, name, seats, wires }); },   // (together.js LIB)
         state: () => call('state'),
         log: (from, gfrom) => call('log', { from, gfrom }),
         events: async () => (await call('log')).events,
@@ -115,7 +137,7 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
         share: (k, v) => call('gshare', { k, v }),
         shared: k => call('gshared', { k }),
         diag: () => call('gdiag'),                         // the game's room.diag() (the connection, then the trace)
-        info: (code, game) => call('info', { code, game }),
+        info: (code, game) => { know(game || 'test', code); return call('info', { code, game }); },
         killDc: () => call('killDc'),
         hide: on => call('hide', { on }),                  // the page hidden (a locked phone) or shown again
         siteData: on => call('siteData', { on }),          // the browser blocks the page's site data (false) or allows it
@@ -125,25 +147,43 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
         listeners: () => call('listeners'),                // the page's listeners on window and document now: { 'window:pagehide': 1, … }
         timers: () => call('timers'),                      // the page's intervals that run now, by period: { '200': 1, … }
         kick: () => call('kick'),
+        clock: by => call('clock', { by }),                // the device's clock set back (by < 0, ms) or on
         // the tab is killed (a crash, a phone that dies): nothing more goes out
         kill: () => w.terminate(),
-        // the tab closes (pagehide: it says bye, its place is kept), then it is gone
-        close: async () => { await call('pagehide'); await w.terminate(); }
+        // the tab closes (pagehide: it says bye, its place is kept), then it is gone ({ hidden: true }: a tab in sight, hidden
+        // first in the same go); onHide(list, at): what the page sends as it goes ([{ m, opts }], before the room's goodbye;
+        // at 'hidden': as it is hidden)
+        close: async o => { await call('pagehide', o); await w.terminate(); },
+        onHide: (list, at) => call('onHide', { list, at })
       };
       tabs.push(T);
       return T;
     },
-    spy() {
-      const ch = new BroadcastChannel(bus), seen = [];
-      let q = Date.now();
-      ch.onmessage = e => { const { t, s, url } = e.data || {}; try { seen.push({ topic: t, url, m: JSON.parse(s) }); } catch (err) {} };
+    // a spy: knows the code of every room of this world (see the top), or none (stranger)
+    spy({ stranger = false } = {}) {
+      const ch = new BroadcastChannel(bus), seen = [], mine = new Map();
+      ch.onmessage = e => {
+        const { t, s, url } = e.data || {};
+        if (typeof s !== 'string') return;
+        let m;
+        try { m = JSON.parse(s); } catch (err) { return; }
+        const sealed = !!m && typeof m.s === 'string', key = sealed && !stranger && keys.get(roomOf(t));
+        const open = key && openWith(key, t, s);
+        seen.push({ topic: t, url, m: open || m, raw: s, sealed });
+      };
+      const send = (topic, s) => { for (const url of urls || []) ch.postMessage({ t: topic, s, url }); };
       const S = {
         seen,
-        // publish m on topic through every broker, as session f (the brokers' duplicate filter needs a fresh q)
-        publish(topic, m, f) {
-          const s = JSON.stringify({ ...m, f, q: ++q });
-          for (const url of urls || []) ch.postMessage({ t: topic, s, url });
+        // publish m on topic through every broker, as session f: sealed with the room's key if the spy knows it (and not
+        // plain), under a number that sender has not used (q: or this one)
+        publish(topic, m, f, { plain = false, q } = {}) {
+          q = q ?? Math.max(hi.get(f) ?? Date.now(), mine.get(f) ?? 0) + 50;
+          mine.set(f, q);
+          const key = !plain && !stranger && keys.get(roomOf(topic));
+          send(topic, key ? sealWith(key, topic, f, q, m) : JSON.stringify({ ...m, f, q }));
         },
+        // a packet as it is (raw: its JSON), again: what a stranger recorded
+        send,
         close: () => ch.close()
       };
       spies.push(S);
@@ -160,6 +200,7 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
     },
     async close() {
       for (const S of spies) S.close();
+      watch.close();
       await Promise.all(tabs.map(T => T.worker.terminate()));
     }
   };

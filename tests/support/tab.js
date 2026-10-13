@@ -20,6 +20,9 @@ const { pid, bus, scale = 1, brokerMs = 25, rtc: withRtc = false, net: start = {
 const root = library ? pathToFileURL(library.replace(/\/?$/, '/')) : new URL('../../library/', import.meta.url);
 const lib = p => new URL(p, root).href;
 const t0 = performance.now(), ms = () => Math.round(performance.now() - t0);
+const realNow = Date.now;
+let skew = 0;                                            // the page's clock set back or on (cmds.clock)
+Date.now = () => realNow() + skew;
 
 /* ---------- the browser, as much as the library uses of it ---------- */
 const errors = [];
@@ -115,6 +118,14 @@ function listen() {
   game.on('message', (m, from) => { gGot.push([from, m]); heard.push('message:' + m.t); });
 }
 
+// a room's topics, as this tab's library makes them (seal.js; a library before it: config.js roomTopic, a hash of the code)
+async function topics(g, code) {
+  const seal = await import(lib('net/seal.js')).catch(() => null);
+  if (!seal) return { topic: await config.roomTopic(g, code) };
+  const K = await seal.roomKeys(g, code);
+  return { topic: K.topic, legacy: K.legacy };
+}
+
 /* ---------- the commands ---------- */
 const cmds = {
   // a room of library/net (a net-level tab) → this tab's session
@@ -148,9 +159,9 @@ const cmds = {
     return config.me;
   },
   open: ({ id }) => { go(id); },                          // open a game (or the shelf: null) ourselves
-  // this tab's session, the brokers, the room's topic (for a spy), the room's timing (TIMING, scaled) and the library's
-  // wire version (PROTO; undefined before it had one)
-  info: async ({ code, game: g = 'test' } = {}) => ({ session: config.me, urls: fake.urls, topic: code ? await config.roomTopic(g, code) : null, timing: config.TIMING,
+  // this tab's session, the brokers, the room's topic (for a spy; and legacy: that of a library before PROTO 2), the room's
+  // timing (TIMING, scaled) and the library's wire version (PROTO; undefined before it had one)
+  info: async ({ code, game: g = 'test' } = {}) => ({ session: config.me, urls: fake.urls, ...(code ? await topics(g, code) : { topic: null }), timing: config.TIMING,
     proto: config.PROTO }),
   state() {
     const r = room();
@@ -183,8 +194,18 @@ const cmds = {
   lag: ({ n }) => need().lag(n),                          // room.lag: to one player (n), or the slowest
   leave: ({ final = true } = {}) => { if (T) T.leave(); else need().leave(final); },   // (the library always leaves for good)
   kick: () => { need().kick(); },
-  // the page closes: it says goodbye (pagehide), and is gone: nothing more goes out or comes in
-  pagehide: () => { win.dispatchEvent(new Event('pagehide')); fake.set({ up: false }); },
+  // the page closes: it says goodbye (pagehide), and is gone: nothing more goes out or comes in. hidden: a page still in
+  // sight is hidden first, in the same go (a closed tab: visibilitychange, then pagehide; nothing else runs between them)
+  pagehide: ({ hidden: first = false } = {}) => {
+    if (first && !hidden) { hidden = true; doc.dispatchEvent(new Event('visibilitychange')); }
+    win.dispatchEvent(new Event('pagehide')); fake.set({ up: false });
+  },
+  // the page's own pagehide listener, added now (before a room's, as the library's is): it sends each of list
+  // ({ m, opts }) on the room, as the page goes; at 'hidden': as it is hidden (visibilitychange), as app/together.js does
+  onHide({ list, at = 'pagehide' }) {
+    const go = () => { for (const { m, opts } of list) { try { room().send(m, opts); } catch (e) { say(e); } } };
+    if (at === 'hidden') docOn('visibilitychange', () => { if (hidden) go(); }); else winOn('pagehide', go);
+  },
   hide: ({ on }) => { hidden = on; doc.dispatchEvent(new Event('visibilitychange')); },
   // the browser lets the page keep site data (localStorage, sessionStorage) or blocks it: they throw
   siteData: ({ on }) => { siteData = on; },
@@ -199,6 +220,8 @@ const cmds = {
   // how many listeners the page has on window and document now, by type ({ 'window:pagehide': 1, … }; none: left out)
   listeners: () => Object.fromEntries([...live].filter(([, s]) => s.size).map(([k, s]) => [k, s.size])),
   net: o => { fake.set(o); return fake.state(); },
+  // the device's clock is set back (by < 0) or on, as a phone's by the network: Date.now() from now on → it
+  clock: ({ by }) => { skew += by; return Date.now(); },
   netState: () => ({ ...fake.state(), dc: rtc && rtc.count }),
   killDc: () => { rtc.kill(); },                          // the phone's OS dropped the direct links
   errors: () => errors.slice(),

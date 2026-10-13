@@ -233,7 +233,7 @@ export function refresh(P) {
 export function diag(N) {
   const f = v => v == null ? '—' : Math.round(v) + ' ms';
   const head = ['room: ' + (N.relay ? 'internet' : 'nearby') + ', role: ' + (N.role || '—') + ', players: ' + N.members.map(m => m.n + (awaySince(N, m) ? ' (away)' : '')).join(', ') + ' (at most ' + N.max + ')'];
-  if (N.relay) head.push('brokers: ' + brokerDiag(N));
+  if (N.relay) head.push('brokers' + (N.keyMs != null ? ' (sealed; the key took ' + Math.round(N.keyMs) + ' ms)' : '') + ': ' + brokerDiag(N));
   return head.concat(linkedPeers(N).map(P => {
     const used = P.via === 'p2p' ? (P.turn ? 'direct link through a TURN relay' : P.turn === false ? 'direct' : 'direct link') : 'brokers';
     const lines = ['— ' + P.name + ': ' + used + (P.slowDirect ? ' (direct link exists but is slower)' : '') + (P.weak ? ', quiet' : ''),

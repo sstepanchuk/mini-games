@@ -13,14 +13,18 @@
 // merge; a host back from a sleep longer than HOST_WAIT asks who holds the room, and gives way to whoever does (its
 // guests have moved on), or else goes on as it was (they slept too).
 //
-// Messages on the room's topic: JSON to every broker. brokers.js adds f (the sender's session) and q (its number:
-// a copy through another broker is dropped); one with `to` is for that session only.
-//   k      a tab → itself      {ts} the brokers echo it: alive, and how fast (brokers.js; the others ignore it)
+// Messages on the room's topic: JSON to every broker, sealed with the room's key (seal.js: its topic and key come from
+// the code, through PBKDF2; a stranger can neither read nor forge them). brokers.js adds f (the sender's session) and q
+// (its number: a copy through another broker, or one sent again, is dropped); one with `to` is for that session only.
+//   k      a tab → itself      the brokers echo it: alive, and how fast (brokers.js; the others ignore it)
 //   who    newcomer → all      {n: name, pv} anyone here? The host answers 'host' or 'full'; a tab still looking
-//                              whose session is smaller takes the room and answers 'host'
+//          | a host            whose session is smaller takes the room and answers 'host'. To one host: in answer to
+//                              its 'host' to all (below)
 //   host   host → all | one    {c: players here with it, pv, u?} I hold the room: alone every 2.5 s, with guests
 //                              every 10 s (two rooms on one code merge), and to whoever asks. u: 1, to a tab that
-//                              talks as if linked: I do not know you (or our link must start over), say hello again
+//                              talks as if linked: I do not know you (or our link must start over), say hello again.
+//                              Joined or given way to only when said to us (to: our session): one to all, which a
+//                              stranger may have recorded long ago and sent again, is answered with a 'who' to it
 //   full   host → newcomer     no place left (it looks again in 2 s)
 //   hello  guest → host        {n: name, k: attempt, pv, fresh} let me in (every 1.2 s until 'hi'; after 6, it looks
 //                              again). fresh: false once this room has linked (a hello said by itself: after 'host' u: 1,
@@ -31,9 +35,11 @@
 //   here   guest → its host    are we still together? (every 3 s while the host is quiet)
 //   moved  host → a tab        another tab of your player took your place, or (to a hello not fresh) holds it: step
 //                              aside (role 'out'; from our host only)
-//   bye    a tab → all | one   {menu?} it closes (leave, pagehide); menu: 1, its player left for good (only room.leave
+//   bye    a tab → all | one   {menu?, w?} it closes (leave, pagehide); menu: 1, its player left for good (only room.leave
 //                              and «Не чекати»: room.js, the places invariant). To one tab, never menu: it steps aside
-//                              (leaveQuietly), or a guest tells a stranger we are not together
+//                              (leaveQuietly), or a guest tells a stranger we are not together. w: [[session, k, [link
+//                              messages]], …], a page's last words (pagehide: brokers.js lastWords), what it meant to send
+//                              each of its links through the brokers; delivered before the bye
 //   rtc    guest ⇄ host        {k: attempt, sdp | ice} direct link signalling (the guest offers, rtc.js)
 //   d      a tab → its peer    {d: [link messages], k} through the brokers, in the pair's own mailbox: topic/d/from/to.
 //                              k: the attempt of the link they belong to (P.k); one of another attempt is dropped
@@ -70,8 +76,17 @@
 //   hi to a linked guest's new k  an old guest ignores 'hi' while linked (it never starts its link over by itself)
 //   reliable messages as JSON     nothing on the wire: a message that cannot become JSON is refused at the call
 //     once, before their number   instead of stalling the link
-import { me, PROTO, roomTopic, secure, TIMING } from './config.js';
-import { closeBrokers, loadTransport, mailbox, openBrokers, pubOn } from './brokers.js';
+// Version 2 (phase 5, J2) seals everything on the brokers, on a topic of its own (seal.js), so a library of version 1
+// meets nobody of version 2 there; it hears of us only at the door (door, below): on its own plain topic, the hash of the
+// code, which we listen to but never speak on first. When it asks who holds the room ('who') we answer 'host', when it
+// says it does ('host' to everyone) we ask 'who' (to it): {pv: 2}, from a session of the door's own and nothing more
+// (no name, no players). It says 'version' and, the older one, updates itself (app/together.js); we say 'version' too.
+// (A library from before the number, phase 0, is not answered: it would take our 'host' for a room to join.)
+// Its 'hello' and 'hi' are for others; our own guests and hosts never see any of it. A 'host' to all that we only answer
+// (above) is new in version 2 as well; nearby, only the number changed (nearby.js).
+import { me, PROTO, secure, TIMING } from './config.js';
+import { closeBrokers, lastWords, loadTransport, mailbox, openBrokers, pubLegacy, pubOn } from './brokers.js';
+import { roomKeys } from './seal.js';
 import { onRtc } from './rtc.js';
 import { deliver, resetPaths, setWeak } from './link.js';
 import { closePeer, dropMember, guestMembers, hostPeer, linkedPeers, markLinked, memberOf, NAME, newPeer, newRoom,
@@ -90,8 +105,8 @@ const ANNOUNCE = 2500, ANNOUNCE_LINKED = 4;            // the host says it is he
 export function joinRoom({ game, code, name, max }) {
   const { N, room } = newRoom({ game, code, name, max, relay: true, mode: {        // (the hooks: room.js)
     peerGone: P => linkGone(N, P), restart: P => restart(N, P), byeFrom: (P, final) => byeFrom(N, P, final),
-    onConnected: c => connected(N, c), onMessage: (m, c) => onMessage(N, m, c), onDown: () => signal(N),
-    close, bye: () => pubOn(N, { t: 'bye' }), onUnlink: P => listen(N, P, false), probe: (P, now) => probe(N, P, now),
+    onConnected: c => connected(N, c), onMessage: (m, c) => onMessage(N, m, c), onDown: () => signal(N), onLegacy: m => door(N, m),
+    close, bye: () => lastWords(N), onUnlink: P => listen(N, P, false), probe: (P, now) => probe(N, P, now),
     hubCheck: now => hubCheck(N, now), longSleep: gap => longSleep(N, gap), releaseHost: () => hostGone(N, true)
   } });
 
@@ -118,9 +133,13 @@ export function joinRoom({ game, code, name, max }) {
     if (N.closed) return;
     setStatus(N, 'connecting');
     if (!secure()) { setStatus(N, 'unavailable'); return; }   // no Web Crypto: no broker hears of this room (config.js secure)
+    const t0 = performance.now(), keys = roomKeys(game, code).then(K => { N.keyMs = performance.now() - t0; return K; });   // (meanwhile)
+    keys.catch(() => {});
     try { await loadTransport(); } catch (e) { if (!N.closed) setStatus(N, 'unavailable'); return; }
-    N.topic = await roomTopic(game, code);
+    let K;
+    try { K = await keys; } catch (e) { console.error(e); if (!N.closed) setStatus(N, 'unavailable'); return; }   // (a browser without PBKDF2 or HKDF)
     if (N.closed) return;
+    N.keys = K; N.topic = K.topic; N.legacy = K.legacy;
     openBrokers(N);
     N.failTimer = setTimeout(() => { if (!N.closed && !N.ready) setStatus(N, 'no-signal'); }, 6000);
     startWatch(N);
@@ -187,13 +206,15 @@ function onMessage(N, m, c) {
         if (P && P.linked && m.to === me && m.u) restart(N, P);
         break;                                         // (its announcements to everyone change nothing)
       }
-      if (N.role === 'guest' && N.linked) break;       // someone else's room on our code: ours stays (its host merges)
-      if (N.role === null || N.role === 'guest') becomeGuest(N, from);
-      else if (N.role === 'host') {                    // two hosts: fewer players here (or the greater session) gives way;
-        const mine = here(N);                          // just awake from a long sleep, we do (longSleep)
-        if (c > mine || (c === mine && from < me) || performance.now() < N.yieldUntil) giveWay(N, from);
-        else pub(N, hostSays(N, { to: from }));
-      }
+      if ((N.role === 'guest' && N.linked) || N.role === 'out') break;   // someone else's room on our code: ours stays (its host merges)
+      // Still looking, or a guest not linked yet: we join it. Two hosts: fewer players here (or the greater session) gives
+      // way; just awake from a long sleep, we do (longSleep). Only to a 'host' said to us, though (see the top): one to
+      // everyone we ask first, and give way when it answers; a host that does not give way says so, to it.
+      const mine = here(N), yields = N.role !== 'host' || c > mine || (c === mine && from < me) || performance.now() < N.yieldUntil;
+      if (!yields) pub(N, hostSays(N, { to: from }));
+      else if (m.to !== me) pub(N, { ...who(N), to: from });
+      else if (N.role === 'host') giveWay(N, from);
+      else becomeGuest(N, from);
       break;
     }
     case 'full':
@@ -240,13 +261,33 @@ function onMessage(N, m, c) {
       for (const x of m.d) deliver(P, x, true);
       break;
     case 'bye':
-      if (P && P.linked) byeFrom(N, P, m.menu === 1);
+      if (P && P.linked && lastWordsFrom(N, P, m.w)) byeFrom(N, P, m.menu === 1);
       break;
     case 'rtc':                                        // direct link signalling
       if (P && P.linked) onRtc(P, m);
       else if (!P) stranger(N, from);
       break;
   }
+}
+
+// A page's last words (brokers.js lastWords): what its link with us meant to send through the brokers (of this link's
+// attempt k), delivered as if it had come in a 'd'. → whether the link is still there for its bye
+function lastWordsFrom(N, P, w) {
+  if (!Array.isArray(w)) return true;
+  for (const e of w) {
+    if (!Array.isArray(e) || e[0] !== me || (e[1] != null && e[1] !== P.k) || !Array.isArray(e[2])) continue;
+    for (const x of e[2]) { deliver(P, x, true); if (N.closed || !P.linked) return false; }
+  }
+  return true;
+}
+
+// The door (see the top): a library before PROTO 2 on our code, plain on its own topic. A 'who' or a 'host' of its own
+// (not one in answer to us) gets ours, once in 2 s per tab; whatever it says, we say 'version' (otherVersion). Only a
+// page that says its version (pv) is answered: one from before the number (phase 0) knows nothing of versions, and
+// would take our 'host' for a room to join.
+function door(N, m) {
+  if ((m.t !== 'who' && m.t !== 'host') || !otherVersion(N, m) || m.to !== undefined || m.pv === undefined || !due(N, m.f)) return;
+  pubLegacy(N, m.t === 'who' ? { t: 'host', c: 1, pv: PROTO, to: m.f } : { t: 'who', pv: PROTO, to: m.f });
 }
 
 // The host: a tab says hello with a name. A name the room knows takes that place (the player is back, or goes on
@@ -284,12 +325,18 @@ function hello(N, from, n, k, fresh) {
 // else tells them we are not together (a bye that keeps every place), so they stop waiting for us and move on. Once
 // in a while per sender.
 function stranger(N, from) {
-  const now = performance.now(), told = N.strangers;
-  if (now - (told.get(from) || -1e9) < 2000) return;
-  if (told.size > 32) told.clear();
-  told.set(from, now);
+  if (!due(N, from)) return;
   if (N.role === 'host') pub(N, hostSays(N, { to: from, u: 1 }));
   else if (N.role === 'guest') pub(N, { t: 'bye', to: from });
+}
+
+// whether a stranger (or an older page at the door) may be answered now: once in 2 s per sender (N.strangers)
+function due(N, from) {
+  const now = performance.now(), told = N.strangers;
+  if (now - (told.get(from) || -1e9) < 2000) return false;
+  if (told.size > 32) told.clear();
+  told.set(from, now);
+  return true;
 }
 
 // Is anyone in the room? If nobody answers, we are first. Every place we know stays (as in hostGone: their players

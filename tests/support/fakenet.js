@@ -3,7 +3,8 @@
 // the world has them; without, rooms go through the brokers only, the path every room falls back to).
 //
 // The bus carries { t: topic, s: payload, url: broker } from each tab to every other; a tab hands it to its own
-// connection to that broker if it listens to the topic, brokerMs later. Like a real broker, a tab's own messages
+// connection to that broker if it listens to the topic (exactly, or by MQTT's wildcards: + one level, # the rest),
+// brokerMs later. Like a real broker, a tab's own messages
 // come back to it on topics it listens to (the room's topic; nobody listens to their own outgoing mailbox).
 // By default nothing is impaired, and a publish goes out at once, inside the call (so a goodbye sent just before
 // a tab is killed does get out).
@@ -21,6 +22,18 @@
 // Counters: sent (publishes that went out), lost (dropped by a switch above), big (refused by maxBytes).
 
 const TE = new TextEncoder();
+// whether a subscription to `sub` gets topic t (MQTT: '+' is one level, '#' at the end any number of them)
+function matches(sub, t) {
+  if (sub === t) return true;
+  if (!sub.includes('+') && !sub.includes('#')) return false;
+  const a = sub.split('/'), b = t.split('/');
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === '#') return true;
+    if (i >= b.length || (a[i] !== '+' && a[i] !== b[i])) return false;
+  }
+  return a.length === b.length;
+}
+const listens = (c, t) => { for (const sub of c.subs) if (matches(sub, t)) return true; return false; };
 
 /**
  * Install window.mqtt (and a WebSocket for hasInternet) on this worker's global.
@@ -39,7 +52,7 @@ export function install({ bus, urls, brokerMs = 25, emit, ...opts }) {
 
   // to our own connections to that broker that listen to the topic
   const arrive = (url, t, s) => {
-    for (const c of clients) if (c.url === url && c.subs.has(t)) setTimeout(() => c.hear(t, s), brokerMs);
+    for (const c of clients) if (c.url === url && listens(c, t)) setTimeout(() => c.hear(t, s), brokerMs);
   };
   ch.onmessage = e => { const { t, s, url } = e.data || {}; if (typeof s === 'string') arrive(url, t, s); };
 
@@ -68,7 +81,7 @@ export function install({ bus, urls, brokerMs = 25, emit, ...opts }) {
         setTimeout(() => out(t, s), ms);
       },
       end() { alive = false; clients.delete(c); },
-      hear(t, s) { if (alive && sw.hear && reach(url) && c.subs.has(t)) emitC('message', t, TE.encode(s)); },
+      hear(t, s) { if (alive && sw.hear && reach(url) && listens(c, t)) emitC('message', t, TE.encode(s)); },
       drop() { if (!alive) return; c.end(); setTimeout(() => emitC('close'), 300); }
     };
     clients.add(c);

@@ -1,9 +1,10 @@
 // Library versions in one room (config.js PROTO, phase 1a: J1), in worker tabs over fake brokers and fake direct
 // links (tests/support), each tab running a library of its own: this one; this one with PROTO + 1 (what the next
-// wire version will be); and the newest release tag whose library differs from this one (git archive; skipped in a
-// checkout without tags, such as CI's shallow clone). Another version is not linked, over the internet or nearby,
-// and both sides say status 'version' with the other's number (room.versionMismatch); the previous release, whose
-// handshakes say no version or this one, still plays with this one either way round.
+// wire version will be); and the newest release tag that speaks an older version (git archive; skipped in a checkout
+// without tags, such as CI's shallow clone). Another version is not linked, over the internet or nearby,
+// and both sides say status 'version' with the other's number (room.versionMismatch). The previous release speaks
+// version 1, before the brokers' traffic was sealed (phase 5, J2: PROTO 2, on another topic): it meets this one only at
+// the door (internet.js), where this one says its version and nothing else, and only once the old page spoke there.
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -28,14 +29,11 @@ function nextVersion() {
   return to;
 }
 const lastStatus = async tab => (await tab.events()).filter(e => e[1] === 'status').map(e => e[2]).pop();
-// the numbers of one kind of message (t) a tab got from one player, in the order they came
-const numbers = async (tab, from, t = 'x') => (await tab.got()).filter(g => g.startsWith(from + ':' + t + ':')).map(g => +g.split(':')[2]);
-const seq = (from, n) => Array.from({ length: n }, (_, i) => from + i + 1);
 
 before(() => {
   dir = mkdtempSync(join(tmpdir(), 'ihroteka-versions-'));
   next = nextVersion();
-  prev = previousRelease(dir);                             // (tests/support/release.js)
+  prev = previousRelease(dir, { older: true });            // (tests/support/release.js: the newest of an older version)
 });
 after(() => { if (dir) rmSync(dir, { recursive: true, force: true }); });
 
@@ -96,28 +94,42 @@ describe('library versions in one room', { concurrency: 3 }, () => {
     });
   }
 
-  // The previous release (its handshakes say no version: 1) with this one, either one holding the room
+  // The previous release (version 1: before the seal) with this one, either one there first: not linked, both say
+  // 'version' with the other's number, and a friend of ours still gets in. On the old page's plain topic (a hash of the
+  // code) nothing of ours goes before it speaks there; then only our version, from a session of the door's own: no name.
   for (const oldFirst of [true, false]) {
-    test('internet: the previous release and this one play together (' + (oldFirst ? 'the old one' : 'this one') + ' holds the room)', T, async t => {
+    test('internet: the previous release (before the seal) and this one are not linked; both say \'version\' (' + (oldFirst ? 'the old one' : 'this one') + ' holds the room first)', T, async t => {
       if (!prev) { t.skip('no earlier release tag in this checkout'); return; }
-      const W = world(t), code = oldFirst ? 'ver3' : 'ver4';
-      const old = await W.tab('p1tab', {}, oldFirst ? { library: prev.library } : {}), neu = await W.tab('p2tab', {}, oldFirst ? {} : { library: prev.library });
-      const [O, N] = oldFirst ? [old, neu] : [neu, old];     // O: the old library, N: this one
-      await old.join(code, 'Аня');
-      assert.ok(await until(async () => (await old.state()).role === 'host', 5000));
-      await neu.join(code, 'Богдан');
-      assert.ok(await until(settled([old, neu]), 8000), prev.tag + ': ' + await shows([old, neu]));
-      await O.sendAll(seq(0, 10).map(n => ({ t: 'x', n })));
-      await N.sendAll(seq(100, 10).map(n => ({ t: 'x', n })));
-      await O.send({ t: 'f', n: 1 }, { fast: true });
-      await N.send({ t: 'f', n: 2 }, { fast: true });
-      const [on, nn] = [(await O.state()).me, (await N.state()).me];
-      const all = async () => (await N.got()).length === 11 && (await O.got()).length === 11;
-      assert.ok(await until(all, 5000), (await N.got()) + ' | ' + (await O.got()));
-      assert.deepEqual(await numbers(N, on), seq(0, 10), 'the old one\'s reliable ones, in order, once');
-      assert.deepEqual(await numbers(O, nn), seq(100, 10), 'and this one\'s');
-      assert.deepEqual([await numbers(N, on, 'f'), await numbers(O, nn, 'f')], [[1], [2]], 'fast ones both ways');
-      assert.equal((await N.state()).version, null, 'no version said: compatible');
+      const W = world(t), code = oldFirst ? 'ver3' : 'ver4', S = W.spy({ stranger: true });
+      const old = await W.tab('p1tab', {}, { library: prev.library }), neu = await W.tab('p2tab');
+      const { proto } = await neu.info(), { legacy } = await neu.info(code), was = (await old.info()).proto ?? 1;
+      assert.ok(was < proto, prev.tag + ' speaks an older version: ' + was);
+      const [X, Y] = oldFirst ? [old, neu] : [neu, old];
+      await X.join(code, 'Аня');
+      assert.ok(await until(async () => (await X.state()).role === 'host', 5000));
+      if (!oldFirst) {
+        await sleep(3000);                                   // (more than a host's announcement: 2.5 s)
+        assert.deepEqual(S.seen.filter(x => x.topic === legacy), [], 'the door is quiet while no old page speaks there');
+      }
+      await Y.join(code, 'Богдан');
+      assert.ok(await until(async () => (await neu.state()).version === was && (await old.state()).version === proto, 8000),
+        'each learns the other\'s number: ' + JSON.stringify((await states([neu, old])).map(s => s.version)));
+      await sleep(3500);
+      const [a, b] = await states([X, Y]);
+      assert.deepEqual([a.linked, a.role, a.players, b.linked, b.role, b.players], [false, 'host', ['Аня'], false, 'host', ['Богдан']], 'a room each');
+      assert.equal(await lastStatus(neu), 'version', 'this one says \'version\'');
+      assert.equal(await lastStatus(old), 'version', 'and the old one');
+      const door = S.seen.filter(x => x.topic === legacy && x.m.f !== old.session);
+      assert.ok(door.length, 'this one spoke at the door');
+      for (const x of door) {
+        assert.equal(x.m.pv, proto);
+        assert.ok(x.m.f !== neu.session && x.m.n === undefined && !/Аня|Богдан/.test(x.raw), 'its version, from a session of the door\'s own, no name: ' + x.raw);
+      }
+      assert.ok(!S.seen.some(x => x.topic.startsWith('ihroteka/s/') && x.m.f === old.session), 'the old one never reaches the sealed topic');
+      const C = await W.tab('p3tab');                        // a friend of our version still gets in
+      await C.join(code, 'Сава');
+      assert.ok(await until(settled([neu, C]), 8000), await shows([neu, C, old]));
+      assert.equal((await old.state()).linked, false, 'the old one still alone');
     });
   }
 
@@ -141,35 +153,27 @@ describe('library versions in one room', { concurrency: 3 }, () => {
     assert.ok(await until(async () => (await H.got()).join() === 'Богдан:x:1', 3000));
   });
 
-  test('nearby: a phone of the next version is not linked; both say \'version\' and the pairing ends (no \'failed\')', T, async t => {
-    const W = world(t, { rtc: true });
-    const H = await W.tab('p1tab'), G = await W.tab('p2tab', {}, { library: next });
-    const { proto } = await H.info();
-    await H.near('Аня'); await G.near('Богдан');
-    await pairUp(H, G);
-    assert.ok(await until(async () => (await H.state()).version === proto + 1 && (await G.state()).version === proto, 5000),
-      JSON.stringify((await states([H, G])).map(s => s.version)));
-    await sleep(1500);                                       // (the refused link closes after a second)
-    for (const [tab, s] of [[H, await H.state()], [G, await G.state()]]) {
-      assert.deepEqual([s.linked, s.pairing, s.players.length], [false, false, 1], s.me + ': not linked, not pairing');
-      assert.equal(await lastStatus(tab), 'version', s.me + ' says \'version\'');
-    }
-    assert.ok(!(await H.events()).some(e => e[1] === 'status' && e[2] === 'failed'), 'the host does not say the network failed');
-    await pairUp(H, await (async () => { const X = await W.tab('p3tab'); await X.near('Сава'); return X; })());   // a phone of ours pairs after it
-    assert.ok(await until(async () => (await H.state()).linked, 8000), 'a phone of our version pairs after it: ' + await shows([H]));
-  });
-
-  // (since phase 1b the host says its hello only in answer to the guest's: an old one says its own at once, either way)
-  for (const oldHost of [true, false]) {
-    test('nearby: the previous release pairs with this one (' + (oldHost ? 'the old one' : 'this one') + ' shows the code)', T, async t => {
-      if (!prev) { t.skip('no earlier release tag in this checkout'); return; }
+  // the next version, and the previous release (nearby, only its number differs: the seal is the brokers')
+  for (const which of ['next', 'previous']) {
+    test('nearby: a phone of the ' + which + ' version is not linked; both say \'version\' and the pairing ends (no \'failed\')', T, async t => {
+      const library = which === 'next' ? next : prev && prev.library;
+      if (!library) { t.skip('no earlier release tag in this checkout'); return; }
       const W = world(t, { rtc: true });
-      const H = await W.tab('p1tab', {}, oldHost ? { library: prev.library } : {}), G = await W.tab('p2tab', {}, oldHost ? {} : { library: prev.library });
+      const H = await W.tab('p1tab'), G = await W.tab('p2tab', {}, { library });
+      const { proto } = await H.info(), theirs = (await G.info()).proto ?? 1;
+      assert.notEqual(theirs, proto);
       await H.near('Аня'); await G.near('Богдан');
       await pairUp(H, G);
-      assert.ok(await until(settled([H, G]), 8000), prev.tag + ': ' + await shows([H, G]));
-      await H.send({ t: 'x', n: 1 }); await G.send({ t: 'x', n: 2 });
-      assert.ok(await until(async () => (await G.got()).join() === 'Аня:x:1' && (await H.got()).join() === 'Богдан:x:2', 3000));
+      assert.ok(await until(async () => (await H.state()).version === theirs && (await G.state()).version === proto, 5000),
+        JSON.stringify((await states([H, G])).map(s => s.version)));
+      await sleep(1500);                                     // (the refused link closes after a second)
+      for (const [tab, s] of [[H, await H.state()], [G, await G.state()]]) {
+        assert.deepEqual([s.linked, s.pairing, s.players.length], [false, false, 1], s.me + ': not linked, not pairing');
+        assert.equal(await lastStatus(tab), 'version', s.me + ' says \'version\'');
+      }
+      assert.ok(!(await H.events()).some(e => e[1] === 'status' && e[2] === 'failed'), 'the host does not say the network failed');
+      await pairUp(H, await (async () => { const X = await W.tab('p3tab'); await X.near('Сава'); return X; })());   // a phone of ours pairs after it
+      assert.ok(await until(async () => (await H.state()).linked, 8000), 'a phone of our version pairs after it: ' + await shows([H]));
     });
   }
 });

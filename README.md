@@ -41,7 +41,8 @@ and works offline. Hosted on GitHub Pages.
 library/   everything that runs in the browser
   app/       the library page: shell, password, together (+ rules: who plays, who runs a round; round: ihroteka.round,
              a game's rounds; trace: what happened lately, for bug reports), offline copy, page template, icons
-  net/       rooms for up to 8 players: internet (MQTT + WebRTC) and nearby (QR-paired WebRTC)
+  net/       rooms for up to 8 players: internet (MQTT, sealed with the room's code, + WebRTC) and nearby (QR-paired
+             WebRTC)
   crypto.js  keyring and sealed files (browser and Node)
   game-api.js  window.ihroteka, injected into every game
 tools/     cli.js (commands) · repo.js (keys, sealed files) · build.js (bundling, site, checks) · dev.js (local server)
@@ -95,8 +96,8 @@ The dev server (games mode) registers no service worker, and answers `/sw.js` wi
 offline copy left on the same address by `dev -- site` cannot hide your edits. A port can be given (`npm run dev
 -- 8002`, `npm run dev -- site 8003`). `--lan` serves to your network over plain http, where browsers turn off the
 camera (no QR scanning; a code can be typed) and Web Crypto: a page without it plays nearby only, and «Грати разом»
-says why (no internet room: its code would go to the public brokers in plain text). To try a real phone,
-forward the port instead and open `http://localhost:8000/` on it: localhost counts as secure. Android: `adb
+says why (no internet room: it could neither find the room's topic nor seal its traffic). To try a real
+phone, forward the port instead and open `http://localhost:8000/` on it: localhost counts as secure. Android: `adb
 reverse tcp:8000 tcp:8000` (or chrome://inspect → Port forwarding).
 
 ## Adding a game
@@ -490,11 +491,32 @@ What the page does close, against mistakes rather than against a game:
   keyring stays in git history); `remove` rotates it too. Everyone else's devices keep working without a password.
 - Signed-in devices keep a non-extractable key in IndexedDB. Anything served from the same origin
   (`*.github.io` of this account) could use it, so host no untrusted pages there and don't load third-party scripts in games.
-- Play together is not encrypted beyond WebRTC's own DTLS; through the brokers, messages are plain and not signed.
-  Room topics are hashed, so a room's code is not on the brokers (a page without Web Crypto, plain http, makes no
-  internet room at all), but whoever watches a room's topic can read it, join it or disturb it. (Sealing it is an open
-  decision in [docs/ROADMAP.md](docs/ROADMAP.md).)
-  The MQTT client comes from a CDN, pinned to one version and checked with Subresource Integrity.
+- Play together over the internet is sealed end to end (`library/net/seal.js`, owner's decision 10): the room's code
+  is its key. PBKDF2-SHA-256 × 40 000 of the code (salt: `ihroteka room ihroteka`, the same for every room of the
+  library) gives, through HKDF, the room's topic on the brokers and its AES-256-GCM key; every packet is sealed and
+  bound to its topic, its sender and its number. A player drops a packet that does not open, one whose number it has
+  taken already, and one far older than what that sender sent since (a window of 2048 numbers per sender, kept as long
+  as the page lives: one back in its room takes nothing again). Whoever watches the public brokers (their operators
+  too) sees which topics are busy, random per-tab sessions, the numbers, sizes and timing of the packets, and the
+  addresses that connect; not the code, the names, the messages or the addresses in a direct link's offer, and a
+  packet they make or alter is dropped. What they can still do: send a recorded packet again to a player who never
+  heard its sender (one who came later); so a host's announcement to everyone is only answered, never followed, and a
+  stranger cannot move a room that way. Direct links are WebRTC's own DTLS; nearby rooms use no brokers. A page
+  without Web Crypto (plain http) makes no internet room at all.
+- Whoever has a room's link is in the room: the code is the only secret. New codes have 8 characters of 31 (8.5·10^11);
+  one key costs a cheap phone about 0.1 s (an estimate: 21 ms in Node on a 2.8 GHz server core, `room.diag()` says
+  what it took on a device), and one high-end GPU about 2·10^5 codes a second, so a table of every 8-character code
+  takes it about 45 days, and would open every room with such a code at once (one salt for all). A link of a room from
+  before (6 characters, still taken) falls in about an hour: «Грати разом» makes a new code rather than reuse one that
+  short.
+- A page of the library from before the seal (`PROTO` 1) on the same code meets nobody: each page listens to every
+  topic of that older kind (one wildcard for all rooms, which says nothing about its own), and only when such a page
+  speaks on its room's one does it answer there, in plain: its version, from a session of its own, nothing else. The
+  older page then says «Онови сторінку — у друга інша версія» and updates itself. (That page's own topic is a plain
+  hash of its code: its traffic was readable before the seal, and is until it updates; and one GPU reverses that hash
+  for every 8-character code in minutes, so while such a page speaks on a code, whoever watches can learn the code,
+  and with it open the sealed room on it too.)
+- The MQTT client comes from a CDN, pinned to one version and checked with Subresource Integrity.
 - A game is fully trusted code (see **Trust** above): only games of the library's own people belong on it.
 - CI runs only actions pinned to a commit, and keeps no git credentials after checkout.
 

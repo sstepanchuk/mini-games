@@ -72,7 +72,8 @@ In `prod/` (`npm run e2e -- --prod`, against `E2E_SITE_URL`):
   BroadcastChannel (shared by the pages of one browser: one browser is one network, separate browsers are separate
   devices), real WebRTC links, and switches on the page: `__net(on)`, `__brokers(on)`, `__switch(ms)`, `__killDc()`,
   `__hide(on)`, impairment `__imp = { lat, jit, loss, hiccup }` (none by default: sends go out at once, inside the
-  call) and the traffic counts `__tx` (per path and message type) and `__wire` (per path). See the file's header.
+  call) and the traffic counts `__tx` (per path and message type; a sealed broker packet by what it carries) and `__wire`
+  (per path); `__open(s)`: what a packet this page sent to the brokers carries. See the file's header.
 - `support/scenario.cjs`: `scenario(title, fn)`, `check(cond, what, detail)`, `todo(…)`, `skip(why)`, `until(fn, ms)`,
   `launch()` (browsers closed at the end; the engine `E2E_BROWSER`), `E2E_URL`, `E2E_SITE_URL`, `E2E_GAME`;
   `E2E_PERF=<file>` makes any scenario write what its pages counted (long tasks, what went out per path while

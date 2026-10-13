@@ -22,7 +22,7 @@ function* walk(node) {
 }
 // every string a value can be: 'a', or c ? 'a' : d ? 'b' : 'c'
 const leaves = n => n.type === 'Literal' ? [n.value] : n.type === 'ConditionalExpression' ? [...leaves(n.consequent), ...leaves(n.alternate)] : [null];
-const NET = ['room.js', 'link.js', 'internet.js', 'nearby.js', 'rtc.js', 'brokers.js', 'code.js', 'config.js', 'index.js'].map(f => 'library/net/' + f);
+const NET = ['room.js', 'link.js', 'internet.js', 'nearby.js', 'rtc.js', 'brokers.js', 'seal.js', 'code.js', 'config.js', 'index.js'].map(f => 'library/net/' + f);
 const APP = fs.readdirSync(path.join(REPO, 'library/app')).filter(f => f.endsWith('.js')).map(f => 'library/app/' + f);
 
 // room.js in Node: config.js reads window (a session, the timing scale)

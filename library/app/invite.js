@@ -8,7 +8,7 @@
    more players can be added the same way (up to the room's limit). A friend on another version of the library or of
    the game (together.js versionGap) is told everywhere it shows: «Онови сторінку — у друга інша версія».
    ===================================================================== */
-import { hasInternet, newRoomCode, preload, secure } from '../net/index.js';
+import { CODE_LENGTH, hasInternet, newRoomCode, preload, secure } from '../net/index.js';
 import { $, btn, copy, el, modal, para, safe, toast } from './dom.js';
 import { Camera, drawQr } from './qr.js';
 import { comeBack, currentRoom, elsewhere, lastInternetCode, lastName, leave, linked, offerUpdate, onChange, release, startInternet, startNearby, updateNow, validName, versionGap,
@@ -229,8 +229,9 @@ function addPlayer() {
   if (room.kind === 'internet') show('link');
   else hostPairing();
 }
-// a room over the internet, under the same code as last time (the link sent earlier keeps working)
-const viaLink = () => { startInternet(lastInternetCode() || newRoomCode(), dlg.name); show('link'); };
+// a room over the internet, under the same code as last time (the link sent earlier keeps working), if it is as long as a
+// new room's: a shorter one (6 characters, from before the brokers' traffic was sealed: net/seal.js) is not used again
+const viaLink = () => { const last = lastInternetCode(); startInternet(last && last.length >= CODE_LENGTH ? last : newRoomCode(), dlg.name); show('link'); };
 
 function show(screen) {
   dlg.screen = screen;

@@ -1,7 +1,8 @@
 // tags: @ci
 // The "Грати разом" dialog: it checks for internet by itself. Without internet it goes straight to nearby (show or
 // scan a code); with internet it offers two ways. Both ways link two players up: a link (the friend opens it and
-// gives a name), and nearby (show / scan a code, then the other way round).
+// gives a name), and nearby (show / scan a code, then the other way round). A new room's code has 8 characters; the
+// code of the last room is used again only if it is that long (a shorter one is from before the seal, phase 5).
 'use strict';
 const { scenario, check, step, until } = require('./support/scenario.cjs');
 const { openPage, phone, pair, allLinked, libState, dialogText } = require('./support/pages.cjs');
@@ -27,7 +28,7 @@ scenario('ui: the play-together dialog, without and with internet; a link and ne
   step('1: a link');
   await A.p.click('text=Через посилання');
   const link = await A.code();
-  check(/\?room=[a-z0-9]{6,12}$/.test(link), 'the QR code is the room link', link);
+  check(/\?room=[a-z0-9]{8}$/.test(link), 'the QR code is the room link, its code 8 characters long', link);
   // the friend opens it in the same browser: the fake brokers live in one browser
   const B = await openPage(A.p.context(), 'zzzzzzzzzzzz', link, { name: 'Зоя' });
   check(await allLinked([A.p, B], 15000), 'both linked');
@@ -36,6 +37,17 @@ scenario('ui: the play-together dialog, without and with internet; a link and ne
   check(sa.players.join() === 'Аня,Зоя' && sb.players.join() === 'Аня,Зоя', 'both see Аня and Зоя', [sa.players, sb.players]);
   check(await until(async () => !(await A.p.$('.backdrop')), 5000), 'the dialog closes by itself', await dialogText(A.p));
   await A.b.close();
+
+  step('1b: the last room\'s code again, if it is 8 characters long; a shorter one (from before the seal) is not');
+  for (const [last, again] of [['abcdef', false], ['k2m4p6r8', true]]) {
+    const P = await phone('pppppppppppp', 'Поля', { internet: true });
+    await P.p.evaluate(c => localStorage.setItem('ihroteka-room', c), last);   // (together.js LAST)
+    await P.together();
+    await P.p.click('text=Через посилання');
+    const code = (await P.code()).split('?room=')[1];
+    check(again ? code === last : /^[a-z0-9]{8}$/.test(code) && code !== last, last + (again ? ': used again' : ': a new room\'s code instead'), code);
+    await P.b.close();
+  }
 
   step('2: nearby, with internet');
   const C = await phone('cccccccccccc', 'Сава', { internet: true }), D = await phone('dddddddddddd', 'Дана', { internet: true });

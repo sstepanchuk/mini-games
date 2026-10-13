@@ -1,6 +1,7 @@
 // A fake network for one library page, installed before any of its code runs: page.addInitScript(fakeNet(pid, opt)).
 // - The brokers are fake: a BroadcastChannel between the pages of one browser (pages in another browser, i.e. another
-//   device, never hear them). The internet probe (a WebSocket to a broker) answers as the brokers would.
+//   device, never hear them; a subscription takes MQTT's wildcards, + and #). The internet probe (a WebSocket to a
+//   broker) answers as the brokers would.
 // - The direct links are real WebRTC data channels, wrapped so that they can be impaired, silenced or cut.
 // By default nothing is impaired and every send goes out at once, inside the call (so a goodbye sent while a page
 // closes does get out), and the brokers deliver after brokerMs (25).
@@ -20,8 +21,10 @@
 //                             round trip + 200 ms)
 //                   hiccup    { every: ms, ms: ms }: now and then everything going out is held a while (Wi-Fi stalls)
 //   __tx            what went out, per path and message type: { 'dc-ctl lib-g:mv': { n, b }, … } ('d' batches count
-//                   each message inside, plus one '(batch)' line per packet on the wire)
+//                   each message inside, plus one '(batch)' line per packet on the wire; a sealed broker packet by what
+//                   it carries, read as Web Crypto sealed it; one sealed at once, a page's last words: '(sealed)')
 //   __wire          what went out on the wire, per path: { 'dc-ctl': characters, … } (each packet once)
+//   __open(s)       a packet this page sent to the brokers (its JSON) → its message with f and q, as sealed (or as it is)
 //
 // opt: { imp, relayOnly: no WebRTC at all, brokers: false = no internet from the start (nearby still works), brokerMs }
 'use strict';
@@ -35,13 +38,35 @@ function install({ pid, imp = {}, relayOnly = false, brokers = true, brokerMs = 
   setInterval(() => { const h = I().hiccup; if (h && Math.random() < 100 / h.every) holdUntil = now() + h.ms * (0.5 + Math.random()); }, 100);
   const delayOf = () => { const i = I(); let d = (i.lat || 0) + Math.random() * (i.jit || 0); if (holdUntil > now()) d = Math.max(d, holdUntil - now() + (i.lat || 0)); return d; };
 
+  // The brokers' packets are sealed ({"s", "f", "q"}: library/net/seal.js). What one of this page's carries is read where
+  // Web Crypto seals it (AES-GCM; its additional data is topic \n f \n q), so that it is counted by what it carries.
+  const sealed = new Map(), TD = new TextDecoder();
+  const subtle = window.SubtleCrypto && SubtleCrypto.prototype, encrypt = subtle && subtle.encrypt;
+  if (encrypt) subtle.encrypt = function (alg, key, data) {
+    try {
+      if (alg && alg.name === 'AES-GCM' && alg.additionalData) {
+        const [, f, q] = TD.decode(alg.additionalData).split('\n');
+        sealed.set(f + ' ' + q, TD.decode(data));
+        if (sealed.size > 4096) sealed.delete(sealed.keys().next().value);
+      }
+    } catch (e) {}
+    return encrypt.call(this, alg, key, data);
+  };
+  // a packet that went out (its JSON) → its message, with f and q (sealed by this page: opened), or the packet itself
+  const open = window.__open = s => {
+    let m = null;
+    try { m = JSON.parse(s); } catch (e) { return null; }
+    const p = m && typeof m.s === 'string' && sealed.get(m.f + ' ' + m.q);
+    if (p) { try { return { ...JSON.parse(p), f: m.f, q: m.q }; } catch (e) {} }
+    return m;
+  };
   const tx = window.__tx = {}, wire = window.__wire = {};
   const count = (k, b) => { const e = tx[k] || (tx[k] = { n: 0, b: 0 }); e.n++; e.b += b; };
-  const kind = x => !x || typeof x !== 'object' ? '?' : x.t + (x._x ? '*' : '') + (x.t === 'lib-g' && x.m ? ':' + x.m.t : '');
+  const kind = x => !x || typeof x !== 'object' ? '?' : typeof x.t !== 'string' && typeof x.s === 'string' ? '(sealed)' :
+    x.t + (x._x ? '*' : '') + (x.t === 'lib-g' && x.m ? ':' + x.m.t : '');
   const tally = (path, s) => {
     wire[path] = (wire[path] || 0) + s.length;
-    let m = null;
-    try { m = JSON.parse(s); } catch (e) {}
+    const m = open(s);
     if (m && m.t === 'd' && Array.isArray(m.d)) { for (const x of m.d) count(path + ' ' + kind(x), JSON.stringify(x).length); count(path + ' (batch)', s.length); }
     else count(path + ' ' + kind(m), s.length);
   };
@@ -98,12 +123,23 @@ function install({ pid, imp = {}, relayOnly = false, brokers = true, brokerMs = 
     setTimeout(() => reach() ? s.onopen && s.onopen() : s.onerror && s.onerror(), 50);
     return s;
   };
+  // whether a subscription to sub gets topic t (MQTT: '+' is one level, '#' at the end any number of them)
+  const matches = (sub, t) => {
+    if (!sub.includes('+') && !sub.includes('#')) return false;
+    const a = sub.split('/'), b = t.split('/');
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] === '#') return true;
+      if (i >= b.length || (a[i] !== '+' && a[i] !== b[i])) return false;
+    }
+    return a.length === b.length;
+  };
   window.mqtt = { connect(url) {
     const H = {}, subs = new Set(), bc = new BroadcastChannel('fake-mqtt');
+    const hears = t => subs.has(t) || [...subs].some(x => matches(x, t));   // (exactly, or by MQTT's wildcards)
     let alive = true, last = 0;
     const emit = (ev, ...a) => (H[ev] || []).forEach(f => f(...a));
     const deliver = (t, s) => setTimeout(() => { if (alive) emit('message', t, s); }, brokerMs);
-    const out = (t, s) => { if (!alive || !reach()) return; bc.postMessage({ t, s, url }); if (subs.has(t)) deliver(t, s); };
+    const out = (t, s) => { if (!alive || !reach()) return; bc.postMessage({ t, s, url }); if (hears(t)) deliver(t, s); };
     const c = {
       on(ev, f) { (H[ev] = H[ev] || []).push(f); return c; },
       subscribe(t, o, cb) { subs.add(t); setTimeout(() => cb && cb(null), 5); },
@@ -120,7 +156,7 @@ function install({ pid, imp = {}, relayOnly = false, brokers = true, brokerMs = 
       end() { alive = false; clients.delete(c); try { bc.close(); } catch (e) {} },
       _drop() { if (!alive) return; c.end(); setTimeout(() => emit('close'), 300); }
     };
-    bc.onmessage = e => { if (alive && reach() && e.data.url === url && subs.has(e.data.t)) deliver(e.data.t, e.data.s); };
+    bc.onmessage = e => { if (alive && reach() && e.data.url === url && hears(e.data.t)) deliver(e.data.t, e.data.s); };
     clients.add(c);
     setTimeout(() => { if (alive && reach()) emit('connect'); else { c.end(); emit('close'); } }, 40);
     return c;

@@ -1,7 +1,8 @@
 // What a room believes only from whom it should (library/net/link.js, internet.js), in worker tabs over fake brokers
-// (tests/support), with a spy who publishes on the room's topic and mailboxes as anyone (nothing on the brokers is
-// signed, see config.js): an acknowledgement above what was ever numbered, 'moved' from anyone but our host, and
-// data of another link attempt (k) are not acted on; data from a library without k still is.
+// (tests/support), with a spy who knows the room's code and publishes on its topic and mailboxes as anyone (a tab with a
+// bug, an old one: a stranger without the code gets nothing opened at all, tests/net/seal.test.js): an acknowledgement
+// above what was ever numbered, 'moved' from anyone but our host, and data of another link attempt (k) are not acted
+// on; data from a library without k still is.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { room, settled, shows, sleep, until, world } from '../support/world.js';

@@ -71,6 +71,7 @@ describe('the trace (phase 2, G5)', () => {
     assert.ok(ta.length <= 40);
     const d = await A.diag();
     assert.match(d, /^Ігротека \?\nroom: internet, role: host/, 'the site version, then the connection');
+    assert.match(d, /\nbrokers \(sealed; the key took \d+ ms\): /, 'how long the room\'s key took (net/seal.js ITER: to measure on phones)');
     assert.match(d, /\ntrace:\n(.+\n)*.*snapshot g: \d+ B/, 'then the trace');
   });
 

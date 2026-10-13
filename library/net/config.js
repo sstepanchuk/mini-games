@@ -1,5 +1,5 @@
 // Where rooms meet and who we are: public MQTT brokers (signalling and fallback transport), STUN/TURN for
-// direct links, the room's timing, session ids and room codes.
+// direct links, the room's timing, the wire version, session ids and room codes. (A room's key and topic: seal.js.)
 
 // Four brokers, so one outage does not matter: both players only need one broker in common.
 // Two listen on port 443, which even strict networks (office Wi-Fi, some mobile carriers) leave open.
@@ -57,15 +57,27 @@ if (!(TIMING.WEAK < TIMING.GRACE && TIMING.GRACE < TIMING.HOST_WAIT && TIMING.HO
 // says status 'version', and room.versionMismatch is their number (room.js). A handshake without pv comes from a
 // library older than the number: it speaks version 1 (the wire of the release that introduced the number, whose
 // changes an old library ignores; see the headers of internet.js and nearby.js).
-export const PROTO = 1;
+// 2: the brokers' traffic is sealed (phase 5, J2: seal.js), on another topic; a page of version 1 hears of us only at the
+// door (internet.js), and nearby only the number changed.
+export const PROTO = 2;
 // the version a handshake says it speaks: 1 when it says none; null when pv is not a version at all
 export const pvOf = m => m.pv === undefined ? 1 : Number.isSafeInteger(m.pv) && m.pv > 0 ? m.pv : null;
 
 const ABC = 'abcdefghjkmnpqrstuvwxyz23456789';      // no look-alikes (0/o, 1/l)
-const code = n => Array.from({ length: n }, () => ABC[Math.floor(Math.random() * ABC.length)]).join('');
+// n characters of ABC, from the browser's cryptographic randomness (a room's code is its key, seal.js; every browser
+// that runs this module has it, plain http too; 248 = 8 × 31: a byte above it would favour the first letters, so it is
+// drawn again)
+function code(n) {
+  let out = '';
+  while (out.length < n) for (const b of crypto.getRandomValues(new Uint8Array(2 * n))) if (b < 248 && out.length < n) out += ABC[b % ABC.length];
+  return out;
+}
 
-// Room codes: short enough to read out loud, long enough not to collide with strangers.
-export const newRoomCode = () => code(6);
+// Room codes: short enough to read out loud, long enough that a table over every code costs a GPU months (seal.js
+// ITER: 8 characters of 31, 8.5·10^11 codes; owner, decision 10). Links of rooms made before (6 characters) still
+// open: any code of 6 to 12 is taken.
+export const CODE_LENGTH = 8;
+export const newRoomCode = () => code(CODE_LENGTH);
 export const validRoomCode = r => typeof r === 'string' && /^[a-z0-9]{6,12}$/.test(r);
 
 // This tab's session: how the brokers and links tell tabs apart. (Players are known by name, see room.js.)
@@ -73,14 +85,8 @@ export const validRoomCode = r => typeof r === 'string' && /^[a-z0-9]{6,12}$/.te
 export const me = (window.__pid || code(12)) + '.' + code(6);
 export const SENDER = /^[a-z0-9]{4,32}\.[a-z0-9]{4,12}$/;   // what a session id looks like
 
-// The room's topic on the public brokers. Only a hash of game + code goes there, so someone listening to
-// every topic learns no room codes. They do see the room's messages, though, and nothing is signed: whoever
-// watches a room's topic could join that room or disturb it. Needs Web Crypto (see secure).
-export async function roomTopic(game, room) {
-  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(game + ':' + room)));
-  return 'ihroteka/' + Array.from(h.subarray(0, 16), b => b.toString(16).padStart(2, '0')).join('');
-}
 // Whether this page has Web Crypto, which a page served over plain http (not https, not localhost: `npm run dev --
 // --lan`) does not. Without it there is no internet room (internet.js: status 'unavailable', nothing goes to the
-// brokers): its topic could only carry the room's code in plain text, and it would never meet the https devices.
+// brokers): it could neither seal the room's traffic nor find its topic (seal.js), and it would never meet the https
+// devices.
 export const secure = () => !!globalThis.crypto?.subtle;

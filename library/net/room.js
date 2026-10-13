@@ -98,6 +98,8 @@ export const NAME = /^\S(?:.{0,22}\S)?$/u;             // a name: 1 to 24 charac
  *   onMessage(m, client) a message on the room's topic or in our mailbox (copies through other brokers dropped)
  *   onDown()             a broker that worked went down
  * Optional:
+ *   onLegacy(m)          brokers.js: a plain message from a library before PROTO 2, on its topic for our code (internet.js:
+ *                        the door)
  *   close(final, out)    the room closes (N.shut: room.leave(), after the links said bye; or out: another tab of ours
  *                        took our place, nothing more is said), before the links close: the mode's goodbye (not when
  *                        out) and cleanup (its timers and listeners: always)
@@ -117,7 +119,7 @@ export const NAME = /^\S(?:.{0,22}\S)?$/u;             // a name: 1 to 24 charac
  * refresh(P), arrive(P, m, reliable), roomStats(), shut(final, out).
  */
 const REQUIRED = ['peerGone', 'restart', 'byeFrom'], BROKER_HOOKS = ['onConnected', 'onMessage', 'onDown'];
-const HOOKS = [...REQUIRED, ...BROKER_HOOKS, 'close', 'bye', 'onUnlink', 'probe', 'hubCheck', 'longSleep', 'releaseHost', 'onDirect', 'onHello'];
+const HOOKS = [...REQUIRED, ...BROKER_HOOKS, 'onLegacy', 'close', 'bye', 'onUnlink', 'probe', 'hubCheck', 'longSleep', 'releaseHost', 'onDirect', 'onHello'];
 function modeHooks(mode, relay) {
   for (const k of Object.keys(mode)) if (!HOOKS.includes(k) || (mode[k] != null && typeof mode[k] !== 'function')) throw new Error('room: not a mode hook (or not a function): ' + k);
   for (const k of relay ? [...REQUIRED, ...BROKER_HOOKS] : REQUIRED) if (!mode[k]) throw new Error('room: the mode needs ' + k);
@@ -139,13 +141,24 @@ function modeHooks(mode, relay) {
  * @property {string} status         the status the listeners last heard ('' before the first; setStatus)
  * @property {?number} mismatch      another library version we met (config.js PROTO), until we link with someone or
  *                                   it is not heard for TIMING.VERSION (otherVersion)
- * Brokers (internet rooms, brokers.js):
- * @property {string} topic          the room's topic (a hash of game and code)
+ * Brokers (internet rooms, brokers.js; sealed: seal.js):
+ * @property {?object} keys          the room's keys (seal.js roomKeys), once made; keyMs: how long that took (diag)
+ * @property {?number} keyMs
+ * @property {string} topic          the room's topic (from its key)
+ * @property {string} legacy         the topic a library before PROTO 2 uses for our code (internet.js, the door)
  * @property {Array} clients         per broker, its MQTT client (null while it waits to retry); c._ok: subscribed,
- *                                   c._rx: last heard, c._lat: echo delay, c._echo: it echoes us
+ *                                   c._rx: last heard, c._lat: echo delay, c._echo: it echoes us, c._in: its opening chain
  * @property {Array} br              per broker: { state: 'connecting' | 'ok' | 'wait', since, fails, timer }
- * @property {number} seq            our last message number on the brokers (from the clock: never one used before)
- * @property {Map} last              sender → the numbers seen lately (a copy through another broker is dropped)
+ * @property {number} seq            our last message number on the brokers (from the clock, and never below one this page
+ *                                   used before: brokers.js seqHi)
+ * @property {Promise} out           the sealing chain: what we publish, in order
+ * @property {Set} wait              what is in it, not sealed yet ({ link, gone }: brokers.js post, lastWords)
+ * @property {Map} kq                our echo tests on their way: number → when it went ('k')
+ * @property {?object} spare         one packet's worth sealed at once, ready for the last words (seal.js spare)
+ * @property {?Map} stash            while the page goes: session → [k, link messages], for the last words
+ * @property {object} door           { id, q }: the session (and its numbers) we answer an older library as, at the door
+ * @property {Map} last              sender → its replay window (seal.js: a copy through another broker, or one sent again,
+ *                                   is dropped); the page keeps them per room, for when it comes back (brokers.js windows)
  * @property {boolean} ready         a broker has connected: we looked for the room
  * @property {boolean} up            some broker works (as the status last said)
  * @property {number} kickAt         when the brokers were last checked at once (kickBrokers: at most every 3 s)
@@ -164,7 +177,8 @@ function modeHooks(mode, relay) {
  *                                   the player's own act (internet.js: a hello is not fresh)
  * @property {string} sent           the host: the list as last sent (_r), so an unchanged one does not go again
  * @property {Array} told            the list as the game last heard it (tell)
- * @property {Map} strangers         session → when we last told it we are not linked (internet.js: stranger)
+ * @property {Map} strangers         session → when we last told it we are not linked, or our version at the door
+ *                                   (internet.js: stranger, door; due)
  * @property {number} yieldUntil     internet, a host awake from a long sleep: until then it gives way to any other host
  * The room as a whole:
  * @property {boolean} linked        someone else is here and we hear each other
@@ -271,8 +285,9 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
   const N = {
     game, code, name, relay, lostAfter: HOLD, max: Math.max(2, Math.min(MAX_PLAYERS, max | 0 || MAX_PLAYERS)), closed: false,
     // brokers (brokers.js); seq starts from the clock, so numbers of a new connection never collide with what
-    // the other players remember from our previous one
-    topic: '', clients: [], br: [], seq: Date.now(), last: new Map(), ready: false, up: false, kickAt: -1e9, kAt: 0, winAt: 0, pubN: 0,
+    // the other players remember from our previous one (and, in this page, never below them: brokers.js seqHi)
+    keys: null, keyMs: null, topic: '', legacy: '', clients: [], br: [], seq: Date.now(), out: Promise.resolve(), wait: new Set(), kq: new Map(), spare: null,
+    stash: null, door: null, last: new Map(), ready: false, up: false, kickAt: -1e9, kAt: 0, winAt: 0, pubN: 0,
     // our role, the host's session (when we are a guest), the links (session → peer), the players
     // ({ n: name, s: session, a: away since, 0 while here }, in the order they came; ours has s = me)
     role: null, host: null, peers: new Map(), members: [{ n: name, s: me, a: 0 }], sent: '', told: [], cutAt: 0, ever: false,
