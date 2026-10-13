@@ -89,10 +89,11 @@ describe('the room\'s host going away', { concurrency: 3 }, () => {
     const n = [(await B.events()).length, (await C.events()).length];
     await A.freeze(HOST_WAIT - 1000);
     assert.ok(await until(settled([A, B, C]), 8000), 'all three again: ' + await shows([A, B, C]));
-    assert.equal((await A.state()).role, 'host');
+    assert.deepEqual([(await A.state()).role, (await B.state()).role, (await C.state()).role], ['host', 'guest', 'guest']);
     const ev = [...(await B.events()).slice(n[0]), ...(await C.events()).slice(n[1])].map(e => e.slice(1).join(' '));
     assert.ok(ev.includes('weak true'), 'the others paused: ' + ev);
-    assert.ok(!ev.some(e => e.startsWith('role') || e.startsWith('leave')), 'and nothing else changed: ' + ev);
+    // (a guest that moves on says so in its status: joining another host, or holding the room)
+    assert.ok(!ev.some(e => e.startsWith('status') || e.startsWith('leave')), 'and nothing else changed: ' + ev);
   });
 
   // (phase 1b: a host whose tab was frozen, awake, used to count its silent links as here for GRACE (link.js: watch),

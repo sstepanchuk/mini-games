@@ -9,5 +9,9 @@
     "policies": ["pulse", "streaming"]
   },
   "events": ["join", "leave", "linked", "message", "peer-gone", "players", "pulse", "relinked", "resume", "role", "shared", "stats", "tick", "weak"],
-  "chainable": ["on"]
+  "chainable": ["on"],
+  "notes": {
+    "frame": "an optional hint (phase 2, H1): while a game is played, the library keeps the direct link alive by itself",
+    "kick": "does nothing since phase 2 (H1), kept for games that call it: the room checks its network by itself"
+  }
 }

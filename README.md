@@ -38,8 +38,8 @@ and works offline. Hosted on GitHub Pages.
 
 ```
 library/   everything that runs in the browser
-  app/       the library page: shell, password, together (+ rules: who plays, who runs a round), offline copy,
-             page template, icons
+  app/       the library page: shell, password, together (+ rules: who plays, who runs a round; trace: what
+             happened lately, for bug reports), offline copy, page template, icons
   net/       rooms for up to 8 players: internet (MQTT + WebRTC) and nearby (QR-paired WebRTC)
   crypto.js  keyring and sealed files (browser and Node)
   game-api.js  window.ihroteka, injected into every game
@@ -59,13 +59,15 @@ site/      the site, assembled from library/ and vault/ (git-ignored; CI assembl
 npm install
 npm run unlock              # decrypt game sources into games/
 npm run dev                 # the library with your plaintext games at localhost:8000
-npm run build               # bundle and encrypt the games into vault/, then assemble site/
+npm run build               # run each game's own tests, bundle and encrypt the games into vault/, then assemble site/
+                            #   (a game whose tests fail is not sealed; -- --no-tests skips them)
 npm run site                # assemble site/ from library/ and vault/ (no password)
 npm run dev -- site         # serve the assembled site/ at localhost:8001 (its offline copy stays off :8000)
 npm run check               # validate vault/ (no password)
 npm run lint && npm test
 npm run e2e                 # browser scenarios against a running dev server (tests/e2e/README.md)
-npm run test:games          # Two Dragons' own, sealed with the game (games/dragons/test, after npm run unlock)
+npm run test:games          # every game's own unit tests (games/*/test/*.test.js, sealed with it; after npm run unlock)
+npm run test:games:e2e      # Two Dragons' browser scenarios (games/dragons/test/e2e, against the dev server)
 npm run migrate             # bring an old vault/keyring.json up to today's format
 
 npm run user -- list | add <name> | remove <name> | passwd
@@ -152,7 +154,8 @@ room.snapshot(state)                  // (the runner, about once a second) the r
 room.shared('mode'), room.share('mode', 'race')   // what the game's players share: the same for everyone, whoever
                                       //   passes it on and whoever reloads (a chosen mode, a series score…)
 room.send({ t: 'move', … });                  // to everyone who plays; reliable: exactly once, in order, even across an outage
-room.send({ t: 'pos', … }, { fast: true });   // may be lost or reordered: number it yourself
+room.send({ t: 'pos', … }, { fast: true });   // may be lost or reordered: number it yourself (through the brokers, ≤ 30
+                                              //   publishes a second: more wait and go together, see Links)
 room.send({ t: 's', … }, { fast: true, latest: 's' })   // each one makes the previous one of stream 's' useless (a full
                                               //   state): through the brokers only the newest goes, ≤ 30 a second
 room.send({ t: 'card', … }, { to: name });    // to one player
@@ -197,8 +200,18 @@ digits, `_` or `-`, and only from a player with a seat.
 
 **Links.** `room.lag(name?)` is the one-way delay in ms (to that player, or the slowest we play with);
 `room.stats(name?)` is `{ rtt, peerRtt, direct, relayed, turn, weak }` for that player's link, or the worst of
-them; `room.diag()` is a report of the connection to copy into a bug report; `room.direct`: every player we play
-with is on a direct link; `room.nearby`: a nearby room (no internet).
+them; `room.diag()` is a report to copy into a bug report: the site's version, the connection, then the last 40 lines
+of what happened (the room's events, what the game was told, the shared keys that changed, snapshot sizes, the page
+hidden and shown, errors by type and place; never what a message, a snapshot, a shared value or an error said);
+`room.direct`: every player we play with is on a direct link; `room.nearby`: a nearby room (no internet). While a
+game is played over the internet, the library itself asks about a quiet direct link (every 50 ms, only while the page
+is visible), and the game does nothing for it: one gone silent moves to the brokers in about 0.7 s (1.4 s when the
+game does not say `streaming`, below).
+The public brokers ban whoever floods them, so the room keeps a **relay budget**: through the brokers, each `latest`
+stream goes about 30 times a second at most, and the other fast messages start at most 30 publishes a second per
+player (more wait and go together, none dropped; on the dev server the console says so, once). Reliable messages go
+at once, and whatever waits rides along. A game that streams state sends it with `latest`: through the brokers, Two
+Dragons sends ≈ 30 states a second (the runner) and ≈ 8 aims (the other player) that way.
 
 **Policies and hints** (what a real-time game may set or call; a turn-based one needs none):
 - `room.streaming = () => bool`: while it says true, a direct link quiet for 0.35 s (instead of 1.3 s) is doubted:
@@ -206,10 +219,18 @@ with is on a direct link; `room.nearby`: a nearby room (no internet).
   while you stream state every frame.
 - `room.pulse = now => object | null`: a few fields that ride on the room's pulse, 5 times a second; the other
   side gets them as `pulse`. Pulses are not passed on: in a room of three or more, guests hear only the room's host.
-- `room.frame(now)`: optional, every animation frame while playing: a direct link silent for 0.35 s is asked about
-  through the brokers at once, not at the room's next tick (internet rooms).
-- `room.kick()`: the network may have changed: check the broker connections now (a guest also retries the direct
-  link soon). The room does it by itself when the page becomes visible again.
+- `room.frame(now)`: an optional hint, every animation frame while playing: a direct link silent for 0.35 s is asked
+  about through the brokers at once (internet rooms; `now` is not read: a frame's clock is its own). The library does
+  the same by itself while a game is played (see Links), so a game needs it no more.
+- `room.kick()`: does nothing, kept for games that call it: the room checks its network by itself when the page is
+  shown again, the browser is back online or its network changes.
+
+**A game that breaks.** What a game's window throws (or a promise it leaves rejected), and what its listeners throw,
+goes into the trace of `room.diag()`. One that does so while it starts (before its page loaded, or within 5 s after)
+leaves no empty screen: the library covers it with «Гра зламалася», a button «Скопіювати звіт» (the report of
+`room.diag()`) and «До бібліотеки». (A browser's notice that comes as an error with nothing thrown, a ResizeObserver
+loop as the layout settles, is only a line in the trace; so is a promise left rejected because the browser refused or
+cut short what the game asked, a `DOMException` `NotAllowedError` or `AbortError`: a sound played before any tap.)
 
 The room's code is `library/net/` (`room.js` describes the room and its rules) and `library/app/together.js`
 (what a game sees; the rules of who plays and who runs a round are in `library/app/rules.js`).
@@ -219,7 +240,9 @@ The room's code is `library/net/` (`room.js` describes the room and its rules) a
 - **One copy runs the round** (`room.role === 'host'`): it steps the game at a fixed rate and sends the whole
   state to the others with `{ fast: true, latest: 's' }`. Make each state self-contained (or repeat the last few
   changes in it), so a lost one costs nothing. The others send only their input (`fast`, numbered, repeated in
-  `room.pulse`), and commands that must arrive (start, quit) as plain reliable messages.
+  `room.pulse`; Two Dragons sends it as a `latest` stream of its own too), and commands that must arrive (start,
+  quit) as plain reliable messages. Through the brokers, the relay budget (see Links) lets 30 states a second through:
+  step as fast as you like, the newest goes.
 - **Write who plays what into the round** when it starts (names per seat) and read your seat from there: the
   room's order may change on a shaky network, a round's seats must not.
 - **Snapshot the round** about once a second (`room.snapshot`) from the runner; on `resume`, go on from it; on
@@ -239,7 +262,8 @@ The room's code is `library/net/` (`room.js` describes the room and its rules) a
   snapshot, there or in your copy: remember the round you quit (its players and step) until the runner says it is over,
   say it again when that round's state comes back, and end it with `room.snapshot(null)` if it moves to you.
 - **Keep the game's tests with the game** (`games/<id>/test/`): they are sealed with its sources, so a private game
-  keeps them private. Two Dragons does.
+  keeps them private, and `npm run build` runs its `test/*.test.js` (node:test, no browser) first: a game whose tests
+  fail is not sealed. Two Dragons does.
 
 ### Under it: one room for the whole library
 
@@ -288,5 +312,6 @@ they need.
 
 Each fix deploys on its own, with its test. A commit known to be good is tagged at the end of each phase (`git tag
 phase-N`, `git push origin phase-N`). Reports start with the site's version, `Ігротека <commit> <build day>` (`dev` on
-the dev server): `room.diag()`, and `site` in `__ihroteka.state()`. Rollback: `git revert` (back to a tag: `git revert
+the dev server): `room.diag()` (and «Скопіювати звіт» over a game that broke: the same report), and `site` in
+`__ihroteka.state()`; the trace that ends a report is also `__ihroteka.trace()`. Rollback: `git revert` (back to a tag: `git revert
 --no-commit phase-N..HEAD && git commit`) and push; devices take it when idle, as under **Deploy** above.

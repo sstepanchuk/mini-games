@@ -13,7 +13,8 @@
     "lint": "eslint .",
     "test": "node --test \"tests/**/*.test.js\"",
     "e2e": "node tests/e2e/run.cjs",
-    "test:games": "node games/dragons/test/e2e/run.cjs",
+    "test:games": "node --test \"games/*/test/*.test.js\"",
+    "test:games:e2e": "node games/dragons/test/e2e/run.cjs",
     "migrate": "node tools/migrate.js"
   },
   "devDependencies": {

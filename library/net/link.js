@@ -14,16 +14,22 @@
 // A reliable message becomes JSON once, before it gets its number (wire): one that cannot (a cycle, a BigInt)
 // throws a TypeError at the call and takes no number, so nothing after it waits for it; and what is kept and sent
 // again is that JSON read back, which a later change to the caller's object cannot touch.
+// The relay budget (the public brokers throttle or ban whoever floods them): through the brokers, each 'latest' stream
+// goes at most every RELAY_EVERY ms, and the other fast messages start a publish at most every FAST_EVERY ms per
+// player (about 30 a second): what comes meanwhile waits and goes in that one publish (the room says 'budget', once).
+// Whatever else goes out takes everything waiting along. Reliable messages and the link's own go at once.
 import { BROKERS, TIMING } from './config.js';
 import { bestBrokers, brokerDiag, kickBrokers, pubData, tendBrokers } from './brokers.js';
 import { closeRtc, dcFresh, dcHear, dcLive, dcQuiet, probeLink, startRtc } from './rtc.js';
-import { awaySince, holdOver, hostPeer, linkedPeers, weakChanged } from './room.js';
+import { awaySince, holdOver, hostPeer, linkedPeers, stop, weakChanged } from './room.js';
 
 const RELAY_EVERY = 33;                                // a "latest" stream goes through the brokers at most this often, ms
+const FAST_EVERY = 33;                                 // other fast messages start a publish to one player at most this often, ms
 const ACK_DELAY = 25;                                  // reliable messages that came: say so this soon (with the next ones)
 const OUTBOX_MAX = 5000;                               // reliable messages not yet acknowledged: more, and the link starts over
 const HOLD_MAX = 4096;                                 // messages that overtook a missing one, waiting for it
 const RESEND_PER_TICK = 64;
+const ALIVE_EVERY = 50;                                // while a game is played: a quiet direct link is asked about this often, ms (tendAlive)
 
 // a new link with this player (or the same person in a new tab): measurements and numbering start over
 export function resetPaths(P) {
@@ -63,12 +69,22 @@ function transmit(P, m, fast, stream) {
     try { (fast ? P.dcF : P.dcC).send(JSON.stringify(m)); } catch (e) {}
     if (dcFresh(P)) return;                            // the direct link is alive: that is enough
   }
-  // through the brokers (no direct path, it went quiet, or it is slower)
-  if (stream === null) { P.q.push(m); flushRelay(P); return; }
-  P.qLatest.set(stream, m);                            // replaces an older one still waiting
-  const wait = RELAY_EVERY - (performance.now() - P.relayAt);
-  if (wait <= 0) flushRelay(P);
-  else if (!P.qTimer) P.qTimer = setTimeout(() => flushRelay(P), wait);
+  // through the brokers (no direct path, it went quiet, or it is slower), within the relay budget (see the top)
+  if (!fast) { P.q.push(m); flushRelay(P); return; }
+  const now = performance.now();
+  let wait;
+  if (stream === null) {
+    P.q.push(m); P.qFast++;
+    wait = FAST_EVERY - (now - P.fastAt);
+    if (wait > 0 && !N.budgetSaid) { N.budgetSaid = true; N.emit('budget'); }
+  } else {
+    P.qLatest.set(stream, m);                          // replaces an older one still waiting
+    wait = RELAY_EVERY - (now - P.relayAt);
+  }
+  if (wait <= 0) { flushRelay(P); return; }
+  if (P.qTimer && P.qDue <= now + wait) return;        // (a flush comes soon enough)
+  clearTimeout(P.qTimer);
+  P.qDue = now + wait; P.qTimer = setTimeout(() => flushRelay(P), wait);
 }
 // The other side has everything up to `a`: those leave the outbox. (More than we ever numbered is not an answer
 // to us: a stranger, or an acknowledgement from before our numbering started over.)
@@ -99,6 +115,7 @@ export function flushRelay(P) {
     for (const m of P.qLatest.values()) P.q.push(m);
     P.qLatest.clear(); P.relayAt = performance.now();
   }
+  if (P.qFast) { P.qFast = 0; P.fastAt = performance.now(); }
   if (!P.q.length || !P.N.relay) return;
   const d = P.q; P.q = [];
   if (!P.N.closed) pubData(P.N, P, { t: 'd', to: P.id, d, k: P.k });   // k: the link's attempt (internet.js drops another one's)
@@ -246,6 +263,7 @@ export function watch(N) {
     if (gap > TIMING.HOST_WAIT && N.longSleep(gap)) return;
   }
   if (N.relay) tendBrokers(N, now);
+  tendAlive(N);
   holdOver(N, now);                                    // places kept too long go
   N.hubCheck(now);                                     // a guest whose host is away: someone else takes over (internet.js)
   for (const P of linkedPeers(N)) watchPeer(P, now);
@@ -310,12 +328,27 @@ function pingMsg(P, now) {
   return m;
 }
 
-// A direct link went quiet: ask through the brokers right away (are they there?) instead of waiting for the next pulse.
-export function keepDirectAlive(N, now) {
+// While a game is played here (N.playing: the library's open game has someone to play with), the page is visible, the
+// brokers work (internet rooms) and a direct link is open, the room asks about a quiet direct link by itself every
+// ALIVE_EVERY ms (keepDirectAlive), as a game's room.frame(now) would each frame, so the game need not: a direct link
+// gone dead moves to the brokers in about 0.7 s (measured: the watchdog alone does it as soon, see docs/ROADMAP.md,
+// phase 2). No such timer anywhere else (the shelf, an idle room, a hidden page, a nearby room). Asked each watchdog
+// tick, and when the page is hidden or shown. → whether it runs
+export function tendAlive(N) {
+  const on = !N.closed && N.relay && N.up && !document.hidden && N.playing() && linkedPeers(N).some(dcLive);
+  if (on && !N.aliveTimer) N.aliveTimer = setInterval(() => { if (tendAlive(N)) keepDirectAlive(N); }, ALIVE_EVERY);
+  else if (!on && N.aliveTimer) stop(N, 'aliveTimer');
+  return on;
+}
+// A direct link went quiet: ask through the brokers right away (are they there?) instead of waiting for the next pulse,
+// at most every 400 ms. By our own clock: a game's frame time (room.frame(now)) runs on its frame's, which started
+// later. The regular pulse still goes on time (it says what changed since: r, that we cannot hear them directly).
+export function keepDirectAlive(N) {
   if (!N.relay || N.closed) return;
+  const now = performance.now();
   for (const P of linkedPeers(N)) {
     if ((dcQuiet(P) || (dcLive(P) && !dcFresh(P))) && now - P.nudged > 400) {
-      P.nudged = now; P.pingAt = now;
+      P.nudged = now;
       const p = pingMsg(P, now); sendDirect(P, p); sendRelay(P, p);
     }
   }

@@ -21,7 +21,7 @@ describe('internet rooms: linking up, messages, a full room, leaving, «Не ч�
     assert.deepEqual(s.map(x => [x.role, x.host, x.players]), [['host', 'Аня', ['Аня', 'Богдан']], ['guest', 'Аня', ['Аня', 'Богдан']]]);
     const ea = (await A.events()).map(e => e.slice(1).join(' ')), eb = (await B.events()).map(e => e.slice(1).join(' '));
     assert.ok(ea.includes('linked') && ea.includes('join Богдан'), 'the host hears linked and join: ' + ea);
-    assert.ok(eb.includes('linked') && eb.includes('role guest'), 'the guest hears linked and its role: ' + eb);
+    assert.ok(eb.includes('linked') && eb.includes('status joining'), 'the guest hears linked, after joining: ' + eb);
     assert.deepEqual(ea.filter(e => e.startsWith('status')), ['status connecting', 'status waiting', 'status ready']);
   });
 

@@ -24,6 +24,9 @@
      value up to SHARE_BYTES, SHARE_KEYS keys per game; what is not JSON is a TypeError at the call; send, share and
      snapshot say whether they did it (true/false; on the dev server, once per reason, why not). The library's own
      messages are not bound by them: greet goes in chunks.
+   - A trace for bug reports (trace.js): the room's events, what the open game is told, the shared state's keys that
+     change, snapshots (their sizes), the page hidden and shown, errors (their types and places); never what a message,
+     a snapshot or a value says. The last lines of it follow room.diag() (report) and are in state().
    The rules of all this (who plays, who runs the round, who is away, when the round moves) are in rules.js.
    Messages on the room, besides the games' own ('lib-g'):
      lib-state { e: entries }   the shared state, or a change to it (roomstate.js); greet sends all of it in chunks of
@@ -48,6 +51,7 @@ import { HOLD, joinNearby, joinRoom, NAME, PROTO, TIMING, validRoomCode } from '
 import { safe } from './dom.js';
 import { roomState, validClock } from './roomstate.js';
 import * as rules from './rules.js';
+import * as trace from './trace.js';
 
 const LIB = 'ihroteka';                                  // the room namespace of the whole library
 const LAST = 'ihroteka-room', LAST_NAME = 'ihroteka-name';   // the last room (its link keeps working) and name
@@ -72,8 +76,8 @@ const REJOIN = 'ihroteka-rejoin', RELOADED = 'ihroteka-reloaded';   // (sessionS
 const session = { get: k => { try { return JSON.parse(sessionStorage.getItem(k)); } catch (e) { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } } };
 
 let shell = null;                                        // { current(), follow(id), invite(), address(), seats(id), askName(...),
-                                                         //   wires() → { game: wire } (optional), reload(still?) (optional) }
-let room = null;                                         // the room (see ../net), with .kind and .lastStatus
+                                                         //   wires() → { game: wire }, reload(still?), gameError() (each optional) }
+let room = null;                                         // the room (see ../net: room.kind, room.status)
 let st = null;                                           // its shared state (roomstate.js)
 let myHere = null;                                       // the game we have open and listening
 let ch = null;                                           // the open game's channel (ihroteka.room)
@@ -83,10 +87,16 @@ const loading = new Map();                               // name → since when:
                                                          //   dropped), its game not open there yet (rules.arrivesLoading)
 const GKEY = /^[\w-]{1,40}$/;                            // a game's shared key (see channel: shared, share)
 const listeners = new Set();
+let budgetWarned = false;                                // (the relay budget: see wire, 'budget')
 
 export function initTogether(s) {
   shell = s;
   setInterval(watchRunner, 1000);
+  let hiddenAt = 0;                                      // (the trace: how long the page was out of sight)
+  globalThis.document?.addEventListener?.('visibilitychange', () => {
+    if (document.hidden) { hiddenAt = performance.now(); trace.note('page hidden'); }
+    else if (hiddenAt) { trace.note('page shown after ' + ((performance.now() - hiddenAt) / 1000).toFixed(1) + ' s'); hiddenAt = 0; }
+  });
   const code = (new URLSearchParams(location.search).get('room') || '').toLowerCase();
   // the page reloaded itself into a newer version (versionCheck): straight back into its room, once the shell has
   // shown the address's view (so we follow the room's view instead of announcing ours)
@@ -114,7 +124,7 @@ export function startInternet(code, name) {
   leave();
   remember(LAST, code); remember(LAST_NAME, name);
   setQuery(code);
-  return wire(joinRoom({ game: LIB, code, name }), 'internet');
+  return wire(joinRoom({ game: LIB, code, name }));
 }
 export const lastInternetCode = () => { const c = safe(() => localStorage.getItem(LAST)); return validRoomCode(c) ? c : null; };
 // a nearby room; its host adds players to it (pairing again), and a player whose link broke pairs again into
@@ -123,7 +133,7 @@ export function startNearby(name) {
   if (room && room.kind === 'nearby' && (room.linked || room.role === 'host')) return room;
   leave();
   remember(LAST_NAME, name);
-  return wire(joinNearby({ game: LIB, name }), 'nearby');
+  return wire(joinNearby({ game: LIB, name }));
 }
 // this player went on in another tab or device; come back here (that one steps aside in turn)
 export function comeBack() {
@@ -136,13 +146,13 @@ export function leave() {
   const r = room;
   room = null; st = null; snaps.clear(); loading.clear(); gapKey = '';
   session.set(REJOIN, null);                             // (a reload under way does not bring us back: we left)
-  if (r) { r.leave(); setQuery(null); }
+  if (r) { r.leave(); setQuery(null); trace.note('left the room'); }
   update();
   changed('left');
 }
 const remember = (k, v) => safe(() => localStorage.setItem(k, v));
 // for checks from the console and tests
-export const state = () => ({ site: SITE, kind: room && room.kind, role: room && room.role, linked: linked(), online: !!room && room.online, status: room && room.lastStatus,
+export const state = () => ({ site: SITE, trace: trace.read(), kind: room && room.kind, role: room && room.role, linked: linked(), online: !!room && room.online, status: room && room.status,
   me: room && room.me, players: room ? room.players : [], away: room ? room.players.filter(p => room.away(p)) : [], view: st && st.get('view'), myHere,
   here: room && st ? Object.fromEntries(room.players.map(p => [p, p === room.me ? myHere : st.get('here:' + p) ?? null])) : {},
   game: ch && { players: ch.seated, linked: ch.api.linked, role: ch.api.role, host: ch.api.host, waiting: ch.api.waiting, waitingFor: waitingFor() },
@@ -150,8 +160,9 @@ export const state = () => ({ site: SITE, kind: room && room.kind, role: room &&
   auth: st ? Object.fromEntries(st.entries().filter(([k]) => k.startsWith('auth:')).map(([k, e]) => [k.slice(5), e.v])) : {},   // game → whose copy runs its round
   version: { gap: versionGap(), reloading, offer: offerUpdate() } });
 
-function wire(r, kind) {
-  room = r; r.kind = kind; st = roomState(r.me); snaps.clear(); loading.clear(); replaced = null; gapKey = '';
+function wire(r) {
+  room = r; st = roomState(r.me); snaps.clear(); loading.clear(); replaced = null; gapKey = '';
+  trace.note('room: ' + r.kind + ', as ' + r.me);
   // Which game we have open. A new tab of a player who is in a game says nothing yet: it follows the room into
   // that game in a moment, and a "not in the game" meanwhile would end the round for everyone (see staleHere).
   if (myHere) st.set('here:' + r.me, myHere);           // (the room's view: whoever opened the room shows the way)
@@ -159,16 +170,22 @@ function wire(r, kind) {
   if (w) st.set('wire:' + r.me, w);
   const policy = name => () => !!ch && ch.api.linked && !!ch.policy(name);
   r.streaming = policy('streaming');
+  r.playing = () => !!ch && ch.api.linked;              // (the room then keeps the direct link alive by itself: net/link.js tendAlive)
   r.pulse = now => { const g = ch && ch.api.linked && ch.pulseOut(now); return g ? { v: ch.id, g } : null; };
-  const on = (name, fn) => r.on(name, (...a) => { if (room === r) { safe(fn, ...a); changed(name); } });
+  const on = (name, fn) => r.on(name, (...a) => {
+    if (room !== r) return;
+    if (name !== 'stats') trace.note('room ' + name + (a.length ? ' ' + trace.args(a) : ''));
+    safe(fn, ...a); changed(name);
+  });
   // Someone new, or back from another tab or device: the rounds (their snapshots, tombstones too), then everything
   // we know, in chunks of up to CAP bytes (players' wire numbers first: nobody is seated before their wire is known).
   // Not a here: of ours naming a game while we have none open: an older tab of ours wrote it, it is no news of this
   // one (from us, it would end the wait for our game to open: see onLibMessage, libraries from before phase 1b).
   const greet = p => {
     for (const [v, s] of snaps) send(snapMsg(v, s), p);
-    const news = ([k, e]) => k !== 'here:' + r.me || !!myHere || !e.v;
-    for (const e of chunks(st.entries().filter(news).sort(([a], [b]) => b.startsWith('wire:') - a.startsWith('wire:')))) send({ t: 'lib-state', e }, p);
+    const news = ([k, e]) => k !== 'here:' + r.me || !!myHere || !e.v, all = st.entries().filter(news);
+    for (const e of chunks(all.sort(([a], [b]) => b.startsWith('wire:') - a.startsWith('wire:')))) send({ t: 'lib-state', e }, p);
+    trace.note('greet ' + p + ': ' + snaps.size + ' snapshots, ' + all.length + ' keys');
   };
   // Whoever comes in (back after their place dropped, or a room of ours started over) may hold our here: from before
   // and count us as loading until we write one after they came (rules.arrivesLoading): if we have a game open, we say
@@ -204,8 +221,10 @@ function wire(r, kind) {
     replaced = { kind: r.kind, code: r.code, name: r.me };
     queueMicrotask(leave);
   });
-  on('status', s => { r.lastStatus = s; if (s === 'version') versionCheck(); });
+  on('status', s => { if (s === 'version') versionCheck(); });
   on('weak', update);
+  // the open game's fast messages waited for the relay budget (net/link.js): on the dev server the console says so, once
+  on('budget', () => { if (DEV && !budgetWarned) { budgetWarned = true; console.warn('ihroteka.room: through the brokers, fast messages go out at most ~30 times a second per player; more of them wait and go together (a full state each time: send it with { fast: true, latest: … })'); } });
   on('stats', () => { update(); if (ch && ch.api.linked) ch.emit('stats', ch.api.stats()); });
   r.on('tick', now => { if (room === r && ch && ch.api.linked) ch.emit('tick', now); });
   r.on('pulse', (p, from) => { if (room === r && ch && ch.api.linked && p && p.v === ch.id && p.g && typeof p.g === 'object' && ch.others.includes(from)) ch.emit('pulse', p.g, from); });
@@ -215,7 +234,7 @@ function wire(r, kind) {
 }
 
 // a change of ours to the shared state: to everyone
-const publish = entry => send({ t: 'lib-state', e: [entry] });
+const publish = entry => { trace.note('state → ' + entry[0]); send({ t: 'lib-state', e: [entry] }); };
 const snapMsg = (v, s) => ({ t: 'lib-snap', v, s: s.s, c: s.c, ...(s.a !== undefined && { a: s.a }), ...(s.p && { p: s.p }) });
 // We are looking for the room again (net/internet.js discover: our list of players is only us until the room's comes
 // back): whoever is missing from it now did not leave, so no round is over because of it.
@@ -230,6 +249,7 @@ function quitRounds(p) {
     if (s.s === null || !s.p || !s.p.includes(p) || (ch && ch.id === v && ch.was.includes(p))) continue;
     const t = { s: null, c: st.next(), a: room.me };
     snaps.set(v, t);
+    trace.note('snapshot ' + v + ': over (' + p + ' left)');
     send(snapMsg(v, t));
   }
 }
@@ -261,6 +281,7 @@ function knownEntry([k, e]) {
 function onLibMessage(m, from) {
   if (m.t === 'lib-state' && Array.isArray(m.e)) {
     const keys = st.merge(m.e.filter(e => Array.isArray(e) && knownEntry(e)));
+    if (keys.length) trace.note('state ← ' + from + ': ' + keys.join(' '));
     if (keys.includes('view')) { const v = st.get('view'); if (ID(v) && v !== shell.current()) shell.follow(v); }
     if (keys.includes('here:' + room.me)) staleHere(st.get('view'));
     if (keys.includes('wire:' + room.me)) staleWires();
@@ -286,6 +307,7 @@ function onLibMessage(m, from) {
     st.seen(m.c);
     const cur = snaps.get(m.v);
     if (cur && cur.c >= m.c) return;
+    trace.note('snapshot ' + m.v + ' ← ' + from + ': ' + (m.s === null ? 'over' : trace.size(m.s)), 'snap<' + from + m.v);
     snaps.set(m.v, { s: m.s, c: m.c, a: m.a, p: Array.isArray(m.p) && m.p.every(x => typeof x === 'string') ? m.p : undefined });   // (null: a tombstone)
     if (ch && ch.id === m.v) ch.maybeResume();
   } else if (m.t === 'lib-g' && ch && m.v === ch.id && myHere === ch.id) {
@@ -322,12 +344,14 @@ export function attachGame(id) {
   detachGame();
   ch = channel(id, Math.max(1, shell.seats(id)));
   myHere = id;
+  trace.note('game ' + id + ' open (' + ch.seats + ' seats)');
   if (room) publish(st.set('here:' + room.me, id));
   queueMicrotask(update);
   return ch.api;
 }
 export function detachGame() {
   if (!ch) return;
+  trace.note('game ' + ch.id + ' closed');
   ch.dispose();
   ch = null; myHere = null;
   if (room) publish(st.set('here:' + room.me, null));
@@ -391,7 +415,7 @@ let gapKey = '', reloading = null;
 function versionCheck() {
   if (!room) return;
   const gap = versionGap(), key = gap ? gap.key + (gap.older ? '<' : '>') : '';
-  if (key !== gapKey) { gapKey = key; changed('version'); }
+  if (key !== gapKey) { gapKey = key; trace.note('versions: ' + (key || 'the same')); changed('version'); }
   if (reloading || !gap || !gap.older) return;
   const was = session.get(RELOADED), done = new Set(Array.isArray(was) ? was : []);
   if (!rules.reloadNow(gap, { nearby: room.kind === 'nearby', playing: !!ch, done })) return;
@@ -417,6 +441,8 @@ function reload(still) {
   if (shell && shell.reload) shell.reload(still || undefined);
 }
 
+// what the trace does not tell the game's way (several a second): messages, pulses, ticks, link figures
+const BUSY = new Set(['message', 'pulse', 'tick', 'stats']);
 function channel(id, seats) {
   const handlers = new Map(), inbox = [], late = [], warned = new Set();
   let pending = null, sendTimer = null, lastSent = 0;     // the latest snapshot not sent yet (at most two a second)
@@ -424,11 +450,14 @@ function channel(id, seats) {
     id, seats, disposed: false, was: [], seen: '', weak: false, wait: '', role: null, runner: null, own: false,
     inGame: [], seated: [], waiting: [], others: [],
     emit(name, ...a) {
-      for (const fn of handlers.get(name) || []) safe(fn, ...a);
+      // (a shared value and a round to resume: only their size)
+      const told = name === 'shared' ? [a[0], trace.size(a[1])] : name === 'resume' ? [trace.size(a[0])] : a;
+      if (!BUSY.has(name)) trace.note('→ ' + id + ' ' + name + (told.length ? ' ' + trace.args(told) : ''));
+      for (const fn of handlers.get(name) || []) play(fn, ...a);
       for (let i = late.length; i--;) if (late[i][0] === name) late.splice(i, 1);   // (heard it now: nothing to replay)
     },
-    policy: name => typeof api[name] === 'function' && safe(api[name]),
-    pulseOut: now => typeof api.pulse === 'function' ? safe(api.pulse, now) : null,
+    policy: name => typeof api[name] === 'function' && play(api[name]),
+    pulseOut: now => typeof api.pulse === 'function' ? play(api.pulse, now) : null,
     receive(m, from) {
       if (!api.linked || !c.others.includes(from) || !m || typeof m !== 'object' || typeof m.t !== 'string') return;
       if (!handlers.has('message')) { if (inbox.length < 64) inbox.push([m, from]); return; }   // the game has not started listening yet
@@ -449,6 +478,7 @@ function channel(id, seats) {
       if (!room || lookingAgain() || !rules.goneForGood(was, room.players, room.me) || !snaps.has(id) || snaps.get(id).s === null) return;
       pending = { s: null, c: st.next(), a: room.me };
       snaps.set(id, pending);
+      trace.note('snapshot ' + id + ': over (a player left)');
       flush();
     },
     dispose() { handlers.clear(); inbox.length = 0; late.length = 0; c.disposed = true; clearTimeout(sendTimer); }
@@ -463,17 +493,18 @@ function channel(id, seats) {
     else for (const p of c.others) send(snapMsg(id, s), p);
   };
   // A call the game may not make now, or with this: false (on the dev server, once per reason, the console says why).
-  const refuse = why => { if (DEV && !warned.has(why)) { warned.add(why); console.warn('ihroteka.room: ' + why); } return false; };
+  const refuse = why => { trace.note('refused: ' + why); if (DEV && !warned.has(why)) { warned.add(why); console.warn('ihroteka.room: ' + why); } return false; };
   // What a game that starts listening late missed, as update() would have told it: who plays ('players'), the round
   // it runs on ('resume'), that it plays with someone ('linked'), that it waits ('weak'); then the messages kept for
   // it until it listened. One pass for every listener added meanwhile, in this order whatever order they came in.
   const replay = () => {
     const fresh = late.splice(0), to = name => fresh.filter(([n]) => n === name).map(([, fn]) => fn);
     if (c.disposed) return;
-    if (c.seen) for (const fn of to('players')) safe(fn, api.players);
+    trace.note('→ ' + id + ' listens: ' + [...new Set(fresh.map(([n]) => n))].join(' '));
+    if (c.seen) for (const fn of to('players')) play(fn, api.players);
     if (to('resume').length) c.maybeResume();
-    if (api.linked) for (const fn of to('linked')) safe(fn);
-    if (c.weak) for (const fn of to('weak')) safe(fn, true);
+    if (api.linked) for (const fn of to('linked')) play(fn);
+    if (c.weak) for (const fn of to('weak')) play(fn, true);
     if (handlers.has('message')) for (const [m, from] of inbox.splice(0)) c.emit('message', m, from);
   };
   const api = {
@@ -543,6 +574,7 @@ function channel(id, seats) {
       c.own = true;
       const v = { s: x === null ? null : JSON.parse(x), c: st.next(), a: room.me, p: c.seated.slice() };
       snaps.set(id, v);                                // (null: a tombstone)
+      trace.note('snapshot ' + id + ': ' + (x === null ? 'over' : bytes(x) + ' B'), 'snap>' + id);
       pending = v;
       if (v.s === null || performance.now() - lastSent > 500) flush();
       else if (!sendTimer) sendTimer = setTimeout(flush, 500);
@@ -550,9 +582,9 @@ function channel(id, seats) {
     },
     lag: p => !room ? 0 : p !== undefined ? room.lag(p) : c.others.reduce((m, q) => Math.max(m, room.lag(q)), 0),
     stats: p => statsOf(p !== undefined ? (room ? [p] : []) : c.others),
-    diag: () => SITE + '\n' + (room ? room.diag() : 'no room'),
-    frame: now => { if (room) room.frame(now); },
-    kick: () => { if (room) room.kick(); },
+    diag: () => report(),                              // the connection, and what happened lately (report)
+    frame: now => { if (room) room.frame(now); },     // an optional hint (now unused): while we play, the room does it itself (net/link.js tendAlive)
+    kick: () => {},                                    // nothing to do: the room checks its network by itself (kept for games that call it)
     invite: () => shell.invite()
   };
   c.api = api;
@@ -613,3 +645,13 @@ export function waitingFor() {
 }
 // nobody waits for this player any longer: their place goes
 export const release = p => { if (room) room.release(p); };
+
+/* ---------- reports ---------- */
+// What to copy into a bug report: the site's version, the connection (room.diag()) and the trace's last lines.
+export const report = () => SITE + '\n' + (room ? room.diag() : 'no room') + '\ntrace:\n' + trace.read().join('\n');
+// The game's own code, called by the library (its listeners, its policies): what it throws stops nothing else. It is
+// reported (the console, the trace), and the shell may say the game broke (shell.gameError: while it is starting).
+function play(fn, ...a) { try { return fn(...a); } catch (e) { console.error(e); gameError(e); } }
+// an error of the open game (thrown in its window, ev: the ErrorEvent; or in its listeners), or of the library's page
+export function gameError(e, ev) { trace.note('error in the game: ' + trace.error(e, ev)); if (shell && shell.gameError) safe(shell.gameError); }
+export const pageError = (e, ev) => trace.note('error on the page: ' + trace.error(e, ev));

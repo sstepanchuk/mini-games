@@ -20,7 +20,7 @@ Each scenario prints its checks (`✓`, `✗`, and `· todo` for a known bug tha
 any scenario failed.
 
 Needs Playwright with Chromium, from the project or global (`npm i -g playwright`, then `npx playwright install
-chromium`). `nearby3` opens the first game on the shelf, and `version` and `card` open Two Dragons, so they need
+chromium`). `nearby3` opens the first game on the shelf, and `version`, `card` and `crash` open Two Dragons, so they need
 the dev server with the plaintext games (`npm run unlock`): on the assembled site (`npm run dev -- site`) the games
 are locked and they fail; the others pass there too.
 
@@ -38,6 +38,7 @@ are locked and they fail; the others pass there too.
 | `card`     | the card over a game: «Чекаємо на Богдан… m:ss» built once (only the time changes, the screen reader hears only who and why, the focus stays on «Не чекати»); a new tab opening the game: «— повертається в гру», nothing to press; «Не чекати» lets his place go |
 | `version`  | a friend's copy of a game is newer (its wire): the older page reloads itself into the room, once; not seated together; the note, «Оновити» on the older page only |
 | `proto`    | a friend's library is newer (PROTO + 1, its bundle rewritten on the way): not linked; both pages say so; the older reloads itself into the room, once |
+| `crash`    | a game that throws as it starts (its page rewritten on the way): «Гра зламалася» over it, the focus on «Скопіювати звіт», which copies the report (site version, connection, trace: the error's type and place, never its message); a later error, or the library page's own, only goes into the trace; so does a ResizeObserver loop as the game starts (a browser's notice, no note), and the browser's refusal left uncaught (`NotAllowedError`, as `audio.play()` before any tap); the game's own error left rejected in a promise is a broken start |
 
 ## How they work
 

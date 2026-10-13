@@ -2,7 +2,7 @@
 // for anything here but bundling a game.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import * as esbuild from 'esbuild';
 import * as vault from '../library/crypto.js';
@@ -55,6 +55,20 @@ export function readManifest(id, dir = path.join(P.games, id)) {
   }
   for (const f of dir.startsWith(P.games) ? ['index.html', g.image] : [g.image]) if (!exists(path.join(dir, f))) problem(rel(path.join(dir, f)) + ' not found');
   return g;
+}
+
+/* ---------- a game's own tests: games/<id>/test/*.test.js (node:test), run before the game is sealed ---------- */
+// → how many test files ran (0: the game has none). Throws a Problem with their report when one fails. They run in
+// Node without the password (sealed games keep their tests in source.bin; CI never sees them, so this is the gate).
+export function testGame(id) {
+  const dir = path.join(P.games, id, 'test');
+  const files = exists(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.test.js')).sort().map(f => path.join(dir, f)) : [];
+  if (!files.length) return 0;
+  // (without the password, and as a run of its own even when the build itself runs under node --test)
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(VAULT_PASSWORDS?|NODE_TEST_CONTEXT)$/.test(k)));
+  const r = spawnSync(process.execPath, ['--test', '--test-reporter=spec', ...files], { cwd: path.join(P.games, id), env, encoding: 'utf8' });
+  if (r.status !== 0) problem('games/' + id + ': its tests fail, so it is not sealed (npm run test:games; to build anyway: npm run build -- --no-tests)\n' + (r.stdout + r.stderr).trim());
+  return files.length;
 }
 
 /* ---------- the library API (library/game-api.js), first thing in <head> ---------- */

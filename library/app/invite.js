@@ -156,10 +156,11 @@ function chip() {
     : versionGap() && !linked() ? UPDATE
     : linked() ? (room.weak ? 'Разом · зв’язок зник…' : 'Разом' + (room.players.length > 2 ? ' ' + room.players.length : '') + (s.rtt != null ? ' · ' + s.rtt + ' мс' : room.kind === 'nearby' ? ' · поруч' : ''))
     : room.kind === 'nearby' ? 'З’єднуюсь…'
-    : /unavailable|no-signal/.test(room.lastStatus) ? 'Немає інтернету' : 'Чекаю на друга…';
+    : /unavailable|no-signal/.test(room.status) ? 'Немає інтернету' : 'Чекаю на друга…';
 }
 
 /* ---------- the dialog ---------- */
+// (one for each status of the room: net/room.js STATUSES)
 const STATUS = {
   connecting: 'Під’єднуюсь…',
   unavailable: 'Не вдалося завантажити. Перевір інтернет.',
@@ -168,6 +169,9 @@ const STATUS = {
   joining: 'З’єднуюсь із другом…',
   full: 'У цій кімнаті вже немає місць.',
   'peer-left': 'Друг вийшов. Посилання діє далі — чекаю…',
+  ready: 'Ви разом.',
+  pairing: 'Поруч, без інтернету: з’єднайтеся кодами.',
+  failed: 'Не вдалося з’єднатися.',
   version: UPDATE + '.'
 };
 
@@ -205,9 +209,9 @@ function refresh(what) {
     return;
   }
   if (d.screen === 'together') { if (!linked()) closeDialog(); else if (what === 'join' || what === 'leave' || what === 'away') show('together'); else d.state.textContent = stateText(room); }
-  else if (d.screen === 'link') { if (!room || room.kind !== 'internet') show('menu'); else if (what === 'status') d.state.textContent = STATUS[room.lastStatus] || ''; }
-  else if (room && room.kind === 'nearby' && room.lastStatus === 'failed' && what === 'status') failed(room.pair);
-  else if (room && room.kind === 'nearby' && room.lastStatus === 'version' && what === 'status') otherVersion();
+  else if (d.screen === 'link') { if (!room || room.kind !== 'internet') show('menu'); else if (what === 'status') d.state.textContent = STATUS[room.status] || ''; }
+  else if (room && room.kind === 'nearby' && room.status === 'failed' && what === 'status') failed(room.pair);
+  else if (room && room.kind === 'nearby' && room.status === 'version' && what === 'status') otherVersion();
 }
 const stateText = room => { const s = room.stats(); return room.weak ? 'Зв’язок зник, відновлюю…' : s.rtt != null ? 'Пінг: ' + s.rtt + ' мс' : ''; };
 // one more player: the same link, or (nearby) a new pairing that only the room's host can make
@@ -239,7 +243,7 @@ function show(screen) {
   } else if (screen === 'link') {
     if (!room || room.kind !== 'internet') return show('menu');
     const link = shell.address(), qr = el('canvas', { className: 'qr' });
-    dlg.state = para(STATUS[room.lastStatus] || '', 'busy');
+    dlg.state = para(STATUS[room.status] || '', 'busy');
     drawQr(qr, link, 200);
     const share = navigator.share && btn('Поділитися', () => navigator.share({ title: 'Ігротека', text: 'Заходь, пограємо разом!', url: link }).catch(() => {}));
     dlg.show(el('h2', { textContent: 'Через посилання' }),

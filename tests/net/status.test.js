@@ -1,0 +1,104 @@
+// The room's status and kind (library/net/room.js, phase 2, G2): getters of the net room, one setStatus that the modes
+// call and that never says the same status twice in a row, the list of statuses (STATUSES) with a text for each in the
+// dialog (app/invite.js STATUS), no 'role' event, and a library (app/) that writes nothing onto the net room it does
+// not own (no r.kind, no r.lastStatus). Read from the source, run in Node, and in worker tabs (tests/support).
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import * as espree from 'espree';
+import { room, until, world } from '../support/world.js';
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const read = f => fs.readFileSync(path.join(REPO, f), 'utf8');
+const parse = f => espree.parse(read(f), { ecmaVersion: 'latest', sourceType: 'module', loc: true });
+function* walk(node) {
+  if (!node || typeof node.type !== 'string') return;
+  yield node;
+  for (const [k, v] of Object.entries(node)) if (k !== 'loc') for (const c of Array.isArray(v) ? v : [v]) if (c && typeof c === 'object') yield* walk(c);
+}
+// every string a value can be: 'a', or c ? 'a' : d ? 'b' : 'c'
+const leaves = n => n.type === 'Literal' ? [n.value] : n.type === 'ConditionalExpression' ? [...leaves(n.consequent), ...leaves(n.alternate)] : [null];
+const NET = ['room.js', 'link.js', 'internet.js', 'nearby.js', 'rtc.js', 'brokers.js', 'code.js', 'config.js', 'index.js'].map(f => 'library/net/' + f);
+const APP = fs.readdirSync(path.join(REPO, 'library/app')).filter(f => f.endsWith('.js')).map(f => 'library/app/' + f);
+
+// room.js in Node: config.js reads window (a session, the timing scale)
+globalThis.window ??= globalThis;
+const { STATUSES, setStatus } = await import('../../library/net/room.js');
+
+describe('the room\'s status (phase 2, G2)', () => {
+  test('setStatus: only a known status; never the same one twice in a row; alone, another version says \'version\', not \'waiting\'', () => {
+    const heard = [], N = { status: '', mismatch: null, linked: false, emit: (e, s) => heard.push(e + ' ' + s) };
+    for (const s of ['connecting', 'connecting', 'waiting', 'ready', 'ready', 'peer-left']) setStatus(N, s);
+    assert.deepEqual(heard, ['status connecting', 'status waiting', 'status ready', 'status peer-left']);
+    assert.throws(() => setStatus(N, 'sleepy'), /not a status/);
+    N.mismatch = 2;
+    setStatus(N, 'waiting');
+    setStatus(N, 'waiting');
+    assert.deepEqual(heard.slice(4), ['status version'], 'once');
+    N.linked = true;
+    setStatus(N, 'ready');
+    assert.equal(N.status, 'ready');
+  });
+
+  test('every status a mode sets is in STATUSES, each one in STATUSES is set somewhere, and only through setStatus', () => {
+    const set = new Set();
+    for (const f of NET) for (const n of walk(parse(f))) {
+      if (n.type !== 'CallExpression') continue;
+      const c = n.callee, a = n.arguments;
+      if (c.type === 'Identifier' && c.name === 'setStatus') for (const v of leaves(a[1])) {
+        assert.ok(STATUSES.includes(v), f + ':' + n.loc.start.line + ': setStatus with ' + v + ', not one of STATUSES');
+        set.add(v);
+      }
+      if (c.type === 'MemberExpression' && c.property.name === 'emit' && a[0]?.type === 'Literal') {
+        assert.ok(a[0].value !== 'status' || (f.endsWith('room.js') && a[1]?.type === 'Identifier'), f + ':' + n.loc.start.line + ': a status said without setStatus');
+        assert.notEqual(a[0].value, 'role', f + ':' + n.loc.start.line + ': the net room has no \'role\' event any more');
+      }
+    }
+    assert.deepEqual([...set].sort(), [...STATUSES].sort(), 'statuses nobody sets (or set and not listed)');
+  });
+
+  test('the dialog has a text for each status (invite.js STATUS)', () => {
+    const decl = [...walk(parse('library/app/invite.js'))].find(n => n.type === 'VariableDeclarator' && n.id.name === 'STATUS');
+    assert.ok(decl && decl.init.type === 'ObjectExpression', 'const STATUS = { … } in invite.js');
+    const keys = decl.init.properties.map(p => p.key.type === 'Identifier' ? p.key.name : p.key.value);
+    assert.deepEqual(keys.sort(), [...STATUSES].sort());
+  });
+
+  test('the library writes nothing onto the net room but its policies (streaming, pulse, playing): no r.kind, no r.lastStatus', () => {
+    for (const f of APP) for (const n of walk(parse(f))) {
+      if (n.type !== 'AssignmentExpression' || n.left.type !== 'MemberExpression' || n.left.computed) continue;
+      const o = n.left.object, k = n.left.property.name;      // (the net room: r or room in app/)
+      if (o.type === 'Identifier' && (o.name === 'r' || o.name === 'room')) assert.ok(['streaming', 'pulse', 'playing'].includes(k), f + ':' + n.loc.start.line + ': writes room.' + k);
+    }
+    for (const f of APP) assert.doesNotMatch(read(f), /\blastStatus\b/, f);
+  });
+
+  test('in tabs: room.kind and room.status are getters; status is the last one heard; the library\'s state says the same', { timeout: 30000 }, async t => {
+    const W = world(t, { rtc: true });
+    const [A, B] = await room(W, 'stat1', ['Аня', 'Богдан']);
+    const st = async T => { const s = await T.state(), ev = (await T.events()).filter(e => e[1] === 'status').map(e => e[2]); return { s, ev }; };
+    for (const T of [A, B]) {
+      const { s, ev } = await st(T);
+      assert.equal(s.kind, 'internet');
+      assert.equal(s.status, 'ready');
+      assert.equal(ev.at(-1), s.status);
+      assert.ok(ev.every((x, i) => i === 0 || x !== ev[i - 1]), 'never the same twice in a row: ' + ev);
+    }
+    const C = await W.tab('p3tab');
+    await C.near('Сава');
+    assert.ok(await until(async () => (await C.state()).status === 'pairing', 3000));
+    assert.equal((await C.state()).kind, 'nearby');
+    const own = await C.call('roomProps');
+    assert.deepEqual([own.kind, own.status], ['get', 'get'], 'getters: ' + JSON.stringify(own));
+    const L = await W.tab('p4tab');
+    await L.lib('stat2', 'Дана');
+    assert.ok(await until(async () => (await L.state()).status === 'waiting', 5000));
+    const s = await L.state();
+    assert.equal(s.lib.status, 'waiting', 'together.js state() reads room.status');
+    assert.equal(s.lib.kind, 'internet');
+    const props = await L.call('roomProps');
+    assert.ok(!('lastStatus' in props) && props.kind === 'get', 'nothing written onto the net room: ' + JSON.stringify(props));
+  });
+});

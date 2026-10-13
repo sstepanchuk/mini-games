@@ -5,7 +5,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import * as vault from '../library/crypto.js';
 import * as repo from './repo.js';
-import { readManifest, bundleGame, buildSite, checkVault } from './build.js';
+import { readManifest, bundleGame, buildSite, checkVault, testGame } from './build.js';
 import { serve } from './dev.js';
 
 const { P, rel, exists, problem } = repo;
@@ -38,7 +38,8 @@ const HELP = `Library commands
   npm run unlock [-- --force]    decrypt game sources into games/ (--force: overwrite local changes)
   npm run dev [-- site] [port]   the library with your games/ (or the built site/), on this computer only
                                  (--lan: also to your network; with games/ that serves plaintext games)
-  npm run build                  bundle and encrypt the games into vault/, then assemble site/
+  npm run build [-- --no-tests]  run each game's own tests (games/<id>/test/*.test.js), then bundle and encrypt
+                                 the games into vault/ and assemble site/ (--no-tests: build without running them)
   npm run site                   assemble site/ from library/ and vault/ (no password; CI does this)
   npm run check                  validate vault/ (no password needed)
 
@@ -90,11 +91,16 @@ const commands = {
     }
   },
 
-  async build() {
+  async build(...flags) {
+    const bad = flags.filter(f => f !== '--no-tests');
+    if (bad.length) problem('Unknown option: ' + bad.join(' ') + '. See: node tools/cli.js help');
     const ids = repo.gameIds(), missing = repo.vaultIds().filter(id => !ids.includes(id));
     if (missing.length) problem('games/' + missing.join(', games/') + ' missing. Run npm run unlock, or remove the game: node tools/cli.js remove-game ' + missing[0]);
     if (!ids.length) problem('No games in games/.');
     const games = ids.map(id => [id, readManifest(id)]);                 // validate everything before asking for the password
+    // a game whose own tests fail is not sealed (CI cannot see sealed games: this is their only gate)
+    if (flags.includes('--no-tests')) console.log('! games\' own tests skipped (--no-tests)');
+    else for (const [id] of games) { const n = testGame(id); if (n) console.log('✓ ' + id + ': its tests pass (' + n + ' file' + (n > 1 ? 's' : '') + ')'); }
     const lib = await signIn();
     for (const [id, g] of games) {
       const html = await bundleGame(id, g);

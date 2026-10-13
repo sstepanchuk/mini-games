@@ -345,7 +345,7 @@ describe('a round\'s snapshot', { concurrency: 3 }, () => {
     // here); six hellos unanswered, and he looks for the room again (internet.js discover: role null; before phase 1b
     // his list was then only him, now every place stays)
     await B.net({ up: false });
-    assert.ok(await until(async () => (await B.events()).some(e => e[1] === 'role' && e[2] === null), 20000, 100), 'Богдан started over');
+    assert.ok(await until(async () => (await B.state()).role === null, 20000, 50), 'Богдан started over');
     await B.net({ up: true });
     assert.ok(await until(async () => { const s = await B.state(); return s.linked && s.players.length === 3; }, 15000, 100), 'Богдан is back');
     await sleep(1000);

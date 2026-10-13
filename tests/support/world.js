@@ -12,7 +12,7 @@
 //                                          false, A.snapshot(s), A.share(k, v) …;
 //                                          A.near(name): a nearby one (rtc), paired with A.pair('offer' | 'answer' | 'finish', code)
 //   await A.state(), A.events(), A.got(), A.net({ up: false }), A.send(m, opts, then), A.release(n), A.lag(n), A.leave(), A.kill(),
-//   A.listeners() …
+//   A.listeners(), A.timers() …
 //   await until(async () => …, ms)         poll a condition (truthy → it; deadline → false)
 //   const S = W.spy()                      S.seen: [{ topic, url, m }]; S.publish(topic, m, session): to every broker
 //   await room(W, code, names, o)          tabs for these players, linked one after another and settled
@@ -69,9 +69,10 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
   let urls = null;
   const W = {
     bus,
-    /** a new tab; net: fakenet switches to start with; library: another library/ folder to run (an older version) */
-    async tab(pid, net = {}, { library } = {}) {
-      const w = new Worker(TAB, { workerData: { pid, bus, scale, brokerMs, rtc, net, library } });
+    /** a new tab; net: fakenet switches to start with; library: another library/ folder to run (an older version);
+     *  dev: the page is the dev server's (together.js warns in its console) */
+    async tab(pid, net = {}, { library, dev } = {}) {
+      const w = new Worker(TAB, { workerData: { pid, bus, scale, brokerMs, rtc, net, library, dev } });
       const waits = new Map();
       let n = 0, dead = null;
       const ready = new Promise((res, rej) => {
@@ -106,12 +107,14 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
         leave: final => call('leave', { final }),
         net: o => call('net', o),
         errors: () => call('errors'),
+        takeErrors: () => call('takeErrors'),              // its errors (console.error and .warn too) so far, then forgotten
         open: id => call('open', { id }),
         game: () => call('game'),
         gsend: (m, opts) => call('gsend', { m, opts }),
         snapshot: s => call('gsnapshot', { s }),
         share: (k, v) => call('gshare', { k, v }),
         shared: k => call('gshared', { k }),
+        diag: () => call('gdiag'),                         // the game's room.diag() (the connection, then the trace)
         info: (code, game) => call('info', { code, game }),
         killDc: () => call('killDc'),
         hide: on => call('hide', { on }),                  // the page hidden (a locked phone) or shown again
@@ -120,6 +123,7 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
         stored: k => call('stored', { k }),                // sessionStorage[k] (JSON), as the next page would find it
         freeze: ms => call('freeze', { ms }),              // the tab stops for ms (→ when it runs again, on the clock of its events)
         listeners: () => call('listeners'),                // the page's listeners on window and document now: { 'window:pagehide': 1, … }
+        timers: () => call('timers'),                      // the page's intervals that run now, by period: { '200': 1, … }
         kick: () => call('kick'),
         // the tab is killed (a crash, a phone that dies): nothing more goes out
         kill: () => w.terminate(),

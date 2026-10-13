@@ -1,6 +1,7 @@
 // Rooms for up to 8 players. No server of our own: players meet through public MQTT brokers
 // (internet rooms) or by showing each other a code (nearby rooms, no internet), and play over a direct
-// WebRTC link whenever one works. Both kinds of room have the same API; see README.md ("Multiplayer").
+// WebRTC link whenever one works. Both kinds of room have the same API (room.js, newRoom: the room object); what
+// games see of it is the library's (app/together.js), see README.md ("Game API").
 import { loadTransport } from './brokers.js';
 
 export { hasInternet } from './brokers.js';

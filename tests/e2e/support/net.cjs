@@ -35,7 +35,7 @@ async function netPage(ctx, pid, label, opt) {
 }
 // Join a room on that page: window.R is the room, got its messages ('<from>:<t><n>'), ev its events in order
 // ('<event> <arg> <arg>').
-const EVENTS = ['linked', 'join', 'leave', 'relinked', 'away', 'replaced', 'peer-gone', 'role'];
+const EVENTS = ['linked', 'join', 'leave', 'relinked', 'away', 'replaced', 'peer-gone'];
 const join = (p, code, name) => p.evaluate(({ code, name, EVENTS }) => {
   const R = window.R = NET.joinRoom({ game: 'test', code, name }), got = window.got = [], ev = window.ev = [];
   R.on('message', (m, from) => got.push(from + ':' + m.t + (m.n ?? '')));

@@ -68,7 +68,7 @@
 import { me, PROTO, pvOf, SENDER, TIMING } from './config.js';
 import { closeRtc, dcLive, openChannels, wireDc } from './rtc.js';
 import { ANSWER, OFFER, candidates, decode, describe, encode } from './code.js';
-import { dropMember, guestMembers, linkedPeers, markLinked, memberOf, NAME, newPeer, newRoom, otherVersion, renamePeer, seatMember, setRole,
+import { dropMember, guestMembers, linkedPeers, markLinked, memberOf, NAME, newPeer, newRoom, otherVersion, renamePeer, seatMember, setStatus,
   startWatch, stop, unlink, validWire } from './room.js';
 import { send, setWeak } from './link.js';
 
@@ -139,7 +139,7 @@ export function joinNearby({ game, name, max }) {
     if (N.role === 'host' || !Q.said) say(Q, why);
     if (Q === P) { stop(N, 'failTimer'); note('refused: ' + why); P = null; }
     pair.reason = why;
-    N.emit('status', 'failed');
+    setStatus(N, 'failed');
     setTimeout(() => unlink(Q), REFUSED_MS);         // (our _h on its way first)
   }
   // We slept longer than places are kept: the others have let us go by now (and our links are likely dead). They are
@@ -178,7 +178,7 @@ export function joinNearby({ game, name, max }) {
       if (Q.pc !== pc || pc.connectionState !== 'failed' || N.peers.get(Q.id) !== Q) return;
       if (Q.linked) broke(N, Q); else fail(N, Q, pair, note);   // linked: away from now on (see the top)
     };
-    if (N.role !== role) setRole(N, role);
+    N.role = role;
     return pc;
   };
   const sample = async (Q, pc) => {
@@ -209,7 +209,7 @@ export function joinNearby({ game, name, max }) {
     return d.sdp;
   };
   const connecting = (Q, ms) => {
-    N.emit('status', 'connecting');
+    setStatus(N, 'connecting');
     stop(N, 'failTimer');
     N.failTimer = setTimeout(() => { if (Q === P && !Q.linked && !N.closed) fail(N, Q, pair, note); }, ms);
   };
@@ -246,7 +246,7 @@ export function joinNearby({ game, name, max }) {
       connecting(Q, CONNECT_MS);
     }
   });
-  queueMicrotask(() => { if (!N.closed) N.emit('status', 'pairing'); });
+  queueMicrotask(() => { if (!N.closed) setStatus(N, 'pairing'); });
   return room;
 }
 
@@ -271,7 +271,7 @@ async function fail(N, P, pair, note) {
   if (N.closed || P.linked) return;                    // linked (or left) meanwhile
   note('failed: ' + pair.reason);
   closeRtc(P);
-  N.emit('status', 'failed');
+  setStatus(N, 'failed');
 }
 
 // what the browser tried: "host 192.168.0.5 → host 192.168.0.7 in-progress, sent 9/answered 0, got 0/answered 0"
@@ -295,7 +295,7 @@ function ended(N, P, final) {
   if (final && N.role === 'host') dropMember(N, P.name);
   else unlink(P);
   if (P.id === N.host) N.host = null;                  // the host is gone: there is no one to pass anything on
-  if (!N.linked) N.emit('status', 'peer-left');
+  if (!N.linked) setStatus(N, 'peer-left');
 }
 // The direct link broke (it failed, the other tab closed or reloaded: a bye that keeps the place, or it cannot be
 // hearing us: restart): it cannot come back by itself. The link stays, carrying nothing (link.js send); its player goes
@@ -319,6 +319,6 @@ function adopt(N, wire) {
 function movedOut(N, Q) {
   if (Q.id !== N.host || N.role !== 'guest') { broke(N, Q); return; }
   N.shut(false, true);
-  setRole(N, 'out');
+  N.role = 'out';
   N.emit('replaced');
 }

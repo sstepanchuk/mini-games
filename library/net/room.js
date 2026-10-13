@@ -36,7 +36,7 @@
 // session holds its place. The new session is seated before the old link goes (unlink, quiet), so nobody hears the
 // player leave or the room fall apart for a moment.
 //
-// Roles (N.role; the 'role' event tells the game each change):
+// Roles (N.role, room.role; the library reads it when it needs it, there is no event for it):
 //   null     looking for the room: internet, asking 'who'; nearby, before pairing
 //   'host'   holds the room. Internet: nobody answered 'who' (or, still looking, we heard a 'who' from a greater
 //            session), or our host is gone and we are the first player here (hostGone). Nearby: pair.offer().
@@ -50,7 +50,7 @@
 // kind: null → 'host' or null → 'guest', and pairing again keeps it; any → 'out'.
 import { me, PROTO, pvOf, TIMING } from './config.js';
 import { closeRtc } from './rtc.js';
-import { deliver, diag, keepDirectAlive, kick, lag, refresh, resetPaths, send, stats, watch, wire } from './link.js';
+import { deliver, diag, keepDirectAlive, kick, lag, refresh, resetPaths, send, stats, tendAlive, watch, wire } from './link.js';
 
 // Messages of the link and the room itself: p (pulse), q (ping answer), ak (acknowledgement), bye; and _r (the
 // players), _h (nearby hello), _x (a guest asks the host to let a player's place go). room.send refuses them, with a
@@ -58,6 +58,21 @@ import { deliver, diag, keepDirectAlive, kick, lag, refresh, resetPaths, send, s
 // start with '_' and be none of these. (The library wraps each game's messages in its own, 'lib-g', so a game may
 // use any t. Every message, both modes: internet.js and nearby.js, at the top.)
 const RESERVED = new Set(['p', 'q', 'ak', 'bye']);
+// The room's status (room.status, event 'status'): what the dialog says while nobody plays with us yet. Each one the
+// modes set (setStatus), and the library has a text for each (app/invite.js STATUS).
+export const STATUSES = Object.freeze([
+  'connecting',                                        // internet: on the way to the brokers and the room; nearby: a pairing links
+  'unavailable',                                       // internet: the brokers' client could not be loaded (no internet at all)
+  'no-signal',                                         // internet: no broker answers (alone: when linked, 'weak' says it)
+  'waiting',                                           // internet: we hold the room, alone: friends find it by its code
+  'joining',                                           // internet: a host answered, we say hello to it
+  'full',                                              // internet: no place left for us (we look again in 2 s)
+  'pairing',                                           // nearby: a new room, to pair by codes
+  'failed',                                            // nearby: a pairing did not link (room.pair.reason says why)
+  'ready',                                             // both: a link works (someone else is here)
+  'peer-left',                                         // both: the last link ended; we are alone (every place stays)
+  'version'                                            // both: another library version on our code, or pairing with us (PROTO)
+]);
 export const MAX_PLAYERS = 8;
 export const HOLD = TIMING.HOLD;                       // how long a player who dropped out keeps their place
 export const NAME = /^\S(?:.{0,22}\S)?$/u;             // a name: 1 to 24 characters, no spaces around
@@ -97,8 +112,8 @@ export const NAME = /^\S(?:.{0,22}\S)?$/u;             // a name: 1 to 24 charac
  *   releaseHost()        a guest's room.release(n) for its own host (internet: hostGone, the host's place goes)
  *   onDirect(P, open)    rtc.js: P's direct channels both opened (true), or one closed (false) (nearby: say _h)
  *   onHello(P, m)        rtc.js, rooms without brokers: an _h on a direct link that does not count yet
- * Also on N, from newRoom for link.js, rtc.js and the mode (not the mode's): emit, streaming(), pulse(now), refresh(P),
- * arrive(P, m, reliable), roomStats(), shut(final, out).
+ * Also on N, from newRoom for link.js, rtc.js and the mode (not the mode's): emit, streaming(), playing(), pulse(now),
+ * refresh(P), arrive(P, m, reliable), roomStats(), shut(final, out).
  */
 const REQUIRED = ['peerGone', 'restart', 'byeFrom'], BROKER_HOOKS = ['onConnected', 'onMessage', 'onDown'];
 const HOOKS = [...REQUIRED, ...BROKER_HOOKS, 'close', 'bye', 'onUnlink', 'probe', 'hubCheck', 'longSleep', 'releaseHost', 'onDirect', 'onHello'];
@@ -120,7 +135,7 @@ function modeHooks(mode, relay) {
  * @property {number} lostAfter      HOLD: a link silent this long is gone (and so are we, to the others, after a sleep this long)
  * @property {boolean} closed        we left, or another tab took our place: nothing goes out any more
  * @property {Function} emit         (event, ...args): to the room's listeners
- * @property {string} status         the status the listeners last heard ('' before the first)
+ * @property {string} status         the status the listeners last heard ('' before the first; setStatus)
  * @property {?number} mismatch      another library version we met (config.js PROTO), until we link with someone or
  *                                   it is not heard for TIMING.VERSION (otherVersion)
  * Brokers (internet rooms, brokers.js):
@@ -154,6 +169,7 @@ function modeHooks(mode, relay) {
  * @property {boolean} linked        someone else is here and we hear each other
  * @property {boolean} weak          someone linked went quiet: the game pauses
  * @property {boolean} statsDue      a 'stats' event is due at the next tick
+ * @property {boolean} budgetSaid    the room said 'budget' (fast messages waited for the relay budget, link.js): once
  * Watchdog (link.js):
  * @property {number} lastWatch      its last tick
  * @property {number} watchMs        its pace now: 200 ms while linked, 1000 not
@@ -165,6 +181,7 @@ function modeHooks(mode, relay) {
  * @property {*} failTimer           internet: no broker within 6 s; nearby: the pairing under way gives up
  * @property {*} fullTimer           internet: the room was full, look again
  * @property {*} watchTimer          the watchdog
+ * @property {*} aliveTimer          while a game is played here: a quiet direct link is asked about at once (link.js tendAlive)
  * @property {*} versionTimer        another library version is forgotten (otherVersion)
  */
 
@@ -196,7 +213,10 @@ function modeHooks(mode, relay) {
  * @property {Array} q               messages waiting to go through the brokers (one 'd' per flush)
  * @property {Map} qLatest           stream → the newest 'latest' message waiting for the brokers
  * @property {number} relayAt        when the 'latest' streams last went through the brokers
- * @property {*} qTimer              the next flush of qLatest
+ * @property {number} qFast          fast messages (not 'latest') waiting in q; fastAt: when such ones last went (the relay budget)
+ * @property {number} fastAt
+ * @property {*} qTimer              the next flush (qDue: when)
+ * @property {number} qDue
  * @property {*} ackTimer            an 'ak', due
  * @property {number} pingAt         when the last pulse went
  * @property {number} pN             pulses sent (every 6th through the brokers too)
@@ -255,11 +275,11 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
     // our role, the host's session (when we are a guest), the links (session → peer), the players
     // ({ n: name, s: session, a: away since, 0 while here }, in the order they came; ours has s = me)
     role: null, host: null, peers: new Map(), members: [{ n: name, s: me, a: 0 }], sent: '', told: [], cutAt: 0, ever: false,
-    linked: false, weak: false, statsDue: false, strangers: new Map(), yieldUntil: 0, status: '', mismatch: null,
+    linked: false, weak: false, statsDue: false, budgetSaid: false, strangers: new Map(), yieldUntil: 0, status: '', mismatch: null,
     // the watchdog (link.js)
     lastWatch: 0, watchMs: 0, graceUntil: 0,
     // timers
-    whoTimer: null, annTimer: null, helloTimer: null, failTimer: null, fullTimer: null, watchTimer: null, versionTimer: null
+    whoTimer: null, annTimer: null, helloTimer: null, failTimer: null, fullTimer: null, watchTimer: null, versionTimer: null, aliveTimer: null
   };
 
   const room = {
@@ -275,11 +295,14 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
     get weak() { return N.weak; },                     // someone linked went quiet
     get direct() { const l = linkedPeers(N); return l.length > 0 && l.every(P => P.via === 'p2p'); },
     get nearby() { return !relay; },                   // a nearby room (no internet involved)
+    get kind() { return relay ? 'internet' : 'nearby'; },
+    get status() { return N.status; },                 // the last status the listeners heard (STATUSES; '' before the first)
     // a broker answers us: connected and heard lately (it echoes us every 5 s); a nearby room has none: always
     get online() { const t = performance.now(); return !relay || N.clients.some(c => c && c._ok && t - c._rx < 7000); },
-    // The game's policy (replace these functions):
+    // The policies of whoever plays on the room (the library sets them for the open game; replace these functions):
     streaming: () => false,                            // the host streams state every frame (a direct link counts as dead sooner)
     pulse: null,                                       // (now) => object: extra fields for the pulse sent 5 times a second
+    playing: () => false,                              // a game is being played here: the room watches its direct links closely (link.js tendAlive)
     // another library version that we met (config.js PROTO): its number, until we link with someone or it is not
     // heard for a while (otherVersion); else null
     get versionMismatch() { return N.mismatch; },
@@ -297,8 +320,9 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
     lag: n => pick(N, n, lag, Math.max, 0),            // one-way delay estimate, ms (to one player, or the slowest)
     stats: n => roomStats(N, n),                       // { rtt, peerRtt, direct, relayed, turn, weak }
     diag: () => diag(N),                               // multi-line connection report
-    frame: now => keepDirectAlive(N, now),             // optional, every animation frame: notices a silent direct link sooner
-    kick: () => kick(N),                               // the network changed or the page became visible
+    frame: () => keepDirectAlive(N),                   // optional, every animation frame (while playing the room does it itself: tendAlive)
+    kick: () => kick(N),                               // the network may have changed: check the brokers now (the room does it itself
+                                                       //   when the page is shown, the browser is online again or its network changes)
     // Final (default): we left for good, our place goes. Not final: as if the tab closed, our place is kept
     // (this player goes on in another tab or device).
     leave(final = true) {
@@ -314,7 +338,7 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
     if (N.closed) return;
     N.closed = true; N.linked = false; N.weak = false;
     N.close(final, out);
-    stop(N, 'watchTimer', 'versionTimer');
+    stop(N, 'watchTimer', 'versionTimer', 'aliveTimer');
     for (const P of N.peers.values()) { P.linked = false; closePeer(P); }
     N.peers.clear();
     removeEventListener('pagehide', onPageHide);
@@ -322,17 +346,9 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
     removeEventListener('pageshow', onShow);
   };
   Object.assign(N, {
-    // The room's status as the listeners last heard it (N.status). A room alone, while a player of another library
-    // version is on its code (otherVersion), says 'version' instead of 'waiting': what the players need to know is
-    // that one of them must update the page.
-    emit(e, ...a) {
-      if (e === 'status') {
-        if (a[0] === 'waiting' && N.mismatch !== null && !N.linked) { if (N.status === 'version') return; a = ['version']; }
-        N.status = a[0];
-      }
-      ev.emit(e, ...a);
-    },
+    emit: ev.emit,
     streaming: () => safe(room.streaming),
+    playing: () => safe(room.playing),
     pulse: now => { try { return room.pulse && room.pulse(now); } catch (e) { console.error(e); return null; } },
     refresh: P => { refresh(P); N.statsDue = true; },
     arrive: (P, m, reliable) => arrive(N, P, m, reliable),
@@ -347,8 +363,9 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
     try { N.bye(); } catch (e) {}
   };
   addEventListener('pagehide', onPageHide);
-  // back on screen (a background tab may have been throttled to a timer a second, too little to count as sleep)
-  const onShow = () => { if (!document.hidden) kick(N); };
+  // back on screen (a background tab may have been throttled to a timer a second, too little to count as sleep); and
+  // out of sight: no watching the direct link closely (tendAlive)
+  const onShow = () => { tendAlive(N); if (!document.hidden) kick(N); };
   document.addEventListener('visibilitychange', onShow);
   addEventListener('pageshow', onShow);
   return { N, room };
@@ -365,7 +382,7 @@ export function newPeer(N, id, name = '') {
     // brokers: whether we listen to their mailbox, which brokers bring their data first, which bring ours to them
     heard: false, win: [], peerBest: [], peerBestAt: -1e9,
     // paths, numbering and ping (link.js)
-    via: 'relay', viaAt: 0, q: [], qLatest: new Map(), relayAt: 0, qTimer: null, ackTimer: null, pingAt: 0, pN: 0, nudged: 0,
+    via: 'relay', viaAt: 0, q: [], qLatest: new Map(), relayAt: 0, qFast: 0, fastAt: 0, qTimer: null, qDue: 0, ackTimer: null, pingAt: 0, pN: 0, nudged: 0,
     // direct link (rtc.js)
     pc: null, dcF: null, dcC: null, dcSeen: 0, dcBorn: 0, iceQ: [], rtcK: null, rtcNext: 0, rtcTries: 0, rtcTimer: null,
     turn: null, cand: '', iceRtt: null, statsAt: 0, failing: false
@@ -382,7 +399,7 @@ export function renamePeer(N, P, id) {
 }
 export function closePeer(P) {
   stop(P, 'qTimer'); stop(P, 'ackTimer');
-  P.q = []; P.qLatest.clear();
+  P.q = []; P.qLatest.clear(); P.qFast = 0;
   closeRtc(P);
 }
 
@@ -395,14 +412,13 @@ export function otherVersion(N, m) {
   const v = pvOf(m);
   if (v === PROTO) return false;
   if (v !== null && !N.closed) {
-    const was = N.mismatch;
     N.mismatch = v;
     stop(N, 'versionTimer');
     N.versionTimer = setTimeout(() => {
       N.versionTimer = null; N.mismatch = null;
-      if (!N.closed && N.relay && !N.linked && N.status === 'version' && N.role === 'host') N.emit('status', 'waiting');
+      if (!N.closed && N.relay && !N.linked && N.status === 'version' && N.role === 'host') setStatus(N, 'waiting');
     }, TIMING.VERSION);
-    if (v !== was || N.status !== 'version') N.emit('status', 'version');
+    setStatus(N, 'version');
   }
   return true;
 }
@@ -415,7 +431,7 @@ export function markLinked(P) {
   P.weak = false; P.weakAt = 0; P.rtcTries = 0; P.rtcNext = performance.now() + 300;
   resetPaths(P);
   if (N.watchTimer) startWatch(N);                     // at full pace from now on
-  N.emit('status', 'ready');
+  setStatus(N, 'ready');
   N.refresh(P);
   if (first) N.emit('linked');
   presence(N);
@@ -604,9 +620,15 @@ export function startWatch(N) {
   N.watchTimer = setInterval(() => { watch(N); if (!N.closed && pace(N) !== N.watchMs) startWatch(N); }, N.watchMs);
 }
 
-export function setRole(N, role) {
-  N.role = role;
-  N.emit('role', role);
+// The room's status changes (STATUSES): the listeners hear it once, never the same one twice in a row. A room alone,
+// while a player of another library version is on its code (otherVersion), says 'version' instead of 'waiting': what
+// the players need to know is that one of them must update the page.
+export function setStatus(N, s) {
+  if (!STATUSES.includes(s)) throw new Error('room: not a status: ' + s);
+  if (s === 'waiting' && N.mismatch !== null && !N.linked) s = 'version';
+  if (s === N.status) return;
+  N.status = s;
+  N.emit('status', s);
 }
 
 // A tiny event emitter. A throwing listener is reported and does not stop the others

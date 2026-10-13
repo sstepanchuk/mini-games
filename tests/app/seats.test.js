@@ -22,7 +22,8 @@ describe('a game\'s room: following, seats, messages, a new tab, shared values',
     const W = world(t);
     const [A, B, C] = await room(W, 'seat1', ['Аня', 'Богдан', 'Сава'], { lib: {} });
     await A.open('g');
-    const g = await until(async () => { const x = await games([A, B, C]); return x.every(y => y && y.view === 'g') && x[0].linked && x[1].linked && !x[2].linked && x; }, 5000);
+    // (and everyone has heard that Сава opened it too: who waits comes a moment after who plays)
+    const g = await until(async () => { const x = await games([A, B, C]); return x.every(y => y && y.view === 'g' && y.waiting.join() === 'Сава') && x[0].linked && x[1].linked && !x[2].linked && x; }, 5000);
     assert.ok(g, JSON.stringify((await games([A, B, C])).map(seats)));
     assert.deepEqual(g.map(seats), [['Аня', 'host', 'Аня,Богдан', 'Сава', true], ['Богдан', 'guest', 'Аня,Богдан', 'Сава', true], ['Сава', null, 'Аня,Богдан', 'Сава', false]]);
     assert.deepEqual(g.map(x => x.follows), [[], ['g'], ['g']], 'Богдан and Сава followed Аня');

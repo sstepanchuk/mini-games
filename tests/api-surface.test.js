@@ -38,7 +38,8 @@ const isCall = (n, obj, prop) => n.type === 'CallExpression' && n.callee.type ==
 /* ---------- window.ihroteka: shell.js api() returns Object.freeze({ … }) ---------- */
 function ihroteka() {
   const fn = find(parse('library/app/shell.js'), n => n.type === 'FunctionDeclaration' && n.id.name === 'api', 'function api() in library/app/shell.js');
-  const ret = find(fn.body, n => n.type === 'ReturnStatement', 'its return');
+  const ret = fn.body.body.find(n => n.type === 'ReturnStatement');   // (its own: not one of a listener inside it)
+  assert.ok(ret && ret.argument, 'shell.js api() returns something');
   assert.ok(isCall(ret.argument, ['Object'], 'freeze') && ret.argument.arguments[0].type === 'ObjectExpression', 'shell.js api() returns Object.freeze({ … })');
   const props = ret.argument.arguments[0].properties, by = Object.fromEntries(props.map(p => [keyOf(p, 'ihroteka'), p.value]));
   const game = by.game;
@@ -166,4 +167,11 @@ test('README "Game API" names every member and event', () => {
   for (const k of Object.values(SNAP.room).flat()) has(new RegExp('room\\.' + esc(k) + '(?![\\w-])'), 'room.' + k);
   for (const e of SNAP.events) has(new RegExp("\\.on\\('" + esc(e) + "'"), ".on('" + e + "', …)");
   assert.deepEqual(missing, [], 'missing from README "Game API"');
+});
+
+test('the notes name members of ihroteka.room; kick does nothing (phase 2, H1: the room checks its network itself)', () => {
+  const { surface, nodes } = room();
+  for (const k of Object.keys(SNAP.notes || {})) assert.ok(Object.values(surface).flat().includes(k), 'tests/api-surface.json "notes": no member ' + k);
+  const kick = nodes.kick?.value;
+  assert.ok(kick && FN.has(kick.type) && kick.body.type === 'BlockStatement' && kick.body.body.length === 0, 'room.kick is () => {}');
 });

@@ -75,7 +75,7 @@ import { closeBrokers, loadTransport, mailbox, openBrokers, pubOn } from './brok
 import { onRtc } from './rtc.js';
 import { deliver, resetPaths, setWeak } from './link.js';
 import { closePeer, dropMember, guestMembers, hostPeer, linkedPeers, markLinked, memberOf, NAME, newPeer, newRoom,
-  otherVersion, presence, seatMember, setRole, startWatch, stop, unlink } from './room.js';
+  otherVersion, presence, seatMember, setStatus, startWatch, stop, unlink } from './room.js';
 
 const ANNOUNCE = 2500, ANNOUNCE_LINKED = 4;            // the host says it is here every 2.5 s, every 10 s with guests
 
@@ -116,12 +116,12 @@ export function joinRoom({ game, code, name, max }) {
   (async () => {
     await null;                                        // let the caller subscribe to events first
     if (N.closed) return;
-    N.emit('status', 'connecting');
-    try { await loadTransport(); } catch (e) { if (!N.closed) N.emit('status', 'unavailable'); return; }
+    setStatus(N, 'connecting');
+    try { await loadTransport(); } catch (e) { if (!N.closed) setStatus(N, 'unavailable'); return; }
     N.topic = await roomTopic(game, code);
     if (N.closed) return;
     openBrokers(N);
-    N.failTimer = setTimeout(() => { if (!N.closed && !N.ready) N.emit('status', 'no-signal'); }, 6000);
+    N.failTimer = setTimeout(() => { if (!N.closed && !N.ready) setStatus(N, 'no-signal'); }, 6000);
     startWatch(N);
   })();
   return room;
@@ -145,7 +145,7 @@ function signal(N) {
   if (up === N.up) return;
   N.up = up;
   if (N.closed || N.linked || !N.ready) return;
-  N.emit('status', !up ? 'no-signal' : N.role === 'host' ? 'waiting' : N.role === 'guest' ? 'joining' : 'connecting');
+  setStatus(N, !up ? 'no-signal' : N.role === 'host' ? 'waiting' : N.role === 'guest' ? 'joining' : 'connecting');
 }
 
 // a broker just connected: bring it up to date with what is going on in the room
@@ -197,7 +197,7 @@ function onMessage(N, m, c) {
     }
     case 'full':
       if (N.linked || N.role === 'host' || N.role === 'out') break;
-      N.emit('status', 'full');
+      setStatus(N, 'full');
       stop(N, 'whoTimer', 'helloTimer', 'fullTimer');
       N.fullTimer = setTimeout(() => { if (!N.closed && !N.linked) discover(N); }, 2000);
       break;
@@ -296,7 +296,7 @@ function stranger(N, from) {
 function discover(N) {
   stop(N, 'whoTimer', 'annTimer', 'helloTimer');
   dropAll(N);
-  setRole(N, null);
+  N.role = null;
   presence(N);
   pub(N, who(N));
   setTimeout(() => { if (!N.closed && N.role === null) pub(N, who(N)); }, 450);
@@ -308,9 +308,9 @@ function discover(N) {
 function becomeHost(N) {
   stop(N, 'whoTimer', 'annTimer', 'helloTimer');
   if (N.role !== 'host') dropAll(N);
-  setRole(N, 'host');
+  N.role = 'host';
   presence(N);
-  if (!N.linked) N.emit('status', 'waiting');
+  if (!N.linked) setStatus(N, 'waiting');
   let i = 0;                                           // alone: often, so friends find us; with guests: now and then (see the top);
   const ann = () => {                                  // awake from a long sleep, not while we give way (longSleep)
     if (!N.closed && N.role === 'host' && performance.now() >= N.yieldUntil && (here(N) === 1 || i++ % ANNOUNCE_LINKED === 0)) pub(N, hostSays(N));
@@ -327,8 +327,8 @@ function becomeGuest(N, host) {
   const H = newPeer(N, host);
   H.k = attempt();                                     // this attempt: the host starts our link over when it sees a new one
   listen(N, H, true);                                  // at once: the host may speak a moment before its 'hi' arrives
-  setRole(N, 'guest');
-  N.emit('status', 'joining');
+  N.role = 'guest';
+  setStatus(N, 'joining');
   sayHello(N, H);
 }
 const attempt = () => Math.random() * 1e9 | 0;
@@ -367,7 +367,7 @@ function hostGone(N, gone = false) {
     if (H) unlink(H);
     N.host = null;
     becomeHost(N);                                     // the others' places (and the old host's, unless it left) stay
-    if (!N.linked) N.emit('status', 'peer-left');
+    if (!N.linked) setStatus(N, 'peer-left');
   } else becomeGuest(N, next.s);
 }
 // a guest: the host has been away too long
@@ -440,7 +440,7 @@ function resync(N, P, k, again = false) {
 function leaveQuietly(N, tell = false) {
   if (tell) for (const P of linkedPeers(N)) pub(N, { t: 'bye', to: P.id });
   N.shut(false, true);
-  setRole(N, 'out');
+  N.role = 'out';
   N.emit('replaced');
 }
 

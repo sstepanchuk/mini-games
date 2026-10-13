@@ -6,7 +6,8 @@
 //
 // workerData: { pid: the session's first part (window.__pid), bus: the world's BroadcastChannel, scale:
 // window.__timeScale (config.js TIMING), brokerMs, rtc: fake direct links, net: fakenet switches to start with,
-// library: another library/ folder to run (say, a checkout of an older version; default: this repository's) }.
+// library: another library/ folder to run (say, a checkout of an older version; default: this repository's), dev: the
+// page says it is the dev server's (its version meta: 'dev', so together.js warns in the console) }.
 // Like a browser, an exception thrown by a timer or a listener does not stop the tab: it goes to `errors`
 // (console.error and console.warn too), which the test reads.
 import { pathToFileURL } from 'node:url';
@@ -14,7 +15,7 @@ import { parentPort, workerData } from 'node:worker_threads';
 import { install } from './fakenet.js';
 import { install as installRtc } from './fakertc.js';
 
-const { pid, bus, scale = 1, brokerMs = 25, rtc: withRtc = false, net: start = {}, library } = workerData;
+const { pid, bus, scale = 1, brokerMs = 25, rtc: withRtc = false, net: start = {}, library, dev = false } = workerData;
 const root = library ? pathToFileURL(library.replace(/\/?$/, '/')) : new URL('../../library/', import.meta.url);
 const lib = p => new URL(p, root).href;
 const t0 = performance.now(), ms = () => Math.round(performance.now() - t0);
@@ -33,6 +34,13 @@ const live = new Map();
 const tracked = (on, target) => [(type, fn, o) => { const k = on + ':' + type; if (!live.has(k)) live.set(k, new Set()); live.get(k).add(fn); target.addEventListener(type, fn, o); },
   (type, fn, o) => { const s = live.get(on + ':' + type); if (s) s.delete(fn); target.removeEventListener(type, fn, o); }];
 const [winOn, winOff] = tracked('window', win), [docOn, docOff] = tracked('document', doc);
+// the intervals that run now, timer → its period (cmds.timers): which the page keeps ticking (clearTimeout stops one too)
+const ticking = new Map(), [setI, clearI, clearT] = [setInterval, clearInterval, clearTimeout];
+Object.assign(globalThis, {
+  setInterval: (fn, ms, ...a) => { const id = setI(fn, ms, ...a); ticking.set(id, ms); return id; },
+  clearInterval: id => { ticking.delete(id); clearI(id); },
+  clearTimeout: id => { ticking.delete(id); clearT(id); }
+});
 const storage = m => ({ getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: k => { m.delete(k); } });
 const local = storage(new Map()), session = storage(new Map());
 const blocked = s => () => { if (!siteData) throw new DOMException('The site data is blocked', 'SecurityError'); return s; };
@@ -42,6 +50,7 @@ Object.assign(globalThis, {
   document: {
     get hidden() { return hidden; }, get visibilityState() { return hidden ? 'hidden' : 'visible'; },
     addEventListener: docOn, removeEventListener: docOff,
+    querySelector: sel => dev && sel === 'meta[name="ihroteka-version"]' ? { content: 'dev' } : null,
     createElement() { throw new Error('tab.js: no DOM in a worker tab'); }
   },
   location: { href: 'http://127.0.0.1:8000/', origin: 'http://127.0.0.1:8000', pathname: '/', search: '' },
@@ -62,7 +71,7 @@ let T = null;                                              // library/app/togeth
 
 let netRoom = null;
 const events = [], got = [];
-const ROOM_EVENTS = ['status', 'linked', 'join', 'leave', 'players', 'away', 'relinked', 'replaced', 'role', 'peer-gone', 'weak'];
+const ROOM_EVENTS = ['status', 'linked', 'join', 'leave', 'players', 'away', 'relinked', 'replaced', 'peer-gone', 'weak', 'budget'];
 function watchRoom(r) {
   for (const ev of ROOM_EVENTS) r.on(ev, (...a) => events.push([ms(), ev, ...a]));
   r.on('message', (m, from) => got.push([from, m]));
@@ -77,6 +86,8 @@ const gEvents = [], gGot = [], heard = [];               // heard: the names of 
 const GAME_EVENTS = ['linked', 'join', 'leave', 'players', 'weak', 'peer-gone', 'relinked', 'role', 'resume', 'shared'];
 let seatsOf = {}, shell = false, later = false;          // later: the game's code starts listening only when told (glisten)
 let slow = false;                                        // slow: the game's page opens only when told (gameSlow off)
+let framing = null, pulses = 0;                          // the game's frames (gframes), the pulses it heard (gpulse)
+let broke = 0;                                           // how often together.js told the shell the open game broke (gameError)
 const reloads = [];                                      // what together.js asked of the shell's reload: its still, or null
 // Go to a view (null: the shelf; else a game, which opens a moment later, as its frame would). byPeer: following.
 function go(id, byPeer = false) {
@@ -125,7 +136,7 @@ const cmds = {
     if (!shell) {
       shell = true;
       T.initTogether({ current: () => view, follow: id => go(id, true), invite() {}, address: () => globalThis.location.href, seats: id => seatsOf[id] || 2, askName() {},
-        reload: still => { reloads.push(still || null); }, ...(wires && { wires: () => wires }) });
+        reload: still => { reloads.push(still || null); }, gameError: () => { broke++; }, ...(wires && { wires: () => wires }) });
     }
     watchRoom(T.startInternet(code, name));
     return config.me;
@@ -138,11 +149,15 @@ const cmds = {
   state() {
     const r = room();
     if (!r) return null;
-    return { session: config.me, me: r.me, role: r.role, host: r.host, players: r.players, away: r.players.filter(p => r.away(p)),
+    return { session: config.me, me: r.me, kind: r.kind, status: r.status, role: r.role, host: r.host, players: r.players, away: r.players.filter(p => r.away(p)),
       linked: r.linked, weak: r.weak, online: r.online, direct: r.direct, version: r.versionMismatch ?? null, pairing: r.pair ? r.pair.pending : null,
       reason: r.pair ? r.pair.reason : null,
       lib: T ? T.state() : null };
   },
+  // the room object's own properties: name → 'get' (a getter), 'fn' or 'value' (what was written onto it)
+  roomProps: () => Object.fromEntries(Object.entries(Object.getOwnPropertyDescriptors(need())).map(([k, d]) => [k, d.get ? 'get' : typeof d.value === 'function' ? 'fn' : 'value'])),
+  // the intervals that run now, by period: { '200': 1, '1000': 1, … }
+  timers: () => { const by = {}; for (const ms of ticking.values()) by[ms] = (by[ms] || 0) + 1; return by; },
   // what happened since: events [ms, name, ...args] and messages [from, m] (from: an index to read only the new ones)
   log: ({ from = 0, gfrom = 0 } = {}) => ({ events: events.slice(from), got: got.slice(gfrom) }),
   // room.send for each of list (or m), → the first error thrown ('TypeError: ' and its message), or null. then: what
@@ -181,6 +196,7 @@ const cmds = {
   netState: () => ({ ...fake.state(), dc: rtc && rtc.count }),
   killDc: () => { rtc.kill(); },                          // the phone's OS dropped the direct links
   errors: () => errors.slice(),
+  takeErrors: () => errors.splice(0),                     // what went wrong so far, read and forgotten (expected ones)
   // the open game (ihroteka.room): its state, and what it heard (events [ms, name, ...args] and messages [from, m],
   // of every game opened in this tab); and what it does
   game() {
@@ -199,6 +215,17 @@ const cmds = {
   gsnapshot: ({ s }) => game.snapshot(s),
   gshare: ({ k, v }) => game.share(k, v),
   gshared: ({ k }) => game.shared(k),
+  gdiag: () => game.diag(),                                // the game's room.diag(): the report to copy
+  // the game calls room.frame(now) every animation frame (16 ms), now on its own frame's clock: ahead of the page's by
+  // ahead ms (null: it stops)
+  gframes({ ahead }) { clearI(framing); framing = ahead == null ? null : setI(() => { if (game) game.frame(performance.now() + ahead); }, 16); },
+  // the game's pulse policy says a few fields (a counter), and it counts the pulses it hears → that count so far
+  gpulse() { let k = 0; game.pulse = () => ({ k: ++k }); game.on('pulse', () => { pulses++; }); },
+  gpulses: () => pulses,
+  // the game's listener of ev throws a TypeError saying msg (add it before glisten: ahead of the game's other listeners);
+  // gbroke → how often the shell heard that the game broke
+  gthrow({ ev, msg }) { game.on(ev, () => { throw new TypeError(msg); }); },
+  gbroke: () => broke,
   // the game changes, in place, a value the library handed it (a game that keeps its state in it): that of its last
   // 'resume', of its last 'shared' event for key k, or what room.shared(k) returns ('get') → whether there was one
   gtouch({ ev, k, set }) {
