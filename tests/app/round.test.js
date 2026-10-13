@@ -931,7 +931,10 @@ describe('the round layer (ihroteka.round)', { concurrency: 3 }, () => {
   });
 
   test('a round whose runner left waits for the player away who has its snapshot: back, it goes on from it there', { timeout: 60000 }, async t => {
-    const W = world(t, { scale: SCALE });
+    // (scale 0.5: Богдан's outage has to stay well inside his own HOST_WAIT. Past it his page takes the room over and
+    // comes back as a guest on new links, and what Сава's outbox held for him is gone, as on any link that starts
+    // over (net/link.js); at 0.3 the outage was within a few tenths of a second of it, and the test failed now and then)
+    const W = world(t, { scale: 0.5 });
     const [A, B] = await room(W, 'rl27', ['Аня', 'Богдан'], { lib: { g: 3 } });
     await A.open('g');
     assert.ok(await plays([A, B], 'Аня,Богдан'));
