@@ -189,7 +189,10 @@ scenario('trust: the page\'s policy, and the camera and the microphone only for 
   check(r.eval === 'EvalError', 'eval is refused', r);
   check(r.object === 'refused', 'a plugin (<object>) is refused', r);
   check(r.base === 'refused', 'a <base> elsewhere is refused', r);
-  check(r.srcdoc && r.srcdoc.inline === 'ran' && r.srcdoc.blob === 'ran' && r.srcdoc.eval === 'EvalError' && r.srcdoc.cdn === 'refused',
+  // (Playwright's WebKit neither runs nor refuses a blob: script made in a srcdoc frame: no load, no error. What blob:
+  // in script-src is for, the MQTT client's worker, lives in the page and is checked above; there it must not be refused)
+  const frameBlob = r.srcdoc && (CHROMIUM ? r.srcdoc.blob === 'ran' : r.srcdoc.blob !== 'refused');
+  check(r.srcdoc && r.srcdoc.inline === 'ran' && frameBlob && r.srcdoc.eval === 'EvalError' && r.srcdoc.cdn === 'refused',
     'a game in a srcdoc frame (as on the site): its inline code and a blob: script it made run, eval and a script from elsewhere are refused', r.srcdoc);
 
   step('the camera and the microphone');
