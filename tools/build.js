@@ -23,11 +23,19 @@ const FIELDS = {
   players: '?how many play together: "2", or a range such as "2-4" (1 to 8; 2 when not given)',
   theme: '?browser theme color, e.g. #e4e2f0'
 };
-// the one field that is a number, not a string
+// the fields that are numbers, not strings (whole, from 1)
 const NUMBERS = {
   wire: '?the version of the game\'s messages and snapshots: a whole number from 1 (1 when not given), raised by hand ' +
-    'only when they change; copies of the game with different numbers are not seated together (ihroteka.game.wire)'
+    'only when they change; copies of the game with different numbers are not seated together (ihroteka.game.wire)',
+  api: '?the version of the Game API the game is written for (ihroteka.version; README "Game API"): at most the ' +
+    'library\'s own'
 };
+// the fields that are true or false
+const FLAGS = {
+  camera: '?true: the game\'s frame may use the camera (README: Trust); without it, it may not'
+};
+// the Game API version this library gives (library/app/shell.js: api(), version)
+export const apiVersion = () => +fs.readFileSync(path.join(P.app, 'shell.js'), 'utf8').match(/^\s*version: (\d+),/m)[1];
 const FORMAT = {
   image: v => /^[\w-]+\.png$/.test(v),
   emoji: v => [...v].length <= 4 && !/[\x00-\x7f]/.test(v),
@@ -38,15 +46,20 @@ const FORMAT = {
 export const playersOf = (v = '2') => { const m = /^([1-8])(?:-([1-8]))?$/.exec(v); return m && { min: +m[1], max: +(m[2] || m[1]) }; };
 export const wireOf = g => g.wire ?? 1;
 // what the shelf knows about a game (library.json, and the dev server's list)
-export const shelfEntry = (id, g) => ({ id, title: g.title, tagline: g.tagline, image: g.image, emoji: g.emoji, players: playersOf(g.players), wire: wireOf(g) });
+export const shelfEntry = (id, g) => ({ id, title: g.title, tagline: g.tagline, image: g.image, emoji: g.emoji, players: playersOf(g.players), wire: wireOf(g),
+  ...(g.camera === true && { camera: true }) });
+// a game's id (its folder): it becomes the URL, /<id>/
+export const validId = id => typeof id === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(id) && !RESERVED.has(id);
 export function readManifest(id, dir = path.join(P.games, id)) {
   const file = rel(path.join(dir, 'game.json'));
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(id) || RESERVED.has(id)) problem(rel(dir) + ': the folder name becomes the URL, so use lowercase letters, digits and dashes (and not ' + [...RESERVED].join(', ') + ')');
+  if (!validId(id)) problem(rel(dir) + ': the folder name becomes the URL, so use lowercase letters, digits and dashes (and not ' + [...RESERVED].join(', ') + ')');
   let g;
   try { g = JSON.parse(fs.readFileSync(path.join(dir, 'game.json'), 'utf8').replace(/^\uFEFF/, '')); }
   catch (e) { problem(file + ': ' + e.message); }
-  for (const k of Object.keys(g)) if (!(k in FIELDS) && !(k in NUMBERS)) problem(file + ': unknown field "' + k + '"');
-  if (g.wire !== undefined && !(Number.isSafeInteger(g.wire) && g.wire >= 1)) problem(file + ': "wire" must be a whole number from 1 (' + NUMBERS.wire.slice(1) + ')');
+  for (const k of Object.keys(g)) if (!(k in FIELDS) && !(k in NUMBERS) && !(k in FLAGS)) problem(file + ': unknown field "' + k + '"');
+  for (const k of Object.keys(FLAGS)) if (g[k] !== undefined && typeof g[k] !== 'boolean') problem(file + ': "' + k + '" must be true or false (' + FLAGS[k].slice(1) + ')');
+  for (const k of Object.keys(NUMBERS)) if (g[k] !== undefined && !(Number.isSafeInteger(g[k]) && g[k] >= 1)) problem(file + ': "' + k + '" must be a whole number from 1 (' + NUMBERS[k].slice(1) + ')');
+  if (g.api > apiVersion()) problem(file + ': "api" is ' + g.api + ', this library gives version ' + apiVersion() + ' (update the library, or write the game for it)');
   for (const [k, about] of Object.entries(FIELDS)) {
     const optional = about.startsWith('?');
     if (g[k] === undefined && optional) continue;
@@ -89,6 +102,10 @@ const loader = Object.fromEntries(Object.keys(ASSETS).filter(e => e !== '.json')
 const attr = (tag, name) => tag.match(new RegExp('\\s' + name + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s>]+))', 'i'))?.slice(1).find(v => v !== undefined);
 const local = url => url && !/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(url);
 const dataUrl = file => 'data:' + ASSETS[path.extname(file).toLowerCase()] + ';base64,' + fs.readFileSync(file).toString('base64');
+// A string in a game's code that looks like a file next to it ('img/hero.png', './hit.mp3'): on the site the game is
+// one page, so a file it names that way is not there. A module imports it instead (the bundle inlines what it imports).
+const ASSET_STRING = new RegExp('([\'"`])((?:\\.{1,2}/)?(?:[\\w-]+/)*[\\w-][\\w.-]*\\.(?:' + Object.keys(ASSETS).map(e => e.slice(1)).join('|') + '))\\1', 'gi');
+export const assetStrings = js => [...new Set(Array.from(js.matchAll(ASSET_STRING), m => m[2]))];
 
 // one entry point → one minified file (also used for the site's own script and stylesheet)
 async function esbuildText(entry, extra, where) {
@@ -98,7 +115,8 @@ async function esbuildText(entry, extra, where) {
 }
 const JS = { format: 'esm', target: 'es2020' };
 
-export async function bundleGame(id, g) {
+// warn(message): what the page names that may not exist on the site (assetStrings); the page is bundled anyway
+export async function bundleGame(id, g, { warn = () => {} } = {}) {
   const dir = path.join(P.games, id), where = 'games/' + id + '/index.html';
   let html = fs.readFileSync(path.join(dir, 'index.html'), 'utf8').replace(/^\uFEFF/, '');
   if (!/^\s*<!doctype html>/i.test(html)) problem(where + ' must start with <!doctype html> (without it the page renders in quirks mode)');
@@ -112,10 +130,13 @@ export async function bundleGame(id, g) {
   }
   for (const tag of html.match(/<script\b[^>]*>\s*<\/script>/gi) || []) {
     const src = attr(tag, 'src');
+    // (the site's policy lets scripts come only from the site, or inline: README, Trust)
+    if (src && !local(src)) problem(where + ': <script src="' + src + '"> is from elsewhere, which the site refuses (README: Trust): keep the file next to the game, and import it from a module');
     if (!local(src)) continue;
     if (!/\btype\s*=\s*["']?module/i.test(tag)) problem(where + ': <script src="' + src + '"> must be type="module" to be bundled');
     const js = await build(src, JS);
     if (/<\/script/i.test(js)) problem(where + ': the bundle contains "</script" and cannot be inlined');
+    for (const s of assetStrings(js)) warn('games/' + id + '/' + src + ' names "' + s + '", which looks like a file next to the game: on the site the game is one page, so it is not there (import it from a module: the build inlines what a module imports)');
     html = html.replace(tag, () => '<script type="module">' + js + '</script>');   // still a module: runs after the page is parsed, as before
   }
   // remaining relative src/href: inline known assets, refuse everything else

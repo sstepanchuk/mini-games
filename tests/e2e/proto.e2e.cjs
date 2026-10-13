@@ -1,3 +1,4 @@
+// tags: @ci @webkit
 // proto: friends whose libraries speak different wire versions (net/config.js PROTO; owner, decision 9). Аня's page
 // runs the library with PROTO + 1 (its bundle rewritten on the way): the two rooms on one code do not link; both pages
 // say «Онови сторінку — у друга інша версія»; Богдан's page, the older, reloads itself back into the room (no name

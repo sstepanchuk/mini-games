@@ -44,8 +44,10 @@ library/   everything that runs in the browser
   crypto.js  keyring and sealed files (browser and Node)
   game-api.js  window.ihroteka, injected into every game
 tools/     cli.js (commands) · repo.js (keys, sealed files) · build.js (bundling, site, checks) · dev.js (local server)
-           · migrate.js (keyring format steps)
-tests/     unit tests (npm test); api-surface.json: the Game API, pinned; e2e/: browser scenarios
+           · devnet.js (the dev server's fake network) · migrate.js (keyring format steps) · perf.js (a performance
+           report) · png.js (covers) · template/ (a new game: cli new)
+tests/     unit tests (npm test); api-surface.json: the Game API, pinned; e2e/: browser scenarios (prod/: the
+           assembled site; fixtures/probe: an open game for them)
 docs/      ROADMAP.md: the plan and the owner's decisions (in Ukrainian)
 vault/     what the repository keeps: keyring.json, and per game game.json, its cover,
            game.bin (the built game, encrypted) and source.bin (its sources, encrypted)
@@ -59,44 +61,87 @@ site/      the site, assembled from library/ and vault/ (git-ignored; CI assembl
 npm install
 npm run unlock              # decrypt game sources into games/
 npm run dev                 # the library with your plaintext games at localhost:8000
+npm run dev -- --devnet     #   the same, and tabs play together without internet (?devnet in the address does it too)
+npm run new -- <id>         # a new game in games/<id>, from tools/template (see "Adding a game")
 npm run build               # run each game's own tests, bundle and encrypt the games into vault/, then assemble site/
                             #   (a game whose tests fail is not sealed; -- --no-tests skips them)
 npm run site                # assemble site/ from library/ and vault/ (no password)
 npm run dev -- site         # serve the assembled site/ at localhost:8001 (its offline copy stays off :8000)
 npm run check               # validate vault/ (no password)
 npm run lint && npm test
-npm run e2e                 # browser scenarios against a running dev server (tests/e2e/README.md)
+npm run e2e                 # browser scenarios against a running dev server (tests/e2e/README.md; -- @ci: CI's set)
+npm run e2e -- --prod       # the production path: the assembled site, online and offline (npm run dev -- site)
 npm run test:games          # every game's own unit tests (games/*/test/*.test.js, sealed with it; after npm run unlock)
 npm run test:games:e2e      # Two Dragons' browser scenarios (games/dragons/test/e2e, against the dev server)
+npm run perf -- dragons     # a performance report next to docs/perf-reference.json (-- --profile wifi; not a gate)
 npm run migrate             # bring an old vault/keyring.json up to today's format
 
 npm run user -- list | add <name> | remove <name> | passwd
+node tools/cli.js remove-game <id> --yes   # off the shelf: vault/<id> deleted, games/<id> kept in games/.removed/
 ```
 
 Set `VAULT_PASSWORD` to skip the prompt. A change to `library/` needs no password at all: commit it, and CI
-assembles the site again.
+assembles the site again. CI also runs the browser scenarios, in Chromium and in WebKit, as a workflow of its own
+(`.github/workflows/e2e.yml`) that does not hold up the deploy: with no password there, the dev server serves an open
+probe game (`npm run dev -- --probe`) and the production path runs without opening a sealed game.
+
+**devnet.** Playing together needs the public brokers, so with no internet the dev server can fake them: `npm run dev
+-- --devnet` (every library page), or `?devnet` in the address (that browser from then on, until `?devnet=0`). The
+fake brokers (`tools/devnet.js`) link the tabs of one browser; direct links stay real WebRTC. A «devnet» tag in the
+corner says it is on. Only the dev server puts it into a page: the assembled site never has it (`tests/devnet.test.js`).
 
 The dev server (games mode) registers no service worker, and answers `/sw.js` with one that removes itself: an
 offline copy left on the same address by `dev -- site` cannot hide your edits. A port can be given (`npm run dev
 -- 8002`, `npm run dev -- site 8003`). `--lan` serves to your network over plain http, where browsers turn off the
-camera (no QR scanning) and Web Crypto (an internet room there never meets the https devices). To try a real phone,
+camera (no QR scanning; a code can be typed) and Web Crypto: a page without it plays nearby only, and «Грати разом»
+says why (no internet room: its code would go to the public brokers in plain text). To try a real phone,
 forward the port instead and open `http://localhost:8000/` on it: localhost counts as secure. Android: `adb
 reverse tcp:8000 tcp:8000` (or chrome://inspect → Port forwarding).
 
 ## Adding a game
 
+From nothing to two players on screen, then on the shelf:
+
+1. `npm run unlock`: the plaintext sources of the games already on the shelf (the build seals every game at once).
+2. `npm run new -- <id> --title "Назва"` (`--players 2-4` for more than two): `games/<id>/` from `tools/template`, a
+   small turn-based game that plays alone on one device or together. `<id>` becomes the URL, `/<id>/`.
+3. `npm run dev`, then `http://localhost:8000/<id>/`: the game in the library, on one device.
+4. Two players, no internet needed: `npm run dev -- --devnet`, the same address in two tabs; in one, «Грати разом» →
+   «Через посилання», open its link in the other. The game opens on both. (A real phone: forward the port, see
+   Usage.)
+5. The rules: `rules.js`, with no page and no network, so `test/*.test.js` (node:test) checks them:
+   `npm run test:games`.
+6. The page: `index.html`, `style.css`, `main.js`. `main.js` shows how a game lives on the room ("Game API" below):
+   one copy runs the round and sends its state (the others show only what that copy sends), the others send their
+   moves, a snapshot after each move, `resume`, `role`, `relinked`, and with more than two `leave` (a player of the
+   round gone: it ends). Buttons rather than a canvas where you can: they work with a keyboard and a screen reader.
+7. `game.json` (validated by the dev server and the build):
+   - `title`, `tagline`, `description`, `image`; optional `shareTitle`, `shareDescription`, `imageAlt`, `emoji`,
+     `theme`, `players` (`"2"` or `"2-4"`; 2 when not given);
+   - `wire`: the version of the game's messages and snapshots, 1 when not given: raise it by hand when they change
+     (see "Game API");
+   - `api`: the Game API version it is written for (`new` writes the library's); `camera: true` only if the game
+     itself uses the camera (see Trust).
+8. `preview.png`: replace the placeholder with a 1200×630 picture of the game (the shelf, and link previews).
+9. `npm run build` (the password): the game's tests first (a game whose tests fail is not sealed), then one page per
+   game, sealed into `vault/<id>/`. Try the assembled site: `npm run dev -- site` (its Content-Security-Policy, its
+   offline copy) and `npm run e2e -- --prod`.
+10. Commit `vault/` (never `games/`: it is git-ignored, its sources go sealed into `vault/<id>/source.bin`) and push:
+    CI checks the vault, assembles the site and deploys it. To take a game off the shelf again: `node tools/cli.js
+    remove-game <id> --yes` (its plaintext sources are kept in `games/.removed/`).
+
 ```
 games/<id>/          <id> becomes the URL: /<id>/
-  game.json          title, tagline, description, image (+ optional shareTitle,
-                     shareDescription, imageAlt, emoji, theme, players: "2" or "2-4",
-                     wire: a whole number, 1 when not given; see "Game API") — validated on build
+  game.json          as in 7
   index.html         <script type="module"> and <link rel="stylesheet"> are bundled inline
   preview.png        1200×630, used on the shelf and in link previews
+  test/*.test.js     the game's own tests (node:test), sealed with it
 ```
 
-Then `npm run build`, commit `vault/`, push. The build inlines everything into one page: start with `<!doctype html>`,
-keep assets next to `index.html` (relative links to anything that is not a style, module script or media file
-fail the build).
+The build inlines everything into one page: start with `<!doctype html>`, keep assets next to `index.html` (relative
+links to anything that is not a style, module script or media file fail the build, and so does a `<script src>` from
+elsewhere: the site's policy refuses it, see Trust), and let modules import what they use: a string in the code that
+names a file next to the game (`'img/hero.png'`) is not there on the site, and the build warns about it.
 
 ## Game API
 
@@ -175,16 +220,21 @@ that copy has been gone for 10 s, and only with proof that it was the runner who
 who has the game open (seated, or waiting for a seat) is here with us, or (over the internet) the brokers have
 answered us all that time; and only while we are the room's host or hear it (a player cut off from the room's host
 knows the others only as the host last told it: it vouches for nobody until it hears a host again). Then the first
-seated player still here takes over and gets `resume` with the latest snapshot; everyone else gets `role`. Two phones
-nearby that lose each other cannot tell which of them dropped out, so there the round waits for its runner. A runner
-who comes back after the round went on elsewhere plays on as a guest (`role` → 'guest').
+seated player still here takes over: its copy hears `role` ('host') and, at once (in the same task), `resume` with the
+latest snapshot (no `resume`: there is no round to go on; `tools/template` shows its lobby then); the others see the
+change in `room.host`. Two phones nearby that lose each other cannot tell which of them dropped out, so there the
+round waits for its runner. A runner who comes back after the round went on elsewhere plays on as a guest (`role` →
+'guest').
 
 **Snapshots.** A game closed mid-round (the room went back to the shelf, a frame was closed or reloaded) waits: when
 it is open again, the copy that runs the round hears `resume` with the snapshot, if the players seated are the same
 as when it was taken (a snapshot never goes on with someone else's seats). A round is over for good when its runner
 says so (`room.snapshot(null)`) or one of its players left the room for good (with the game open or not: back later,
-they start a new round): then every player keeps a tombstone in its place, so no older copy (say, kept by a player
-who waited for a seat) can bring it back.
+they start a new round; a game for more than two that has it open hears `leave` instead and decides for itself, as
+`tools/template` does: it ends the round): then every player keeps a tombstone in its place, so no older copy (say,
+kept by a player who waited for a seat) can bring it back. The others get the runner's snapshots at most twice a
+second, and the latest at once when the game closes or the page goes or is hidden: a reload goes on from the last
+move (a page that is killed, with no goodbye, may still lose its last half second).
 
 **Messages.** A message is a plain JSON-able object with a string `t`; any `t` will do (the library wraps a game's
 messages in its own, so the room's own types never clash with them). `send` does nothing (→ false) while
@@ -282,6 +332,30 @@ the host's phone («Не чекати» for it ends the room on the phone where 
 again («З’єднатися знову») and is back in its place; the host's phone too: each guest pairs with it again, and the
 room goes on.
 
+## Trust
+
+A game is fully trusted code. Its page runs in a frame of the library's own origin, not sandboxed (on the site a
+`srcdoc` frame, on the dev server its own address, `/<id>/?frame`), so it can do anything the library page can: read
+and change what the library keeps on the device (IndexedDB with the key that opens the games, the offline copy, local
+storage), call the library page directly (`parent.__ihroteka`, anything on `parent`), act as its player in the room,
+and send whatever it likes wherever it likes. `window.ihroteka` is a convenience, not a boundary. Only games of the
+library's own people belong on it. Sandboxed frames with a message API are an open decision, for when games come from
+other authors ([docs/ROADMAP.md](docs/ROADMAP.md), 23).
+
+What the page does close, against mistakes rather than against a game:
+- **Scripts.** The page's Content-Security-Policy (a `<meta>` in `library/app/page.html`; a game's `srcdoc` frame
+  inherits it) runs the site's own scripts and inline ones, and from elsewhere only the pinned MQTT client (the two
+  URLs of `MQTT_LIB` in `library/net/config.js`: upgrade both together, `npm test` fails while they differ). Workers
+  come from the site or from `blob:` (the MQTT client keeps its timers in one). No `eval`, `new Function`, `setTimeout`
+  with a string, or WebAssembly; no `<object>` or `<embed>`; no `<base>` pointing elsewhere. Styles, images, fonts,
+  media and connections are not limited. A game that makes code from strings is refused (the console says what), and
+  one with a `<script src>` from elsewhere does not build: bundle it instead (the build inlines module scripts and what
+  they import). The dev server gives its pages the same policy (a game's page there, `/<id>/?frame`, comes from its
+  own address: it gets the policy as a header), so what the site refuses fails in dev too.
+- **The camera.** A game's frame may use fullscreen, the screen wake lock, autoplay and gamepads, and the camera only
+  when its `game.json` says `"camera": true` (no game does: the library's own QR scanner runs in the library page).
+  Otherwise the frame says `camera 'none'`: a frame of the same origin has the camera unless told otherwise.
+
 ## Security notes
 
 - The keyring and sealed games are public; strength rests on the passwords (12+ characters, generated by default,
@@ -292,12 +366,11 @@ room goes on.
 - Signed-in devices keep a non-extractable key in IndexedDB. Anything served from the same origin
   (`*.github.io` of this account) could use it, so host no untrusted pages there and don't load third-party scripts in games.
 - Play together is not encrypted beyond WebRTC's own DTLS; through the brokers, messages are plain and not signed.
-  Room topics are hashed, so a room's code is not on the brokers (a page without Web Crypto, plain http, uses the
-  code as it is), but whoever watches a room's topic can read it, join it or disturb it. (Sealing it is an open
+  Room topics are hashed, so a room's code is not on the brokers (a page without Web Crypto, plain http, makes no
+  internet room at all), but whoever watches a room's topic can read it, join it or disturb it. (Sealing it is an open
   decision in [docs/ROADMAP.md](docs/ROADMAP.md).)
   The MQTT client comes from a CDN, pinned to one version and checked with Subresource Integrity.
-- A game is trusted code: it runs in a frame on the library's own origin (not sandboxed, with the camera
-  allowed), so it can do anything the library page can. Only games of the library's own people belong on it.
+- A game is fully trusted code (see **Trust** above): only games of the library's own people belong on it.
 - CI runs only actions pinned to a commit, and keeps no git credentials after checkout.
 
 **Deploy:** on every push to `main`, GitHub Actions lints, tests and checks, assembles `site/` and publishes it

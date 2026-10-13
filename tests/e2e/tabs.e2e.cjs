@@ -1,3 +1,4 @@
+// tags: @ci @webkit
 // Library level, one player in two tabs: Аня and Богдан are together (on the shelf); one of them (the host, then the
 // guest) opens the room link again in a new tab of the same browser, with the same name. The new tab takes the
 // place; the old one says «Ти граєш деінде» and offers «Повернути сюди», which takes the place back. The friend

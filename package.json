@@ -5,6 +5,7 @@
   "homepage": "https://sstepanchuk.github.io/mini-games/",
   "scripts": {
     "dev": "node tools/cli.js dev",
+    "new": "node tools/cli.js new",
     "build": "node tools/cli.js build",
     "site": "node tools/cli.js site",
     "unlock": "node tools/cli.js unlock",
@@ -15,6 +16,7 @@
     "e2e": "node tests/e2e/run.cjs",
     "test:games": "node --test \"games/*/test/*.test.js\"",
     "test:games:e2e": "node games/dragons/test/e2e/run.cjs",
+    "perf": "node tools/perf.js",
     "migrate": "node tools/migrate.js"
   },
   "devDependencies": {
@@ -23,6 +25,7 @@
     "espree": "^10.4.0",
     "globals": "^17.13.0",
     "jsqr": "^1.4.0",
+    "playwright": "1.56.1",
     "uqr": "^0.1.3"
   }
 }

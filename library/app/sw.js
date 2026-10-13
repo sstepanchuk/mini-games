@@ -6,25 +6,44 @@ const FILES = [/* FILES */];                            // relative to the site 
 const FONTS = [/* FONTS */];                            // font stylesheets the pages use (stored with their font files)
 const VERSION = '/* VERSION */';
 const CACHE = 'ihroteka-' + VERSION, FONT_CACHE = 'ihroteka-fonts';
-const BASE = new URL('./', self.location).href;
+const META = 'ihroteka-meta';                          // a note of which copy is the one in use (see working)
+const BASE = new URL('./', self.location).href, IN_USE = BASE + '__in-use';
 
 self.addEventListener('install', e => e.waitUntil((async () => {
   // straight from the server, past the HTTP cache: a stale keyring next to fresh files would not open them
   const all = () => caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(BASE + f, { cache: 'reload' }))));
   try { await all(); }
-  catch (err) {                                        // no room for two copies: drop the old one first (online anyway)
+  catch (err) {
     if (err.name !== 'QuotaExceededError') throw err;
-    for (const k of await caches.keys()) if (k.startsWith('ihroteka-') && k !== FONT_CACHE) await caches.delete(k);
-    await all();
+    // No room for two copies. The copy in use stays (owner, decision 22: playing nearby without internet must never
+    // lose it): only copies of other versions go (left over from an update that never finished), then one more try.
+    // If that fails too, this version is not installed: the device keeps the copy it has, and tries again on the
+    // next update check.
+    const keep = new Set([CACHE, FONT_CACHE, META, ...await working()]);
+    for (const k of await caches.keys()) if (k.startsWith('ihroteka-') && !keep.has(k)) await caches.delete(k);
+    try { await all(); } catch (e) { await caches.delete(CACHE); throw e; }
   }
   await Promise.all(FONTS.map(url => storeFont(url).catch(() => {})));   // fonts are a nicety: never fail on them
   await self.skipWaiting();
 })()));
 
 self.addEventListener('activate', e => e.waitUntil((async () => {
-  for (const k of await caches.keys()) if (k.startsWith('ihroteka-') && k !== CACHE && k !== FONT_CACHE) await caches.delete(k);
+  for (const k of await caches.keys()) if (k.startsWith('ihroteka-') && k !== CACHE && k !== FONT_CACHE && k !== META) await caches.delete(k);
+  try { await (await caches.open(META)).put(IN_USE, new Response(CACHE)); } catch (e) {}   // (a note only: never fail on it)
   await self.clients.claim();
 })()));
+
+// The copies the pages work from now (cache names): none before any version is active; the one the active worker
+// noted; or, from a worker before the note, every complete copy (a copy is complete when it holds the shelf: addAll
+// stores all of it or nothing).
+async function working() {
+  if (!self.registration.active) return [];
+  const noted = await (await caches.open(META)).match(IN_USE);
+  if (noted) return [await noted.text()];
+  const out = [];
+  for (const k of await caches.keys()) if (k.startsWith('ihroteka-') && k !== META && await (await caches.open(k)).match(BASE)) out.push(k);
+  return out;
+}
 
 self.addEventListener('fetch', e => {
   const req = e.request;

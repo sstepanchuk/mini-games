@@ -62,7 +62,8 @@ const RESERVED = new Set(['p', 'q', 'ak', 'bye']);
 // modes set (setStatus), and the library has a text for each (app/invite.js STATUS).
 export const STATUSES = Object.freeze([
   'connecting',                                        // internet: on the way to the brokers and the room; nearby: a pairing links
-  'unavailable',                                       // internet: the brokers' client could not be loaded (no internet at all)
+  'unavailable',                                       // internet: no brokers: their client could not be loaded (no internet at
+                                                       //   all), or the page has no Web Crypto (plain http: config.js secure)
   'no-signal',                                         // internet: no broker answers (alone: when linked, 'weak' says it)
   'waiting',                                           // internet: we hold the room, alone: friends find it by its code
   'joining',                                           // internet: a host answered, we say hello to it

@@ -352,4 +352,38 @@ describe('a round\'s snapshot', { concurrency: 3 }, () => {
     const s = await Promise.all([A, B, C].map(x => snapOf(x)));
     assert.deepEqual(s.map(x => x && x.s), [{ round: 11 }, { round: 11 }, { round: 11 }], 'the round is still there: ' + JSON.stringify(s));
   });
+
+  // (review of phase 3: snapshots go out at most twice a second, and the one still waiting for its turn was dropped
+  // when the game closed or the page went: back in a new tab, the runner went on one move behind; tests/e2e/newgame)
+  test('the runner\'s page closes within half a second of its last snapshot: that one still goes out, and the round goes on from it', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'snap10', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await A.snapshot({ round: 20, moves: 1 });
+    assert.ok(await until(async () => (await snapOf(B))?.s?.moves === 1, 3000), 'the first one goes at once');
+    await A.snapshot({ round: 20, moves: 2 });               // within the half second: it waits for its turn
+    await A.close();                                         // a reload: pagehide, and the page is gone
+    assert.ok(await until(async () => (await snapOf(B))?.s?.moves === 2, 3000), 'Богдан has the latest: ' + JSON.stringify(await snapOf(B)));
+    const A2 = await W.tab('p3tab');                         // Аня's page again
+    await A2.lib('snap10', 'Аня');
+    const a = await until(async () => { const g = await A2.game(); return g && g.linked && g.events.some(e => e[1] === 'resume') && g; }, 15000, 50);
+    assert.ok(a, 'Аня runs the round on: ' + (await A2.game() && evs(await A2.game())));
+    assert.ok(evs(a).includes('resume {"round":20,"moves":2}'), 'from the latest snapshot: ' + evs(a));
+  });
+
+  test('the runner closes the game within half a second of its last snapshot: the others get that one at once', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'snap11', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await A.snapshot({ round: 21, moves: 1 });
+    assert.ok(await until(async () => (await snapOf(B))?.s?.moves === 1, 3000));
+    await A.snapshot({ round: 21, moves: 2 });
+    await A.open(null);                                      // back to the shelf, mid-round
+    assert.ok(await until(async () => (await snapOf(B))?.s?.moves === 2, 2000), 'Богдан has the latest: ' + JSON.stringify(await snapOf(B)));
+    await A.close();                                         // and then the page goes: the round waits with Богдан's copy
+    await sleep(300);
+    assert.deepEqual((await snapOf(B))?.s, { round: 21, moves: 2 });
+  });
 });

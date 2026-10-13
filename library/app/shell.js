@@ -19,7 +19,8 @@ const DOC = Math.random().toString(36).slice(2);       // marks this page's own 
 let backing = false, following = false, queued = null;
 
 /**
- * games         [{ id, title, tagline, image, emoji, players, wire }] (wire: game.json "wire"; 1 when not given)
+ * games         [{ id, title, tagline, image, emoji, players, wire, camera }] (wire: game.json "wire"; 1 when not given;
+ *               camera: true when its frame may use the camera, game.json "camera")
  * initial       the game this page was opened at, if any
  * loader        game → Promise<{ srcdoc } | { src }>: its page (decrypted, or in dev from disk); rejects with
  *               error.cancelled when the player does not give the password
@@ -125,12 +126,16 @@ async function openFrame(g, byPeer) {
   }
   if (t !== loads || current !== g.id) return;          // switched elsewhere meanwhile (or reopened: a newer load is on its way)
   frame = el('iframe', { className: 'frame', title: g.title });
-  frame.allow = 'fullscreen; screen-wake-lock; autoplay; gamepad; camera';
+  frame.allow = allowOf(g);
   frame.setAttribute('allowfullscreen', '');
   if (page.srcdoc != null) frame.srcdoc = page.srcdoc; else frame.src = page.src;
   frame.addEventListener('load', () => { loaded = performance.now(); if (broke) return; note.hidden = true; safe(() => frame.contentWindow.focus()); }, { once: true });
   $('stage').append(frame);
 }
+
+// What the game's frame may use (its permissions policy; README: Trust): the camera only for a game whose game.json asks
+// for it ("camera": true, carried by its shelf entry). A frame of our own origin would have it unless told 'none'.
+const allowOf = g => 'fullscreen; screen-wake-lock; autoplay; gamepad; ' + (g.camera === true ? 'camera' : "camera 'none'");
 
 // The open game broke while it started: the note over it says so, with the report to copy and the way back.
 function broken() {

@@ -21,6 +21,7 @@
 //                   hiccup    { every: ms, ms: ms }: now and then everything going out is held a while (Wi-Fi stalls)
 //   __tx            what went out, per path and message type: { 'dc-ctl lib-g:mv': { n, b }, … } ('d' batches count
 //                   each message inside, plus one '(batch)' line per packet on the wire)
+//   __wire          what went out on the wire, per path: { 'dc-ctl': characters, … } (each packet once)
 //
 // opt: { imp, relayOnly: no WebRTC at all, brokers: false = no internet from the start (nearby still works), brokerMs }
 'use strict';
@@ -34,10 +35,11 @@ function install({ pid, imp = {}, relayOnly = false, brokers = true, brokerMs = 
   setInterval(() => { const h = I().hiccup; if (h && Math.random() < 100 / h.every) holdUntil = now() + h.ms * (0.5 + Math.random()); }, 100);
   const delayOf = () => { const i = I(); let d = (i.lat || 0) + Math.random() * (i.jit || 0); if (holdUntil > now()) d = Math.max(d, holdUntil - now() + (i.lat || 0)); return d; };
 
-  const tx = window.__tx = {};
+  const tx = window.__tx = {}, wire = window.__wire = {};
   const count = (k, b) => { const e = tx[k] || (tx[k] = { n: 0, b: 0 }); e.n++; e.b += b; };
   const kind = x => !x || typeof x !== 'object' ? '?' : x.t + (x._x ? '*' : '') + (x.t === 'lib-g' && x.m ? ':' + x.m.t : '');
   const tally = (path, s) => {
+    wire[path] = (wire[path] || 0) + s.length;
     let m = null;
     try { m = JSON.parse(s); } catch (e) {}
     if (m && m.t === 'd' && Array.isArray(m.d)) { for (const x of m.d) count(path + ' ' + kind(x), JSON.stringify(x).length); count(path + ' (batch)', s.length); }

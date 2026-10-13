@@ -1,3 +1,4 @@
+// tags: @ci @webkit
 // A player who opened a room link waits for a friend; every broker drops and none can be reached (the network
 // itself is still up, as on a hotspot without mobile data): the chip and the room's status say so. The brokers
 // come back: waiting again.

@@ -1,12 +1,13 @@
+// tags: @ci @webkit
 // card: the library's one «Чекаємо на …» over a game (library/app/invite.js), over the internet. Аня and Богдан play
-// Two Dragons. Богдан drops out: Аня's card says whom she waits for, the time his place is kept and «Не чекати»; it is
+// a game (E2E_GAME: Two Dragons by default). Богдан drops out: Аня's card says whom she waits for, the time his place is kept and «Не чекати»; it is
 // built once (each second only the time changes), a screen reader hears only who and why (the live region beside it),
 // and a focused «Не чекати» keeps its focus. Богдан back: no card. Богдан goes on in a new tab whose game is slow to
 // open: «Чекаємо на Богдан — повертається в гру», with nothing to press (owner, decision 4), until it is open. Then he
 // drops out again and Аня presses «Не чекати»: his place goes. Needs the dev server with the plaintext games (npm run
-// unlock).
+// unlock), or with the probe (npm run dev -- --probe, E2E_GAME=probe).
 'use strict';
-const { U, w, launch, watch, scenario, check, step, until } = require('./support/scenario.cjs');
+const { U, w, launch, watch, scenario, check, step, until, GAME } = require('./support/scenario.cjs');
 const { openPage, createLink, enterName, libState, short, waitCard: cardOf } = require('./support/pages.cjs');
 const { fakeNet } = require('./support/fakenet.cjs');
 
@@ -18,9 +19,9 @@ scenario('card: whom the game waits for, and why', async () => {
   check(await until(async () => (await libState(pa)).linked && (await libState(pb)).linked, 15000), 'together', [await short(pa), await short(pb)]);
   await pa.keyboard.press('Escape').catch(() => {});      // (the dialog)
   await until(async () => !(await pa.$('.backdrop')), 5000);
-  await pa.click('a.game[href*="dragons"]');
+  await pa.click('a.game[href*="/' + GAME + '/"]');
   const playing = async () => { const s = [await libState(pa), await libState(pb)]; return s.every(x => x.game && x.game.linked); };
-  if (!check(await until(playing, 20000), 'both in Two Dragons, playing together (needs the plaintext games)', [await short(pa), await short(pb)])) return;
+  if (!check(await until(playing, 20000), 'both in ' + GAME + ', playing together (needs it on the dev server)', [await short(pa), await short(pb)])) return;
   check(!(await cardOf(pa)).shown && !(await cardOf(pb)).shown, 'no card while nobody is away');
 
   step('Богдан drops out');
@@ -57,7 +58,7 @@ scenario('card: whom the game waits for, and why', async () => {
 
   step('Богдан goes on in a new tab, its game slow to open');
   const pc = watch(await ctx.newPage(), 'Богдан (new tab)');
-  await pc.route('**/dragons/**', async r => { if (r.request().resourceType() === 'document') await w(5000); return r.continue().catch(() => {}); });
+  await pc.route('**/' + GAME + '/**', async r => { if (r.request().resourceType() === 'document') await w(5000); return r.continue().catch(() => {}); });
   await pc.addInitScript(fakeNet('bbbb2222bbbb'));
   await pc.goto(link);
   await enterName(pc, 'Богдан');

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Проба</title>
+<style>body { font: 16px system-ui, sans-serif; margin: 2rem; background: #d8e8e0; } pre { white-space: pre-wrap; }</style>
+</head>
+<body>
+<h1>Проба</h1>
+<p id="room">…</p>
+<button id="ping" type="button">Надіслати</button>
+<pre id="log" aria-live="polite"></pre>
+<script>
+  // The probe: a tiny open game for the library's browser scenarios where the real games are sealed (CI: npm run dev
+  // -- --probe serves it as 'probe'; E2E_GAME=probe points the scenarios at it). It shows the room as a game sees it,
+  // and keeps what it heard in window.__probe: events [[name, …args]], and the messages that came.
+  (function () {
+    var lib = window.ihroteka, room = lib && lib.room, P = window.__probe = { events: [], got: [] };
+    var $ = function (id) { return document.getElementById(id); };
+    function show() {
+      $('room').textContent = !room ? 'без бібліотеки' : (room.me || '-') + ' · ' + (room.linked ? 'разом' : 'сам') + ' · ' +
+        (room.role || '-') + ' · грають: ' + room.players.join(', ') + (room.waiting.length ? ' · чекають: ' + room.waiting.join(', ') : '');
+      $('log').textContent = P.events.slice(-12).map(function (e) { return e.join(' '); }).join('\n');
+    }
+    if (room) {
+      ['linked', 'join', 'leave', 'players', 'weak', 'peer-gone', 'relinked', 'role', 'resume'].forEach(function (name) {
+        room.on(name, function (a) { P.events.push(a === undefined ? [name] : [name, JSON.stringify(a)]); show(); });
+      });
+      room.on('message', function (m, from) { P.got.push(from + ':' + m.t + (m.n == null ? '' : m.n)); show(); });
+      var n = 0;
+      $('ping').addEventListener('click', function () { room.send({ t: 'ping', n: ++n }); });
+    }
+    show();
+  })();
+</script>
+</body>
+</html>

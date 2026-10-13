@@ -1,3 +1,4 @@
+// tags: @ci
 // Nearby, three devices with no internet (three browsers, real WebRTC, no brokers): the host pairs with one guest,
 // then adds another; the guests hear each other through the host; a game one guest opens is followed by everyone,
 // its seats going to the first players in the room's order (the rest wait). Then the host's phone is gone: the

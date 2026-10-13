@@ -1,3 +1,4 @@
+// tags: @ci
 // The "Грати разом" dialog: it checks for internet by itself. Without internet it goes straight to nearby (show or
 // scan a code); with internet it offers two ways. Both ways link two players up: a link (the friend opens it and
 // gives a name), and nearby (show / scan a code, then the other way round).

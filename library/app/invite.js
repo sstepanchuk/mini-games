@@ -3,20 +3,23 @@
    bottom of the screen, the "Грати разом" dialog, the name a player comes in with, and the card over a game
    while it waits for a player (the only «Чекаємо на …»: games say only their own reasons, such as a hidden tab or
    a countdown). The dialog asks for the name, then checks for internet by itself:
-   with internet there are two ways (a link, or nearby with QR codes), without it only nearby. Once together,
+   with internet there are two ways (a link, or nearby with QR codes), without it only nearby (and only nearby on a page
+   without Web Crypto, served over plain http: net/config.js secure; it says why). Once together,
    more players can be added the same way (up to the room's limit). A friend on another version of the library or of
    the game (together.js versionGap) is told everywhere it shows: «Онови сторінку — у друга інша версія».
    ===================================================================== */
-import { hasInternet, newRoomCode, preload } from '../net/index.js';
+import { hasInternet, newRoomCode, preload, secure } from '../net/index.js';
 import { $, btn, copy, el, modal, para, safe, toast } from './dom.js';
 import { Camera, drawQr } from './qr.js';
 import { comeBack, currentRoom, elsewhere, lastInternetCode, lastName, leave, linked, offerUpdate, onChange, release, startInternet, startNearby, updateNow, validName, versionGap,
   waitingFor } from './together.js';
 
 const UPDATE = 'Онови сторінку — у друга інша версія';   // (owner, decision 9)
+// a page without Web Crypto (plain http: `npm run dev -- --lan`) has no internet rooms (net/config.js secure)
+const INSECURE = 'Через посилання можна грати лише на сторінці, відкритій через https: на цій адресі браузер вимикає шифрування.';
 
 let shell = null;                                        // { address() → this view's address, with the room }
-let dlg = null;                                          // the open dialog: { screen, show, close, camera, scan, online, adding, name }
+let dlg = null;                                          // the open dialog: { screen, show, close, camera, scan, online, insecure, adding, name }
 
 export function initInvite(s) {
   shell = s;
@@ -33,6 +36,7 @@ export function initInvite(s) {
     if (what === 'peer-gone') setTimeout(() => { if (!linked()) toast(room && room.kind === 'nearby' ? 'Зв’язок обірвався' : 'Друзі вийшли'); }, 3000);
     if (what === 'replaced') queueMicrotask(goneElsewhere);
     if (what === 'version' && versionGap()) toast(UPDATE);
+    if (what === 'status' && room && room.status === 'unavailable' && !secure()) toast(INSECURE);   // (opened from a link)
     if (/^(away|leave|left|peer-gone|version|waiting)$/.test(what)) waitNote();
     chip();
     if (dlg) refresh(what);
@@ -156,6 +160,7 @@ function chip() {
     : versionGap() && !linked() ? UPDATE
     : linked() ? (room.weak ? 'Разом · зв’язок зник…' : 'Разом' + (room.players.length > 2 ? ' ' + room.players.length : '') + (s.rtt != null ? ' · ' + s.rtt + ' мс' : room.kind === 'nearby' ? ' · поруч' : ''))
     : room.kind === 'nearby' ? 'З’єднуюсь…'
+    : room.status === 'unavailable' && !secure() ? 'Лише через https'
     : /unavailable|no-signal/.test(room.status) ? 'Немає інтернету' : 'Чекаю на друга…';
 }
 
@@ -174,10 +179,11 @@ const STATUS = {
   failed: 'Не вдалося з’єднатися.',
   version: UPDATE + '.'
 };
+const statusText = room => room.status === 'unavailable' && !secure() ? INSECURE : STATUS[room.status] || '';
 
 export function openDialog() {
   if (dlg) return;
-  preload();                                             // the internet transport: likely needed soon
+  if (secure()) preload();                               // the internet transport: likely needed soon
   dlg = modal(() => {
     if (dlg.camera) dlg.camera.stop();
     const room = currentRoom();
@@ -188,9 +194,11 @@ export function openDialog() {
   if (currentRoom() && currentRoom().kind === 'internet') return show('link');
   show('name');
 }
-// is there internet (see hasInternet)? with it: two ways; without it: straight to nearby
+// is there internet (see hasInternet)? with it: two ways; without it: straight to nearby (as on a page that cannot
+// have internet rooms: menu)
 function check() {
   const d = dlg;
+  if (!secure()) return show('menu');
   d.screen = 'check';
   d.show(el('h2', { textContent: 'Грати разом' }), para('Перевіряю інтернет…', 'busy'), btn('Скасувати', closeDialog, 'btn ghost'));
   hasInternet().then(online => { if (dlg === d && d.screen === 'check') { d.online = online; show(online ? 'menu' : 'nearby'); } });
@@ -209,7 +217,7 @@ function refresh(what) {
     return;
   }
   if (d.screen === 'together') { if (!linked()) closeDialog(); else if (what === 'join' || what === 'leave' || what === 'away') show('together'); else d.state.textContent = stateText(room); }
-  else if (d.screen === 'link') { if (!room || room.kind !== 'internet') show('menu'); else if (what === 'status') d.state.textContent = STATUS[room.status] || ''; }
+  else if (d.screen === 'link') { if (!room || room.kind !== 'internet') show('menu'); else if (what === 'status') d.state.textContent = statusText(room); }
   else if (room && room.kind === 'nearby' && room.status === 'failed' && what === 'status') failed(room.pair);
   else if (room && room.kind === 'nearby' && room.status === 'version' && what === 'status') otherVersion();
 }
@@ -235,6 +243,7 @@ function show(screen) {
       close);
     queueMicrotask(() => input.select());
   } else if (screen === 'menu') {
+    if (!secure()) { Object.assign(dlg, { online: false, insecure: true }); return show('nearby'); }   // no link here: why, and nearby
     dlg.show(el('h2', { textContent: 'Грати разом' }),
       para('Ви будете разом у всій бібліотеці: що відкриє один, те відкриється й у другого.'),
       option('1', 'Через посилання', 'Друг може бути де завгодно: надішли посилання або покажи QR-код', viaLink),
@@ -243,7 +252,7 @@ function show(screen) {
   } else if (screen === 'link') {
     if (!room || room.kind !== 'internet') return show('menu');
     const link = shell.address(), qr = el('canvas', { className: 'qr' });
-    dlg.state = para(STATUS[room.status] || '', 'busy');
+    dlg.state = para(statusText(room), 'busy');
     drawQr(qr, link, 200);
     const share = navigator.share && btn('Поділитися', () => navigator.share({ title: 'Ігротека', text: 'Заходь, пограємо разом!', url: link }).catch(() => {}));
     dlg.show(el('h2', { textContent: 'Через посилання' }),
@@ -255,7 +264,7 @@ function show(screen) {
       room.linked ? btn('Готово', closeDialog, 'btn ghost') : btn('Скасувати', () => { leave(); closeDialog(); }, 'btn ghost'));
   } else if (screen === 'nearby') {
     dlg.show(el('h2', { textContent: 'Поруч, без інтернету' }),
-      ...(dlg.online ? [] : [para('Інтернету немає — з’єднаємося напряму.', 'fine')]),
+      ...(dlg.insecure ? [para(INSECURE + ' Поруч — можна.', 'fine')] : dlg.online ? [] : [para('Інтернету немає — з’єднаємося напряму.', 'fine')]),
       para('Обидва пристрої мають бути в одній мережі Wi-Fi (або один роздає точку доступу). Один показує код, другий його сканує, а потім навпаки.'),
       option('📱', 'Показати код', 'Я починаю', hostPairing),
       option('📷', 'Сканувати код', 'Друг уже показує код', guestPairing),

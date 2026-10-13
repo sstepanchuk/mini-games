@@ -1,3 +1,4 @@
+// tags: @ci @webkit
 // Net level, places by name: three players; messages by name; a new tab of the same name takes that place over (the
 // old tab steps aside); the host offline long enough that another player takes over, then back as a guest; «Не
 // чекати» (release) lets an away player's place go, and that player comes back as new; the host's name in yet

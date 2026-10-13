@@ -2,7 +2,7 @@
 // codes), and what each page shows. Names and flows are the library's own (library/app/invite.js).
 'use strict';
 const { fakeNet } = require('./fakenet.cjs');
-const { U, w, launch, watch, until } = require('./scenario.cjs');
+const { U, w, launch, watch, until, CHROMIUM } = require('./scenario.cjs');
 
 const SHELF = '#shelf:not([hidden])', NAME = '.dialog input.link';
 
@@ -13,10 +13,10 @@ async function enterName(p, name) {
   await p.press(NAME, 'Enter');
 }
 // A library page (a tab) in ctx with the fake network; opened at url (a room link asks for the name: given here).
-// net: fakeNet options.
+// net: fakeNet options; false: no fake network (the page's own: the real one, or the dev server's devnet).
 async function openPage(ctx, pid, url = U, { name, label = name || pid, net } = {}) {
   const p = watch(await ctx.newPage(), label);
-  await p.addInitScript(fakeNet(pid, net));
+  if (net !== false) await p.addInitScript(fakeNet(pid, net));
   await p.goto(url);
   await p.waitForSelector(SHELF);
   if (name) await enterName(p, name);
@@ -63,7 +63,7 @@ async function short(p, game) {
 // internet: false (default) = no internet at all, so the dialog goes straight to nearby; net: more fakeNet options
 async function phone(pid, name, { internet = false, net = {}, viewport = { width: 420, height: 860 } } = {}) {
   const b = await launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
-  const ctx = await b.newContext({ viewport, permissions: ['camera'] });
+  const ctx = await b.newContext({ viewport, ...(CHROMIUM && { permissions: ['camera'] }) });
   const p = await openPage(ctx, pid, U, { label: name, net: { brokers: internet, ...net } });
   const X = {
     b, p, name,

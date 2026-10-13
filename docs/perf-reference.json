@@ -1,0 +1,98 @@
+{
+  "dragons:wifi": {
+    "game": "dragons",
+    "profile": "wifi",
+    "secs": 30,
+    "when": "2026-10-13T01:05:39.698Z",
+    "machine": "Intel(R) Xeon(R) Processor @ 2.80GHz ×4",
+    "browser": "141.0.7390.37",
+    "fairPassed": true,
+    "metrics": {
+      "round": {
+        "host": {
+          "name": "Аня",
+          "control": {
+            "med": 79,
+            "p90": 89,
+            "max": 91,
+            "n": 49
+          },
+          "screen": {
+            "med": 38,
+            "p90": 47,
+            "max": 715,
+            "n": 48
+          },
+          "jumps": {
+            "own": 0,
+            "other": 0
+          }
+        },
+        "guest": {
+          "name": "Богдан",
+          "control": {
+            "med": 63,
+            "p90": 79,
+            "max": 94,
+            "n": 61
+          },
+          "screen": {
+            "med": 38,
+            "p90": 48,
+            "max": 699,
+            "n": 61
+          },
+          "jumps": {
+            "own": 0,
+            "other": 0
+          }
+        }
+      },
+      "traffic": {
+        "host": {
+          "sent": {
+            "mqtt-room": 208,
+            "mqtt-mail": 1667,
+            "dc-fast": 13468,
+            "dc-ctl": 1080
+          },
+          "long-page": {
+            "n": 1,
+            "ms": 64,
+            "max": 64
+          },
+          "long-game": {
+            "n": 1,
+            "ms": 64,
+            "max": 64
+          }
+        },
+        "guest": {
+          "sent": {
+            "mqtt-room": 54,
+            "mqtt-mail": 753,
+            "dc-fast": 966
+          },
+          "long-page": {
+            "n": 0,
+            "ms": 0,
+            "max": 0
+          },
+          "long-game": {
+            "n": 0,
+            "ms": 0,
+            "max": 0
+          }
+        }
+      },
+      "open": {
+        "med": 364,
+        "max": 616
+      },
+      "idle": {
+        "shelf": 0.1,
+        "game": 12.9
+      }
+    }
+  }
+}

@@ -220,8 +220,10 @@ test('remove-game takes a game off the shelf', () => {
   game('extra');
   must(['build'], pw.alice);
   assert.match(must(['check']), /2 game/);
-  must(['remove-game', 'extra'], pw.alice);
+  assert.ok(!run(['remove-game', 'extra']).ok && fs.existsSync(file('vault/extra')), 'not without --yes');
+  must(['remove-game', 'extra', '--yes'], pw.alice);
   assert.ok(!fs.existsSync(file('vault/extra')) && !fs.existsSync(file('games/extra')));
+  assert.ok(fs.readdirSync(file('games/.removed')).some(d => d.startsWith('extra-')), 'its sources kept aside (tests/tools.test.js)');
   assert.match(must(['check']), /1 game/);
 });
 

@@ -1,14 +1,16 @@
 // The room's status and kind (library/net/room.js, phase 2, G2): getters of the net room, one setStatus that the modes
 // call and that never says the same status twice in a row, the list of statuses (STATUSES) with a text for each in the
 // dialog (app/invite.js STATUS), no 'role' event, and a library (app/) that writes nothing onto the net room it does
-// not own (no r.kind, no r.lastStatus). Read from the source, run in Node, and in worker tabs (tests/support).
+// not own (no r.kind, no r.lastStatus). A page without Web Crypto (plain http) has no internet room: 'unavailable',
+// and nothing of it reaches the brokers (phase 3, L4). Read from the source, run in Node, and in worker tabs
+// (tests/support).
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as espree from 'espree';
-import { room, until, world } from '../support/world.js';
+import { room, sleep, until, world } from '../support/world.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = f => fs.readFileSync(path.join(REPO, f), 'utf8');
@@ -73,6 +75,22 @@ describe('the room\'s status (phase 2, G2)', () => {
       if (o.type === 'Identifier' && (o.name === 'r' || o.name === 'room')) assert.ok(['streaming', 'pulse', 'playing'].includes(k), f + ':' + n.loc.start.line + ': writes room.' + k);
     }
     for (const f of APP) assert.doesNotMatch(read(f), /\blastStatus\b/, f);
+  });
+
+  test('a page without Web Crypto (plain http): \'unavailable\', and nothing of its room reaches the brokers (not its code either)', { timeout: 20000 }, async t => {
+    const W = world(t), S = W.spy();
+    const B = await W.tab('p1tab');
+    await B.join('plain1', 'Богдан');
+    assert.ok(await until(async () => (await B.state()).status === 'waiting', 5000), 'a page with Web Crypto holds the room');
+    const A = await W.tab('p2tab', {}, { insecure: true });
+    await A.join('plain1', 'Аня');
+    assert.ok(await until(async () => (await A.state()).status === 'unavailable', 3000), 'unavailable: ' + (await A.state()).status);
+    await sleep(1500);
+    const [a, b] = [await A.state(), await B.state()];
+    assert.ok(!a.linked && !b.linked && b.players.join() === 'Богдан', 'they never meet: ' + JSON.stringify([a, b]));
+    assert.deepEqual((await A.events()).filter(e => e[1] === 'status').map(e => e[2]), ['connecting', 'unavailable']);
+    assert.deepEqual(S.seen.filter(x => x.m.f === A.session), [], 'nothing from the page without Web Crypto');
+    assert.ok(S.seen.length && !S.seen.some(x => x.topic.includes('plain1')), 'no room code in a topic: ' + S.seen.map(x => x.topic).join(' '));
   });
 
   test('in tabs: room.kind and room.status are getters; status is the last one heard; the library\'s state says the same', { timeout: 30000 }, async t => {

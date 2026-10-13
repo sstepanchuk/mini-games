@@ -7,7 +7,8 @@
 // workerData: { pid: the session's first part (window.__pid), bus: the world's BroadcastChannel, scale:
 // window.__timeScale (config.js TIMING), brokerMs, rtc: fake direct links, net: fakenet switches to start with,
 // library: another library/ folder to run (say, a checkout of an older version; default: this repository's), dev: the
-// page says it is the dev server's (its version meta: 'dev', so together.js warns in the console) }.
+// page says it is the dev server's (its version meta: 'dev', so together.js warns in the console), insecure: the page
+// has no Web Crypto (crypto.subtle), as one served over plain http }.
 // Like a browser, an exception thrown by a timer or a listener does not stop the tab: it goes to `errors`
 // (console.error and console.warn too), which the test reads.
 import { pathToFileURL } from 'node:url';
@@ -15,7 +16,7 @@ import { parentPort, workerData } from 'node:worker_threads';
 import { install } from './fakenet.js';
 import { install as installRtc } from './fakertc.js';
 
-const { pid, bus, scale = 1, brokerMs = 25, rtc: withRtc = false, net: start = {}, library, dev = false } = workerData;
+const { pid, bus, scale = 1, brokerMs = 25, rtc: withRtc = false, net: start = {}, library, dev = false, insecure = false } = workerData;
 const root = library ? pathToFileURL(library.replace(/\/?$/, '/')) : new URL('../../library/', import.meta.url);
 const lib = p => new URL(p, root).href;
 const t0 = performance.now(), ms = () => Math.round(performance.now() - t0);
@@ -57,6 +58,7 @@ Object.assign(globalThis, {
   history: { state: null, replaceState() {}, pushState() {} },
   RTCPeerConnection: undefined
 });
+if (insecure) { const real = globalThis.crypto; Object.defineProperty(globalThis, 'crypto', { configurable: true, value: { getRandomValues: a => real.getRandomValues(a) } }); }
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, get: blocked(local) });
 Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, get: blocked(session) });
 let fake = null;

@@ -1,10 +1,11 @@
+// tags: @ci @webkit
 // version: friends whose copies of a game speak different wire numbers (owner, decision 9). Аня's page is told its
-// Two Dragons is wire 2 (its shelf rewritten on the way), Богдан's is 1: Богдан's page, the older, reloads itself
+// copy of the game (E2E_GAME: Two Dragons by default) is wire 2 (its shelf rewritten on the way), Богдан's is 1: Богдан's page, the older, reloads itself
 // back into the room (no name asked), once only; both know it; in the game they are not seated together, and both
 // see «Онови сторінку — у друга інша версія», with «Оновити» on the older page only. Needs the dev server with the
-// plaintext games (npm run unlock).
+// plaintext games (npm run unlock), or with the probe (npm run dev -- --probe, E2E_GAME=probe).
 'use strict';
-const { U, w, launch, watch, scenario, check, until } = require('./support/scenario.cjs');
+const { U, w, launch, watch, scenario, check, until, GAME } = require('./support/scenario.cjs');
 const { openPage, createLink, libState } = require('./support/pages.cjs');
 const { fakeNet } = require('./support/fakenet.cjs');
 
@@ -13,10 +14,10 @@ const UPDATE = /Онови сторінку — у друга інша верс�
 scenario('version: a friend\'s copy of the game is newer', async () => {
   const ctx = await (await launch()).newContext();       // (one context: the fake network is shared by its pages)
   const pa = watch(await ctx.newPage(), 'Аня');
-  await pa.route('**/*', async route => {                // this page's shelf says dragons is wire 2
+  await pa.route('**/*', async route => {                // this page's shelf says the game is wire 2
     if (route.request().resourceType() !== 'document') return route.continue();
     const r = await route.fetch();
-    const html = (await r.text()).replace(/("id":"dragons"[^}]*"players":\{[^}]*\})(,"wire":\d+)?/, '$1,"wire":2');
+    const html = (await r.text()).replace(new RegExp('("id":"' + GAME + '"[^}]*"players":\\{[^}]*\\})(,"wire":\\d+)?'), '$1,"wire":2');
     await route.fulfill({ response: r, body: html });
   });
   await pa.addInitScript(fakeNet('aaaaaaaaaaaa'));
@@ -33,7 +34,7 @@ scenario('version: a friend\'s copy of the game is newer', async () => {
   check(loads === 1, 'once: not again for the same version', loads);
   const [sa, sb] = [await libState(pa), await libState(pb)];
   check(sb.version.gap?.older && sa.version.gap && !sa.version.gap.older, 'both know: Богдан older, Аня newer', [sa.version, sb.version]);
-  await pa.click('a.game[href*="dragons"]');            // the room goes into the game
+  await pa.click('a.game[href*="/' + GAME + '/"]');     // the room goes into the game
   await until(async () => (await libState(pb)).game && (await libState(pa)).game, 15000);
   await w(1500);
   const note = p => p.evaluate(() => document.getElementById('waiting')?.innerText || '');

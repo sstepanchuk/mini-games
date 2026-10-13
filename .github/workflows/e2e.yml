@@ -1,0 +1,68 @@
+name: Browser tests
+
+# The library's browser scenarios (tests/e2e), in Chromium and in WebKit (what iPhones run), on every push: a workflow
+# of its own, so they never hold up Deploy (pages.yml) while they prove themselves steady (docs/ROADMAP.md, phase 5:
+# then they block it). CI has no password, so no sealed game opens here: the dev server serves the probe instead
+# (tests/e2e/fixtures/probe, `dev --probe`; E2E_GAME=probe), `newgame` makes a game with `cli new` and plays it in
+# two devnet tabs, and the production path runs on the assembled site without opening a game (tests/e2e/prod).
+# Chromium runs the scenarios tagged @ci; WebKit those tagged @webkit (no fake camera there: nothing nearby).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Every action is pinned to a commit, as in pages.yml.
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Browser scenarios (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            tag: '@ci'
+          - browser: webkit
+            tag: '@webkit'
+    env:
+      E2E_BROWSER: ${{ matrix.browser }}
+      E2E_GAME: probe
+      E2E_URL: http://127.0.0.1:8000/
+      E2E_SITE_URL: http://localhost:8001/
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: The browser (Playwright's own build, at the version in package.json)
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: The library with the probe (:8000), and the assembled site (:8001)
+        run: |
+          npm run site
+          nohup node tools/cli.js dev --probe > dev.log 2>&1 &
+          nohup node tools/cli.js dev site > site.log 2>&1 &
+          for i in $(seq 30); do curl -sf "$E2E_URL" > /dev/null && curl -sf "$E2E_SITE_URL" > /dev/null && exit 0; sleep 1; done
+          cat dev.log site.log; exit 1
+      - name: The library's scenarios (${{ matrix.tag }})
+        run: npm run e2e -- ${{ matrix.tag }}
+      - name: The production path (${{ matrix.tag }})
+        if: success() || failure()
+        run: npm run e2e -- --prod ${{ matrix.tag }}
+      - name: The servers' logs
+        if: failure()
+        run: tail -n 100 dev.log site.log

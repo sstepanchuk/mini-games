@@ -70,7 +70,7 @@
 //   hi to a linked guest's new k  an old guest ignores 'hi' while linked (it never starts its link over by itself)
 //   reliable messages as JSON     nothing on the wire: a message that cannot become JSON is refused at the call
 //     once, before their number   instead of stalling the link
-import { me, PROTO, roomTopic, TIMING } from './config.js';
+import { me, PROTO, roomTopic, secure, TIMING } from './config.js';
 import { closeBrokers, loadTransport, mailbox, openBrokers, pubOn } from './brokers.js';
 import { onRtc } from './rtc.js';
 import { deliver, resetPaths, setWeak } from './link.js';
@@ -117,6 +117,7 @@ export function joinRoom({ game, code, name, max }) {
     await null;                                        // let the caller subscribe to events first
     if (N.closed) return;
     setStatus(N, 'connecting');
+    if (!secure()) { setStatus(N, 'unavailable'); return; }   // no Web Crypto: no broker hears of this room (config.js secure)
     try { await loadTransport(); } catch (e) { if (!N.closed) setStatus(N, 'unavailable'); return; }
     N.topic = await roomTopic(game, code);
     if (N.closed) return;

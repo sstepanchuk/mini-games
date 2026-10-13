@@ -1,3 +1,4 @@
+// tags: @ci @webkit
 // Net level, four players over the internet: one roster for everyone, the host passing messages on, a message to
 // one player only, the host leaving (the first player still here takes over, the old host keeps its place), and a
 // guest reloading (a new tab of the same player: back in their place, the others told 'relinked').

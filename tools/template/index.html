@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<!-- збірка вбудовує стилі й модулі в одну сторінку (README, «Adding a game») -->
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>{{title}}</h1>
+  <section id="lobby">
+    <p id="lobby-text"></p>
+    <button id="start" type="button">Почати</button>
+    <button id="invite" type="button" hidden>Запросити друзів</button>
+  </section>
+  <section id="play" hidden>
+    <p class="total"><b id="total">0</b> з <span id="target"></span></p>
+    <ol id="seats" aria-label="Гравці"></ol>
+    <div id="steps" class="steps" aria-label="Додати"></div>
+    <button id="again" type="button" hidden>Ще раз</button>
+  </section>
+  <p id="say" role="status" aria-live="polite"></p>
+</main>
+<script type="module" src="main.js"></script>
+</body>
+</html>

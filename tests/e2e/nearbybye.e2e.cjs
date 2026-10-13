@@ -1,3 +1,4 @@
+// tags: @ci
 // nearbybye: nearby, no internet. Ганна (who showed the code first) and Гліб are together; Гліб's page reloads. Its
 // goodbye goes out as the page closes (sends are synchronous here, as on a real phone: support/fakenet.cjs) and says
 // that his place is kept: Ганна's room goes on, Гліб is away. His new page pairs again («З’єднатися знову» on Ганна's

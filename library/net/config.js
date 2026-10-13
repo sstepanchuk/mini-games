@@ -75,10 +75,12 @@ export const SENDER = /^[a-z0-9]{4,32}\.[a-z0-9]{4,12}$/;   // what a session id
 
 // The room's topic on the public brokers. Only a hash of game + code goes there, so someone listening to
 // every topic learns no room codes. They do see the room's messages, though, and nothing is signed: whoever
-// watches a room's topic could join that room or disturb it.
+// watches a room's topic could join that room or disturb it. Needs Web Crypto (see secure).
 export async function roomTopic(game, room) {
-  try {
-    const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(game + ':' + room)));
-    return 'ihroteka/' + Array.from(h.subarray(0, 16), b => b.toString(16).padStart(2, '0')).join('');
-  } catch (e) { return 'ihroteka/' + game + '/' + room; }   // no Web Crypto (page not served over https)
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(game + ':' + room)));
+  return 'ihroteka/' + Array.from(h.subarray(0, 16), b => b.toString(16).padStart(2, '0')).join('');
 }
+// Whether this page has Web Crypto, which a page served over plain http (not https, not localhost: `npm run dev --
+// --lan`) does not. Without it there is no internet room (internet.js: status 'unavailable', nothing goes to the
+// brokers): its topic could only carry the room's code in plain text, and it would never meet the https devices.
+export const secure = () => !!globalThis.crypto?.subtle;

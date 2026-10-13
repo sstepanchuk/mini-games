@@ -1,3 +1,4 @@
+// tags: @ci
 // nearname: nearby, no internet. Ганна (who showed the code first: the phone that holds the room) and Гліб are
 // together; a third phone comes in under the name Ганна. The host says no: the pairing ends at once, on both phones,
 // with «Це ім’я вже в кімнаті» (net/nearby.js: status 'failed' with room.pair.reason 'name'; the dialog: invite.js),

@@ -70,9 +70,9 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
   const W = {
     bus,
     /** a new tab; net: fakenet switches to start with; library: another library/ folder to run (an older version);
-     *  dev: the page is the dev server's (together.js warns in its console) */
-    async tab(pid, net = {}, { library, dev } = {}) {
-      const w = new Worker(TAB, { workerData: { pid, bus, scale, brokerMs, rtc, net, library, dev } });
+     *  dev: the page is the dev server's (together.js warns in its console); insecure: no Web Crypto (plain http) */
+    async tab(pid, net = {}, { library, dev, insecure } = {}) {
+      const w = new Worker(TAB, { workerData: { pid, bus, scale, brokerMs, rtc, net, library, dev, insecure } });
       const waits = new Map();
       let n = 0, dead = null;
       const ready = new Promise((res, rej) => {

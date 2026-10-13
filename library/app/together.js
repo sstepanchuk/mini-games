@@ -94,9 +94,13 @@ export function initTogether(s) {
   setInterval(watchRunner, 1000);
   let hiddenAt = 0;                                      // (the trace: how long the page was out of sight)
   globalThis.document?.addEventListener?.('visibilitychange', () => {
-    if (document.hidden) { hiddenAt = performance.now(); trace.note('page hidden'); }
+    if (document.hidden) { hiddenAt = performance.now(); trace.note('page hidden'); if (ch) ch.snapNow(); }
     else if (hiddenAt) { trace.note('page shown after ' + ((performance.now() - hiddenAt) / 1000).toFixed(1) + ' s'); hiddenAt = 0; }
   });
+  // The page goes (a reload, a closed tab; a hidden one may never come back, above): the open game's latest snapshot,
+  // if it still waits for its turn to go, goes now, or the round would go on one step behind (from the copy the others
+  // keep). (Added before any room's own pagehide, net/room.js, so it goes out ahead of its goodbye.)
+  globalThis.addEventListener?.('pagehide', () => { if (ch) ch.snapNow(); });
   const code = (new URLSearchParams(location.search).get('room') || '').toLowerCase();
   // the page reloaded itself into a newer version (versionCheck): straight back into its room, once the shell has
   // shown the address's view (so we follow the room's view instead of announcing ours)
@@ -481,7 +485,10 @@ function channel(id, seats) {
       trace.note('snapshot ' + id + ': over (a player left)');
       flush();
     },
-    dispose() { handlers.clear(); inbox.length = 0; late.length = 0; c.disposed = true; clearTimeout(sendTimer); }
+    // the latest snapshot, if it still waits for its turn to go (at most two a second): now (the game closes, the page
+    // goes or is hidden: it may never come back to send it)
+    snapNow() { clearTimeout(sendTimer); flush(); },
+    dispose() { c.snapNow(); handlers.clear(); inbox.length = 0; late.length = 0; c.disposed = true; }
   };
   // the latest snapshot to whoever plays with us; a tombstone to everyone (whoever keeps the round, waiting for a
   // seat too, must learn it is over)
