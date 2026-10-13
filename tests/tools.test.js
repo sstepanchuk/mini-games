@@ -78,16 +78,25 @@ test('game.json "api": a whole number, at most the library\'s version', () => {
   } finally { fs.writeFileSync(at, JSON.stringify(g)); }
 });
 
-test('game.json "camera": true or false; only true reaches the shelf (the frame may use the camera: README, Trust)', async () => {
+test('game.json "camera" and "microphone": true or false; only true reaches the shelf (the frame may use it: README, Trust)', async () => {
   const { shelfEntry } = await import('../tools/build.js');
   const at = file('games/demo2/game.json'), g = JSON.parse(fs.readFileSync(at, 'utf8'));
   try {
-    for (const [camera, ok] of [[true, true], [false, true], ['yes', false], [1, false]]) {
-      fs.writeFileSync(at, JSON.stringify({ ...g, camera }));
-      if (ok) assert.equal(shelfEntry('demo2', readManifest('demo2')).camera, camera === true || undefined);
-      else assert.throws(() => readManifest('demo2'), /"camera" must be true or false/, JSON.stringify(camera));
+    for (const flag of ['camera', 'microphone']) {
+      for (const [v, ok] of [[true, true], [false, true], ['yes', false], [1, false], [null, false], ['true', false]]) {
+        fs.writeFileSync(at, JSON.stringify({ ...g, [flag]: v }));
+        if (ok) assert.equal(shelfEntry('demo2', readManifest('demo2'))[flag], v === true || undefined, flag + ': ' + v);
+        else assert.throws(() => readManifest('demo2'), new RegExp('"' + flag + '" must be true or false'), flag + ': ' + JSON.stringify(v));
+      }
     }
-    assert.ok(!('camera' in shelfEntry('demo2', g)), 'a game that does not ask: its shelf entry as before');
+    // each on its own: asking for one gives that one only
+    fs.writeFileSync(at, JSON.stringify({ ...g, microphone: true }));
+    assert.deepEqual(Object.keys(shelfEntry('demo2', readManifest('demo2'))).filter(k => /camera|microphone/.test(k)), ['microphone']);
+    fs.writeFileSync(at, JSON.stringify({ ...g, camera: true, microphone: false }));
+    assert.deepEqual(Object.keys(shelfEntry('demo2', readManifest('demo2'))).filter(k => /camera|microphone/.test(k)), ['camera']);
+    const plain = shelfEntry('demo2', g);
+    assert.ok(!('camera' in plain) && !('microphone' in plain), 'a game that does not ask: its shelf entry as before');
+    assert.deepEqual(Object.keys(plain), ['id', 'title', 'tagline', 'image', 'emoji', 'players', 'wire']);
   } finally { fs.writeFileSync(at, JSON.stringify(g)); }
 });
 

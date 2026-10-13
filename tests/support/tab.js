@@ -8,7 +8,8 @@
 // window.__timeScale (config.js TIMING), brokerMs, rtc: fake direct links, net: fakenet switches to start with,
 // library: another library/ folder to run (say, a checkout of an older version; default: this repository's), dev: the
 // page says it is the dev server's (its version meta: 'dev', so together.js warns in the console), insecure: the page
-// has no Web Crypto (crypto.subtle), as one served over plain http }.
+// has no Web Crypto (crypto.subtle), as one served over plain http; kept: what the tab's sessionStorage holds when
+// the page starts, [[key, value], …] (world.js reload: what the page before it in this tab kept) }.
 // Like a browser, an exception thrown by a timer or a listener does not stop the tab: it goes to `errors`
 // (console.error and console.warn too), which the test reads.
 import { pathToFileURL } from 'node:url';
@@ -16,7 +17,7 @@ import { parentPort, workerData } from 'node:worker_threads';
 import { install } from './fakenet.js';
 import { install as installRtc } from './fakertc.js';
 
-const { pid, bus, scale = 1, brokerMs = 25, rtc: withRtc = false, net: start = {}, library, dev = false, insecure = false } = workerData;
+const { pid, bus, scale = 1, brokerMs = 25, rtc: withRtc = false, net: start = {}, library, dev = false, insecure = false, kept = [] } = workerData;
 const root = library ? pathToFileURL(library.replace(/\/?$/, '/')) : new URL('../../library/', import.meta.url);
 const lib = p => new URL(p, root).href;
 const t0 = performance.now(), ms = () => Math.round(performance.now() - t0);
@@ -46,7 +47,7 @@ Object.assign(globalThis, {
   clearTimeout: id => { ticking.delete(id); clearT(id); }
 });
 const storage = m => ({ getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: k => { m.delete(k); } });
-const local = storage(new Map()), session = storage(new Map());
+const tabSession = new Map(kept), local = storage(new Map()), session = storage(tabSession);   // (sessionStorage: the tab's, through reloads)
 const blocked = s => () => { if (!siteData) throw new DOMException('The site data is blocked', 'SecurityError'); return s; };
 Object.assign(globalThis, {
   window: globalThis, self: globalThis, __pid: pid, __timeScale: scale,
@@ -77,7 +78,9 @@ let T = null;                                              // library/app/togeth
 let netRoom = null;
 const events = [], got = [];
 const ROOM_EVENTS = ['status', 'linked', 'join', 'leave', 'players', 'away', 'relinked', 'replaced', 'peer-gone', 'weak', 'budget'];
+const watched = new WeakSet();                           // (a room watched once: startNearby may give back the same)
 function watchRoom(r) {
+  watched.add(r);
   for (const ev of ROOM_EVENTS) r.on(ev, (...a) => events.push([ms(), ev, ...a]));
   r.on('message', (m, from) => got.push([from, m]));
 }
@@ -126,6 +129,17 @@ async function topics(g, code) {
   return { topic: K.topic, legacy: K.legacy };
 }
 
+// together.js and the shell around it, once (seats: game id → seats, default 2; wires: game id → its wire number on
+// this tab's shelf, the first call only; none: the shell does not say, every game 1)
+async function shellUp(seats, wires) {
+  T = T || await import(lib('app/together.js'));
+  seatsOf = seats;
+  if (shell) return;
+  shell = true;
+  T.initTogether({ current: () => view, follow: id => go(id, true), invite() {}, address: () => globalThis.location.href, seats: id => seatsOf[id] || 2, askName() {},
+    reload: still => { reloads.push(still || null); }, gameError: () => { broke++; }, ...(wires && { wires: () => wires }) });
+}
+
 /* ---------- the commands ---------- */
 const cmds = {
   // a room of library/net (a net-level tab) → this tab's session
@@ -148,14 +162,16 @@ const cmds = {
   // seats (default 2); wires: game id → its wire number on this tab's shelf (the first call only; none: the shell does
   // not say, every game 1). Again in the same tab: that room is left, as the library does.
   async lib({ code, name, seats = {}, wires }) {
-    T = T || await import(lib('app/together.js'));
-    seatsOf = seats;
-    if (!shell) {
-      shell = true;
-      T.initTogether({ current: () => view, follow: id => go(id, true), invite() {}, address: () => globalThis.location.href, seats: id => seatsOf[id] || 2, askName() {},
-        reload: still => { reloads.push(still || null); }, gameError: () => { broke++; }, ...(wires && { wires: () => wires }) });
-    }
+    await shellUp(seats, wires);
     watchRoom(T.startInternet(code, name));
+    return config.me;
+  },
+  // the library's nearby room (together.js startNearby, as the dialog's pairing does: a guest whose link broke gets a
+  // new one, a host keeps its own; the world's rtc), then pair(…) as for near → this tab's session
+  async libNear({ name, seats = {}, wires }) {
+    await shellUp(seats, wires);
+    const r = T.startNearby(name);
+    if (!watched.has(r)) watchRoom(r);
     return config.me;
   },
   open: ({ id }) => { go(id); },                          // open a game (or the shelf: null) ourselves
@@ -214,6 +230,8 @@ const cmds = {
   reloadDone: () => { const s = reloads.at(-1); return s === undefined ? null : !s || s() ? 'reload' : 'stay'; },
   // what the page keeps in sessionStorage under k (JSON), as the next page in this tab would find it
   stored: ({ k }) => JSON.parse(session.getItem(k)),
+  // everything the page keeps in sessionStorage, [[key, value], …]: the next page in this tab starts with it (world.js reload)
+  sessionAll: () => [...tabSession],
   // the tab stops for ms (a locked phone, a frozen background tab): no timer, no message, then everything late at once
   // → when it runs again, on the clock of its events (log)
   freeze: ({ ms: wait }) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait); return ms(); },

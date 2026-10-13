@@ -13,9 +13,11 @@
 //   await A.join('room01', 'Аня')          a net-level room (library/net joinRoom); A.lib(code, name, seats, wires): the
 //                                          library's room (together.js), and A.open(game), A.game(), A.gsend(m) → true |
 //                                          false, A.snapshot(s), A.share(k, v) …;
-//                                          A.near(name): a nearby one (rtc), paired with A.pair('offer' | 'answer' | 'finish', code)
+//                                          A.near(name): a nearby one (rtc), paired with A.pair('offer' | 'answer' | 'finish', code);
+//                                          A.libNear(name): the library's nearby room (together.js startNearby), paired so too
 //   await A.state(), A.events(), A.got(), A.net({ up: false }), A.send(m, opts, then), A.release(n), A.lag(n), A.leave(), A.kill(),
-//   A.listeners(), A.timers() …
+//   A.listeners(), A.timers() …; const A2 = await A.reload(): the page reloads in the same tab (its sessionStorage kept),
+//                                          in no room until A2.lib(…), as a page that comes back from its room's link
 //   await until(async () => …, ms)         poll a condition (truthy → it; deadline → false)
 //   const S = W.spy()                      S.seen: [{ topic, url, m, raw, sealed }] (m: opened if the spy knows the room);
 //                                          S.publish(topic, m, session, { plain }): sealed (if known) to every broker;
@@ -92,9 +94,10 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
   const W = {
     bus,
     /** a new tab; net: fakenet switches to start with; library: another library/ folder to run (an older version);
-     *  dev: the page is the dev server's (together.js warns in its console); insecure: no Web Crypto (plain http) */
-    async tab(pid, net = {}, { library, dev, insecure } = {}) {
-      const w = new Worker(TAB, { workerData: { pid, bus, scale, brokerMs, rtc, net, library, dev, insecure } });
+     *  dev: the page is the dev server's (together.js warns in its console); insecure: no Web Crypto (plain http);
+     *  kept: its sessionStorage to start with, [[key, value], …] (reload) */
+    async tab(pid, net = {}, { library, dev, insecure, kept } = {}) {
+      const w = new Worker(TAB, { workerData: { pid, bus, scale, brokerMs, rtc, net, library, dev, insecure, kept } });
       const waits = new Map();
       let n = 0, dead = null;
       const ready = new Promise((res, rej) => {
@@ -116,6 +119,7 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
         near: (name, o = {}) => call('near', { name, ...o }),     // a nearby room (world rtc), then pair('offer') …
         pair: (step, code) => call('pair', { step, code }),
         lib: (code, name, seats, wires) => { know('ihroteka', code); return call('lib', { code, name, seats, wires }); },   // (together.js LIB)
+        libNear: (name, seats, wires) => call('libNear', { name, seats, wires }),   // the library's nearby room (world rtc), then pair(…)
         state: () => call('state'),
         log: (from, gfrom) => call('log', { from, gfrom }),
         events: async () => (await call('log')).events,
@@ -154,6 +158,9 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
         // first in the same go); onHide(list, at): what the page sends as it goes ([{ m, opts }], before the room's goodbye;
         // at 'hidden': as it is hidden)
         close: async o => { await call('pagehide', o); await w.terminate(); },
+        // the page reloads: it goes as close does (o), and the next page in this tab (→ its tab: the same pid, a new
+        // session) starts with what this one kept in sessionStorage (its pagehide's too), in no room until it joins one (lib)
+        reload: async o => { await call('pagehide', o); const kept = await call('sessionAll'); await w.terminate(); return W.tab(pid, net, { library, dev, insecure, kept }); },
         onHide: (list, at) => call('onHide', { list, at })
       };
       tabs.push(T);

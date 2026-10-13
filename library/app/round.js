@@ -47,7 +47,10 @@
       the round it follows (the record's id, or none) and expires: the runner offers ('ok'), and the asker takes the
       offer ('go') only within ASK_TTL of asking, by its own clock, so a start that waited in an outbox (an outage)
       starts nothing. A quit names its round and holds until that round is over: said again to its runner whenever
-      we link with it, and if the round moves to our copy, ours ends it.
+      we link with it, and if the round moves to our copy, ours ends it. It outlives a reload of our page (owner:
+      «Пам'ятати вихід»): kept in the tab (sessionStorage QUITS) with the room it was said in and our name there, and
+      taken back by a page that comes into that room as that player (clear): a reload, and a page back in it after it
+      left (nearby: a pairing given up leaves its room, the next one makes a new one); another room or name drops it.
    6. Events, to the open game, once per round id: 'start' (a round has just begun: before its first save), then
       exactly one of 'run' (our copy runs it: state null when fresh, else its snapshot) or 'watch' (another copy runs
       it), told again only when the runner changes; 'rejoin' (we run it: one of its players has a new copy of the
@@ -84,6 +87,15 @@ function json(v, what) {
   try { const x = JSON.stringify(v); return x === undefined ? 'null' : x; } catch (e) { throw new TypeError('ihroteka.round.' + what + ': not JSON (' + e.message + ')'); }
 }
 const KEY = game => 'round:' + game;
+// Our quits not over yet, kept in the tab for the next page (invariant 5): one key, { room, q: { game: round id } },
+// room: where they were said (the room's kind and code, our name). Read and written as the browser lets us: site data
+// may be blocked (it throws) or gone (empty); what we cannot keep, the page still holds as long as it lives.
+const QUITS = 'ihroteka-quits';
+const where = r => JSON.stringify([r.kind, r.code || '', r.me]);
+const kept = {
+  get() { try { return JSON.parse(sessionStorage.getItem(QUITS)); } catch (e) { return null; } },
+  set(v) { try { if (v) sessionStorage.setItem(QUITS, JSON.stringify(v)); else sessionStorage.removeItem(QUITS); } catch (e) {} }
+};
 
 // A round record from the shared state, as it must look (invariant 1: its writer is the runner it names).
 export function validRecord(k, e) {
@@ -108,11 +120,15 @@ export function validRecord(k, e) {
 export function rounds(ctx) {
   const saves = new Map();                              // game → { r, s, c, a, w }: the latest snapshot of its round we keep
   const quits = new Map();                              // game → the id of a round we quit that is not over yet (we say it again)
+  let ours = null;                                      // where() of the room we are in: our quits are of it (kept); null: none
   const offers = new Map();                             // game → { n, from, r, setup, seats, until }: a start we offered (we run the rounds)
   const lostSince = new Map();                          // game → since when our copy should run its round and has no snapshot of it
   const passed = new Map();                             // game → the version of its snapshot we passed on, its runner gone (tick)
   const ended = new Map();                              // game → its rounds we know are over (the latest few): id → { by, reason, result }
   const me = () => ctx.room().me;
+  // our quits, as they are now, into the tab (kept), for the next page; one that is over or no longer on goes (unquit)
+  const keepQuits = () => kept.set(ours && quits.size ? { room: ours, q: Object.fromEntries(quits) } : null);
+  const unquit = game => { if (quits.delete(game)) keepQuits(); };
   // a round of the game is over (we ended it, or saw its end, whatever its clock: invariant 3)
   function noteEnd(game, { id, by, reason, result }) {
     if (!ended.has(game)) ended.set(game, new Map());
@@ -133,14 +149,20 @@ export function rounds(ctx) {
   }
   // a round begins: our copy runs it (we are the one who decides on starts: round.runner)
   function begin(c, { setup, seats, by }) {
-    offers.delete(c.id); quits.delete(c.id); lostSince.delete(c.id);
+    offers.delete(c.id); unquit(c.id); lostSince.delete(c.id);
     write(c.id, { id: newId(), seats, runner: me(), on: true, by, reason: null, result: null, setup, saved: false, w: ctx.wire(c.id), pol: c.round.pol() },
       'start by ' + by + ' (' + seats.join(', ') + ')');
     ctx.update();
   }
-  // a round is over: ours to write, so we name ourselves its runner (we were, or nobody else can: lost, gone)
+  // someone else is here to have what we publish (linked, not away)
+  const someoneHere = () => { const r = ctx.room(); return !!r && r.linked && r.players.some(p => p !== r.me && !r.away(p)); };
+  // a round is over: ours to write, so we name ourselves its runner (we were, or nobody else can: lost, gone). A round
+  // we quit, ended here with nobody else here to have the end (the quit moved to us, its runner away): our quit of it
+  // stays, kept in the tab, until someone is (tick) or a record of theirs says the round is over or another one is on
+  // (merged); else a reload meanwhile would lose that end, and the round would come back on with its runner.
   function end(game, rec, { by, reason, result = null }) {
-    quits.delete(game); lostSince.delete(game);
+    if (someoneHere() || quits.get(game) !== rec.id) unquit(game);
+    lostSince.delete(game);
     noteEnd(game, { id: rec.id, by, reason, result });
     if (saves.get(game)?.r === rec.id) saves.delete(game);
     write(game, { ...rec, runner: me(), on: false, by, reason, result }, 'over: ' + reason + (by ? ' (' + by + ')' : ''));
@@ -213,8 +235,8 @@ export function rounds(ctx) {
       for (const k of keys) {
         if (!k.startsWith('round:')) continue;
         const game = k.slice(6), rec = record(game), q = quits.get(game);
-        if (!rec || !rec.on) { if (rec && saves.get(game)?.r === rec.id) saves.delete(game); if (!rec || q === rec.id) quits.delete(game); continue; }
-        if (q !== undefined && q !== rec.id) quits.delete(game);
+        if (!rec || !rec.on) { if (rec && saves.get(game)?.r === rec.id) saves.delete(game); if (!rec || q === rec.id) unquit(game); continue; }
+        if (q !== undefined && q !== rec.id) unquit(game);
         else if (q === rec.id && rec.runner !== me()) sayQuit(game, rec);
       }
     },
@@ -227,10 +249,10 @@ export function rounds(ctx) {
       const st = ctx.st();
       for (const [game, s] of saves) { const v = st.get(KEY(game)); if (v && v.on && v.id === s.r) ctx.send(saveMsg(game, s), p); }
     },
-    // Every second (and when a player left): a round we quit that moved to us, we end; a seat gone with
-    // endWhenSeatGone ends its round; a snapshot we keep of a round whose runner left for good goes to its other
-    // players; in the open game, our copy runs a round on (takeover), or ends one whose snapshot is on no device
-    // ('lost', after LOST_WAIT).
+    // Every second (and when a player left): a round we quit that moved to us, we end (and once someone else is here to
+    // have that end, our quit of it goes: see end); a seat gone with endWhenSeatGone ends its round; a snapshot we keep
+    // of a round whose runner left for good goes to its other players; in the open game, our copy runs a round on
+    // (takeover), or ends one whose snapshot is on no device ('lost', after LOST_WAIT).
     tick(now = performance.now()) {
       const room = ctx.room(), st = ctx.st();
       if (!room || !st) return;
@@ -238,7 +260,7 @@ export function rounds(ctx) {
       for (const [k] of st.entries()) {
         if (!k.startsWith('round:')) continue;
         const game = k.slice(6), rec = record(game);
-        if (!rec || !rec.on) { lostSince.delete(game); continue; }
+        if (!rec || !rec.on) { lostSince.delete(game); if (rec && quits.get(game) === rec.id && someoneHere()) unquit(game); continue; }
         if (quits.get(game) === rec.id && rec.runner === room.me) { end(game, rec, { by: room.me, reason: 'quit' }); continue; }
         if (ctx.lookingAgain()) continue;
         const gone = rules.seatsGone(f, rec);
@@ -267,8 +289,27 @@ export function rounds(ctx) {
         } else lostSince.delete(game);
       }
     },
-    // a new room, or none: nothing of the old one's rounds is ours any more
-    clear() { saves.clear(); quits.clear(); offers.clear(); lostSince.clear(); passed.clear(); ended.clear(); },
+    // A new room, or none: nothing of the old one's rounds is ours any more, but for our quits kept in the tab: a page
+    // that comes into the room they were said in, as the same player, takes them back (each is said again to its
+    // round's runner as the records come, merged; dropped there once its round is over or another one is on): a new
+    // page (a reload), or this one back in it after it left (nearby, a page reloaded whose first pairing was given up:
+    // invite.js leaves that room, and the next pairing makes a new one; «Повернути сюди»). Any other room or name
+    // drops them; none (we left) keeps them for that room.
+    clear() {
+      saves.clear(); quits.clear(); offers.clear(); lostSince.clear(); passed.clear(); ended.clear();
+      const r = ctx.room();
+      ours = r ? where(r) : null;
+      if (!r) return;
+      const k = kept.get();
+      if (k && k.room === ours && k.q && typeof k.q === 'object') {
+        for (const [game, id] of Object.entries(k.q).slice(0, 64)) {
+          if (!GAME.test(game) || typeof id !== 'string' || !RID.test(id)) continue;
+          quits.set(game, id);
+          trace.note('round ' + game + ' ' + id + ': quit, kept from the page before');
+        }
+      }
+      keepQuits();
+    },
     state: () => Object.fromEntries([...saves].map(([g, s]) => [g, { r: s.r, a: s.a, c: s.c, s: s.s }])),
 
     /* ---------- ihroteka.round: the open game's view of its round (c: its channel, together.js) ---------- */
@@ -375,7 +416,7 @@ export function rounds(ctx) {
           const r = rec(), me = room() && room().me;
           if (!me || !on(r) || !r.seats.includes(me)) return refuse('quit: only a player of the round on (round.mySeat ≥ 0)');
           if (r.runner === me) { pending = null; end(c.id, r, { by: me, reason: 'quit' }); return true; }
-          quits.set(c.id, r.id);
+          quits.set(c.id, r.id); keepQuits();
           trace.note('round ' + c.id + ' ' + r.id + ': quit, asked of ' + r.runner);
           sayQuit(c.id, r);
           hooks.update();

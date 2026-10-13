@@ -4,8 +4,11 @@
 <meta charset="utf-8">
 <!-- What may run here, and in a game's srcdoc frame, which inherits it (README: Trust): scripts of the site and inline
      ones, and the pinned MQTT client (library/net/config.js MQTT_LIB: tests/trust.test.js keeps the two the same);
-     workers of the site or from blob: (the MQTT client's timers run in one); no eval, plugins or a <base> elsewhere. -->
-<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/mqtt@5.16.0/dist/mqtt.min.js https://unpkg.com/mqtt@5.16.0/dist/mqtt.min.js; worker-src 'self' blob:; object-src 'none'; base-uri 'self'">
+     workers of the site or from blob: (the MQTT client's timers run in one); no eval, plugins or a <base> elsewhere.
+     blob: in script-src too: Safari before 15.5 (older iPhones) knows no worker-src and judges a worker by script-src,
+     so without it the timers' worker is refused there and the internet room loses its keepalive. It lets in nothing
+     new: a blob: script is made by code already running here, which may run inline code anyway. -->
+<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' blob: https://cdn.jsdelivr.net/npm/mqtt@5.16.0/dist/mqtt.min.js https://unpkg.com/mqtt@5.16.0/dist/mqtt.min.js; worker-src 'self' blob:; object-src 'none'; base-uri 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="{{theme}}">
 <meta name="robots" content="noindex">

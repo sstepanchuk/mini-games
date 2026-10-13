@@ -125,7 +125,7 @@ From nothing to two players on screen, then on the shelf:
    - `wire`: the version of the game's messages and snapshots, 1 when not given: raise it by hand when they change
      (see "Game API");
    - `api`: the Game API version it is written for (`new` writes the library's); `camera: true` only if the game
-     itself uses the camera (see Trust).
+     itself uses the camera, `microphone: true` only if it uses the microphone (see Trust).
 8. `preview.png`: replace the placeholder with a 1200×630 picture of the game (the shelf, and link previews).
 9. `npm run build` (the password): the game's tests first (a game whose tests fail is not sealed), then one page per
    game, sealed into `vault/<id>/`. Try the assembled site: `npm run dev -- site` (its Content-Security-Policy, its
@@ -351,10 +351,13 @@ until `run` with the snapshot: never a fresh `run` for a round that was saved.
 **One record, one writer.** A round is one record the whole room shares (`round:<game>`: its id, players, runner,
 whether it is on); only the copy that runs it writes it. A start or a quit from another player is a request to that
 copy: a start names the round it follows and is taken only if the runner's answer comes back within 5 s of asking, by
-the asker's clock (a start that waited out an outage starts nothing); a quit names its round and holds until that
-round is over (said again whenever we link with its runner; if the round moves to our copy, ours ends it). The round
-moves as the room's runner does (above): its runner away for 10 s with proof, or at once when its player left the room
-for good; the copy that runs it on hears `run` with the latest snapshot and signs it as its own.
+the asker's clock (a start that waited out an outage starts nothing); a quit names its round and holds until that round
+is over (said again whenever we link with its runner; if the round moves to our copy, ours ends it, and keeps the quit
+until someone else is here to have that end), through a reload of our page too: the tab keeps it (sessionStorage) with
+the room and the name it was said with, and the page back in that room as that player says it again (its game hears
+nothing of that round: it heard its end before). The round moves as the room's runner does (above): its runner away for
+10 s with proof, or at once when its player left the room for good; the copy that runs it on hears `run` with the latest
+snapshot and signs it as its own.
 
 **Seats are frozen.** While a round is on, the game's seats (`room.players`) are its players who have the game open, in
 its order, and nobody else's: a player away or with the game closed keeps their seat, and anyone else who opens the game
@@ -470,17 +473,20 @@ other authors ([docs/ROADMAP.md](docs/ROADMAP.md), 23).
 
 What the page does close, against mistakes rather than against a game:
 - **Scripts.** The page's Content-Security-Policy (a `<meta>` in `library/app/page.html`; a game's `srcdoc` frame
-  inherits it) runs the site's own scripts and inline ones, and from elsewhere only the pinned MQTT client (the two
-  URLs of `MQTT_LIB` in `library/net/config.js`: upgrade both together, `npm test` fails while they differ). Workers
-  come from the site or from `blob:` (the MQTT client keeps its timers in one). No `eval`, `new Function`, `setTimeout`
+  inherits it) runs the site's own scripts, inline ones and `blob:` ones the page makes, and from elsewhere only the
+  pinned MQTT client (the two URLs of `MQTT_LIB` in `library/net/config.js`: upgrade both together, `npm test` fails
+  while they differ). Workers come from the site or from `blob:` (the MQTT client keeps its timers in one); `blob:` is
+  in `script-src` too because Safari before 15.5 (older iPhones) knows no `worker-src` and judges a worker by
+  `script-src` (it adds nothing a page that runs inline code could not do). No `eval`, `new Function`, `setTimeout`
   with a string, or WebAssembly; no `<object>` or `<embed>`; no `<base>` pointing elsewhere. Styles, images, fonts,
   media and connections are not limited. A game that makes code from strings is refused (the console says what), and
   one with a `<script src>` from elsewhere does not build: bundle it instead (the build inlines module scripts and what
   they import). The dev server gives its pages the same policy (a game's page there, `/<id>/?frame`, comes from its
   own address: it gets the policy as a header), so what the site refuses fails in dev too.
-- **The camera.** A game's frame may use fullscreen, the screen wake lock, autoplay and gamepads, and the camera only
-  when its `game.json` says `"camera": true` (no game does: the library's own QR scanner runs in the library page).
-  Otherwise the frame says `camera 'none'`: a frame of the same origin has the camera unless told otherwise.
+- **The camera and the microphone.** A game's frame may use fullscreen, the screen wake lock, autoplay and gamepads;
+  the camera only when its `game.json` says `"camera": true`, and the microphone only when it says
+  `"microphone": true` (no game does: the library's own QR scanner runs in the library page). Otherwise the frame says
+  `camera 'none'` and `microphone 'none'`: a frame of the same origin has both unless told otherwise.
 
 ## Security notes
 

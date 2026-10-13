@@ -32,7 +32,8 @@ const NUMBERS = {
 };
 // the fields that are true or false
 const FLAGS = {
-  camera: '?true: the game\'s frame may use the camera (README: Trust); without it, it may not'
+  camera: '?true: the game\'s frame may use the camera (README: Trust); without it, it may not',
+  microphone: '?true: the game\'s frame may use the microphone (README: Trust); without it, it may not'
 };
 // the Game API version this library gives (library/app/shell.js: api(), version)
 export const apiVersion = () => +fs.readFileSync(path.join(P.app, 'shell.js'), 'utf8').match(/^\s*version: (\d+),/m)[1];
@@ -45,9 +46,10 @@ const FORMAT = {
 // "2" → { min: 2, max: 2 }, "2-4" → { min: 2, max: 4 }
 export const playersOf = (v = '2') => { const m = /^([1-8])(?:-([1-8]))?$/.exec(v); return m && { min: +m[1], max: +(m[2] || m[1]) }; };
 export const wireOf = g => g.wire ?? 1;
-// what the shelf knows about a game (library.json, and the dev server's list)
+// what the shelf knows about a game (library.json, and the dev server's list); of the flags, only a true one (the frame
+// may use it: library/app/shell.js allowOf), so a game that asks for nothing has the entry it always had
 export const shelfEntry = (id, g) => ({ id, title: g.title, tagline: g.tagline, image: g.image, emoji: g.emoji, players: playersOf(g.players), wire: wireOf(g),
-  ...(g.camera === true && { camera: true }) });
+  ...Object.fromEntries(Object.keys(FLAGS).filter(k => g[k] === true).map(k => [k, true])) });
 // a game's id (its folder): it becomes the URL, /<id>/
 export const validId = id => typeof id === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(id) && !RESERVED.has(id);
 export function readManifest(id, dir = path.join(P.games, id)) {

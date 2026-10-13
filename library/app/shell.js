@@ -19,8 +19,8 @@ const DOC = Math.random().toString(36).slice(2);       // marks this page's own 
 let backing = false, following = false, queued = null;
 
 /**
- * games         [{ id, title, tagline, image, emoji, players, wire, camera }] (wire: game.json "wire"; 1 when not given;
- *               camera: true when its frame may use the camera, game.json "camera")
+ * games         [{ id, title, tagline, image, emoji, players, wire, camera, microphone }] (wire: game.json "wire"; 1 when
+ *               not given; camera, microphone: true when its frame may use it, game.json "camera", "microphone")
  * initial       the game this page was opened at, if any
  * loader        game → Promise<{ srcdoc } | { src }>: its page (decrypted, or in dev from disk); rejects with
  *               error.cancelled when the player does not give the password
@@ -133,9 +133,11 @@ async function openFrame(g, byPeer) {
   $('stage').append(frame);
 }
 
-// What the game's frame may use (its permissions policy; README: Trust): the camera only for a game whose game.json asks
-// for it ("camera": true, carried by its shelf entry). A frame of our own origin would have it unless told 'none'.
-const allowOf = g => 'fullscreen; screen-wake-lock; autoplay; gamepad; ' + (g.camera === true ? 'camera' : "camera 'none'");
+// What the game's frame may use (its permissions policy; README: Trust): the camera and the microphone each only for a
+// game whose game.json asks for it ("camera": true, "microphone": true, carried by its shelf entry). A frame of our own
+// origin would have them unless told 'none'.
+const ASKED = ['camera', 'microphone'];
+const allowOf = g => ['fullscreen', 'screen-wake-lock', 'autoplay', 'gamepad', ...ASKED.map(f => g[f] === true ? f : f + " 'none'")].join('; ');
 
 // The open game broke while it started: the note over it says so, with the report to copy and the way back.
 function broken() {
