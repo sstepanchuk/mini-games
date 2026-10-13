@@ -4,7 +4,9 @@
 // was the runner who dropped out: someone else with the game open here with us, or the brokers answering us all
 // that time. The runner back plays on as a guest. A round's snapshot: a game closed mid-round goes on from it when
 // opened again, with the same players ('resume' before 'linked'); a round that is over (the game said so, or one of
-// its players left for good) leaves a tombstone, and never comes back.
+// its players left for good) leaves a tombstone, and never comes back. Then the round layer, ihroteka.round
+// (library/app/round.js, phase 4): one record per game, one writer, requests that expire or hold, snapshots by round
+// id, frozen seats, events once per round id, a round lost after LOST_WAIT, and no policy but the game's.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { room, sleep, until, world } from '../support/world.js';
@@ -385,5 +387,568 @@ describe('a round\'s snapshot', { concurrency: 3 }, () => {
     await A.close();                                         // and then the page goes: the round waits with Богдан's copy
     await sleep(300);
     assert.deepEqual((await snapOf(B))?.s, { round: 21, moves: 2 });
+  });
+});
+
+/* ---------- the round layer: ihroteka.round (library/app/round.js, its invariants at its top) ---------- */
+// the round events a tab's game heard (since `from`): [name, its argument]; and as short lines: 'start Аня' (by),
+// 'run fresh' or 'run {state}', 'watch Аня' (its runner), 'end quit Богдан' (reason, by), 'rejoin Богдан'
+const rev = (g, from = 0) => g.events.slice(from).filter(e => e[1].startsWith('round:')).map(e => [e[1].slice(6), e[2]]);
+const line = ([n, a]) => n + ' ' + (n === 'start' ? a.by : n === 'run' ? (a.state === null ? 'fresh' : JSON.stringify(a.state)) : n === 'watch' ? a.runner :
+  n === 'end' ? a.reason + ' ' + a.by : a);
+const rlines = (g, from = 0) => rev(g, from).map(line);
+const rec = async (X, game = 'g') => ((await X.state()).lib.rounds || {})[game];
+const saveOf = async (X, game = 'g') => ((await X.state()).lib.saves || {})[game];
+const heardR = (X, l, ms = 5000) => until(async () => { const g = await X.game(); return g && rlines(g).includes(l) && g; }, ms, 50);
+const start = (X, setup, opts) => X.call('rstart', { setup, opts });
+const save = (X, s) => X.call('rsave', { s });
+// a round record as another library would write it (a forged one: the room checks only its shape and writer)
+const forged = (v, a = v.runner) => ({ t: 'lib-state', e: [['round:g', { v: { on: true, by: v.runner, reason: null, result: null, setup: null, saved: false, w: 1, ...v }, c: Date.now() + 1000, a }]] });
+
+describe('the round layer (ihroteka.round)', { concurrency: 3 }, () => {
+  test('a round begins: everyone hears start, then the runner run (fresh) and the others watch, a player without a seat too', T, async t => {
+    const W = world(t);
+    const [A, B, C] = await room(W, 'rl1', ['Аня', 'Богдан', 'Сава'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B, C], 'Аня,Богдан'));
+    assert.deepEqual((await A.game()).round, { active: false, id: null, seats: null, mySeat: -1, runner: 'Аня', runs: true }, 'between rounds: whose copy starts the next');
+    assert.deepEqual((await B.game()).round, { active: false, id: null, seats: null, mySeat: -1, runner: 'Аня', runs: false });
+    assert.equal(await B.call('rseatOf', { name: 'Аня' }), -1, 'between rounds nobody has a seat in one');
+    assert.equal(await start(A, { mode: 'race' }), true);
+    assert.equal(await start(A), false, 'not while a round is on');
+    const g = await until(async () => { const x = await Promise.all([A, B, C].map(X => X.game())); return x.every(y => rev(y).length >= 2) && x; }, 3000);
+    assert.ok(g, 'everyone hears it');
+    assert.deepEqual(g.map(x => rlines(x)), [['start Аня', 'run fresh'], ['start Аня', 'watch Аня'], ['start Аня', 'watch Аня']]);
+    const run = rev(g[0])[1][1], id = run.id;
+    assert.deepEqual([run.seats, run.setup, rev(g[1])[0][1].setup], [['Аня', 'Богдан'], { mode: 'race' }, { mode: 'race' }]);
+    const seats = ['Аня', 'Богдан'];
+    assert.deepEqual(g.map(x => x.round), [{ active: true, id, seats, mySeat: 0, runner: 'Аня', runs: true },
+      { active: true, id, seats, mySeat: 1, runner: 'Аня', runs: false }, { active: true, id, seats, mySeat: -1, runner: 'Аня', runs: false }]);
+    assert.deepEqual([await B.call('rseatOf', { name: 'Богдан' }), await B.call('rseatOf', { name: 'Сава' })], [1, -1]);
+    assert.ok(/^[a-z0-9]{8}$/.test(id), 'a new id: ' + id);
+  });
+
+  test('a start asked by a player whose copy does not start rounds: the runner offers it, it begins, by them', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'rl2', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    assert.equal(await start(B, 7), true, 'asked');
+    assert.ok(await heardR(A, 'run fresh', 3000), 'it begins: ' + rlines(await A.game()));
+    assert.ok(await heardR(B, 'watch Аня', 3000));
+    assert.deepEqual([rlines(await A.game()), rlines(await B.game())], [['start Богдан', 'run fresh'], ['start Богдан', 'watch Аня']]);
+    const r = await rec(A);
+    assert.deepEqual([r.by, r.runner, r.setup, r.seats], ['Богдан', 'Аня', 7, ['Аня', 'Богдан']]);
+  });
+
+  // (a request held up anyway, say in an outbox through an outage, is the same: its answer comes late; a link that
+  // started over meanwhile drops it altogether)
+  test('a start answered late starts nothing: the one who asked takes the offer only within ASK_TTL of asking, by its own clock', T, async t => {
+    const W = world(t, { scale: SCALE });
+    const [A, B] = await room(W, 'rl3', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    assert.equal(await start(B), true, 'asked');
+    await B.freeze(5000 * SCALE + 300);                      // (round.js ASK_TTL) Богдан's tab stops: Аня's offer waits for it
+    assert.ok(await until(async () => (await B.state()).lib.trace.some(l => /offered came too late/.test(l)), 5000), 'the offer came, too late: ' +
+      (await B.state()).lib.trace.slice(-8).join(' | '));
+    assert.ok((await A.state()).lib.trace.some(l => /start asked by Богдан, offered/.test(l)), 'Аня offered it');
+    assert.ok(await until(async () => (await Promise.all([A.game(), B.game()])).every(y => y.linked && !y.weak), 15000, 100), 'together again');
+    await sleep(500);
+    assert.deepEqual([rlines(await A.game()), rlines(await B.game()), (await A.game()).round.active], [[], [], false], 'no round');
+    assert.equal(await start(B), true, 'asked again now');
+    assert.ok(await heardR(B, 'watch Аня', 3000), 'it begins');
+  });
+
+  test('save: only from the copy that runs the round; its players keep the latest; one from anyone else, of another round or wire, is refused', T, async t => {
+    const W = world(t);
+    const [A, B, C] = await room(W, 'rl4', ['Аня', 'Богдан', 'Сава'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B, C], 'Аня,Богдан'));
+    await B.send(forged({ id: 'otherwir', seats: ['Аня', 'Богдан'], runner: 'Аня', w: 2 }));   // (a copy of the game of another wire)
+    assert.ok(await until(async () => (await rec(A))?.id === 'otherwir', 3000));
+    await sleep(300);
+    assert.deepEqual([(await A.game()).round.active, rlines(await A.game())], [false, []], 'a round of another wire is not ours to see');
+    await start(A);
+    assert.ok(await heardR(B, 'watch Аня', 3000));
+    const { id } = await rec(A);
+    assert.deepEqual([await save(A, { n: 1 }), await save(B, { n: 2 }), await save(C, { n: 3 })], [true, false, false]);
+    assert.ok(await until(async () => (await saveOf(B))?.s?.n === 1, 3000), 'Богдан keeps it');
+    assert.deepEqual(await saveOf(B), { r: id, a: 'Аня', c: (await saveOf(B)).c, s: { n: 1 } });
+    assert.ok((await rec(B)).saved, 'the record says it was saved');
+    const at = Date.now() + 5000, fake = o => ({ t: 'lib-save', v: 'g', r: id, s: { n: 99 }, c: at, a: 'Аня', w: 1, ...o });
+    await B.send(fake({ a: 'Богдан' }));                     // not its runner
+    await B.send(fake({ r: 'zzzzzzzz' }));                   // another round
+    await B.send(fake({ w: 2 }));                            // another wire
+    await sleep(500);
+    assert.deepEqual([(await saveOf(A)).s, (await saveOf(B)).s, await saveOf(C)], [{ n: 1 }, { n: 1 }, undefined], 'refused (Сава, without a seat in the round, gets none)');
+    // one writer (invariant 1): a record written by anyone but the runner it names is dropped, whatever its clock
+    await B.send(forged({ id: 'byanyone', seats: ['Аня', 'Богдан'], runner: 'Аня' }, 'Богдан'));
+    await sleep(300);
+    assert.deepEqual([(await rec(A)).id, (await rec(C)).id], [id, id], 'not taken');
+    await assert.rejects(A.call('rsave', { s: { big: 1n } }), /TypeError: ihroteka\.round\.save: not JSON/);
+  });
+
+  test('stale resume is impossible: a round that is over never comes back; the next one begins fresh, and only its own snapshot goes on', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'rl5', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await start(A);
+    await save(A, { round: 1 });
+    assert.ok(await until(async () => (await saveOf(B))?.s?.round === 1, 3000));
+    const id1 = (await rec(A)).id;
+    assert.equal(await B.call('rover', { result: 1 }), false, 'over: only the runner');
+    assert.equal(await A.call('rover', { result: { winner: 'Аня' } }), true);
+    const b = await heardR(B, 'end over Аня', 3000);
+    assert.ok(b, 'everyone hears it is over');
+    assert.deepEqual(rev(b).at(-1)[1], { id: id1, by: 'Аня', reason: 'over', result: { winner: 'Аня' } });
+    assert.deepEqual([await saveOf(A), await saveOf(B), (await rec(B)).on], [undefined, undefined, false], 'its snapshot goes with it');
+    await B.send({ t: 'lib-save', v: 'g', r: id1, s: { round: 1 }, c: Date.now() + 5000, a: 'Аня', w: 1 });   // a late copy of it
+    await sleep(300);
+    assert.deepEqual([await saveOf(A), await saveOf(B)], [undefined, undefined], 'not taken: the round is over');
+    await start(A);
+    assert.ok(await until(async () => rlines(await A.game()).filter(l => l === 'run fresh').length === 2, 3000), 'the next round begins fresh: ' + rlines(await A.game()));
+    await save(A, { round: 2 });
+    assert.ok(await until(async () => (await saveOf(B))?.s?.round === 2, 3000));
+    await A.close();                                         // the runner's page reloads
+    const A2 = await W.tab('p3tab');
+    await A2.lib('rl5', 'Аня');
+    const a = await heardR(A2, 'run {"round":2}', 8000);
+    assert.ok(a, 'its new copy runs round 2 on: ' + (await A2.game() && rlines(await A2.game())));
+    assert.deepEqual(rlines(a), ['run {"round":2}'], 'and nothing else');
+    assert.deepEqual(evs(a).filter(x => x.startsWith('resume')), [], 'nothing of the room\'s own snapshots');
+  });
+
+  test('a runner reload resumes with no none: its new copy hears run with the snapshot, before any game message', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'rl6', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await start(A);
+    await save(A, { n: 3 });
+    assert.ok(await until(async () => (await saveOf(B))?.s?.n === 3, 3000));
+    const nb = (await B.game()).events.length;
+    await A.close();
+    const A2 = await W.tab('p3tab');
+    await A2.lib('rl6', 'Аня');
+    assert.ok(await until(async () => evs(await B.game(), nb).includes('relinked Аня'), 8000), 'Богдан\'s game hears her new copy is open');
+    assert.equal(await B.gsend({ t: 'hi' }, { to: 'Аня' }), true);
+    const a = await until(async () => { const g = await A2.game(); return g && g.heard.includes('message:hi') && g; }, 5000);
+    assert.ok(a, 'the message arrives');
+    assert.deepEqual(rlines(a), ['run {"n":3}'], 'run with the snapshot, never fresh');
+    assert.ok(a.heard.indexOf('round:run') >= 0 && a.heard.indexOf('round:run') < a.heard.indexOf('message:hi'), a.heard.join(' '));
+    assert.deepEqual(rlines(await B.game()), ['start Аня', 'watch Аня'], 'Богдан still watches the same round');
+  });
+
+  test('while our copy waits for its round\'s snapshot, the game\'s messages wait too: run comes first', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'rl7', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    // a round Аня's copy runs, saved, whose snapshot has not reached her (her new page, say): she waits for it
+    await B.send(forged({ id: 'waitwait', seats: ['Аня', 'Богдан'], runner: 'Аня', saved: true }));
+    assert.ok(await until(async () => (await rec(A))?.id === 'waitwait', 3000));
+    const n = (await A.game()).heard.length;
+    assert.equal(await B.gsend({ t: 'early' }), true);
+    await sleep(500);
+    assert.deepEqual((await A.game()).heard.slice(n), [], 'nothing yet: neither run nor the message');
+    assert.deepEqual((await A.game()).round, { active: true, id: 'waitwait', seats: ['Аня', 'Богдан'], mySeat: 0, runner: 'Аня', runs: false });
+    await B.send({ t: 'lib-save', v: 'g', r: 'waitwait', s: { n: 5 }, c: Date.now() + 5000, a: 'Аня', w: 1 });
+    assert.ok(await until(async () => (await A.game()).heard.length >= n + 2, 3000));
+    assert.deepEqual((await A.game()).heard.slice(n), ['round:run', 'message:early'], 'its part first, then the message');
+    assert.deepEqual(rlines(await A.game()), ['run {"n":5}']);
+  });
+
+  test('a game closed mid-round waits: opened again, the runner hears run with the snapshot, the other watch', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'rl8', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await start(A);
+    await save(A, { n: 7 });
+    assert.ok(await until(async () => (await saveOf(B))?.s?.n === 7, 3000));
+    const [na, nb] = (await Promise.all([A.game(), B.game()])).map(g => g.events.length);   // (a tab's games' events: of every game it opened)
+    await A.open(null);                                      // everyone back to the shelf, mid-round
+    assert.ok(await onShelf([A, B]));
+    assert.equal((await rec(A)).on, true, 'the round waits');
+    await B.open('g');                                       // opened again (Аня follows)
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    assert.ok(await heardR(A, 'run {"n":7}', 3000), 'Аня runs it on: ' + rlines(await A.game()));
+    await sleep(300);
+    // (and, if Богдан's copy opened after hers, 'rejoin Богдан': his copy is new to the round's runner)
+    assert.deepEqual([rlines(await A.game(), na).filter(l => l !== 'rejoin Богдан'), rlines(await B.game(), nb)], [['run {"n":7}'], ['watch Аня']]);
+  });
+
+  test('a reorder keeps the round: its players keep their seats, whoever else is in the room first', T, async t => {
+    const W = world(t, { scale: SCALE });
+    const [A, B, C] = await room(W, 'rl9', ['Аня', 'Богдан', 'Сава'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B, C], 'Аня,Богдан'));
+    await start(A);
+    assert.ok(await heardR(B, 'watch Аня', 3000));
+    const { id } = await rec(A);
+    await B.net({ up: false });
+    assert.ok(await until(async () => (await A.state()).away.includes('Богдан'), 5000));
+    await A.release('Богдан');                               // «Не чекати»: his place goes; back, he is last in the room
+    assert.ok(await until(async () => (await A.state()).players.join() === 'Аня,Сава', 5000));
+    const c = await C.game();
+    assert.ok(!c.seated && c.round.active && c.round.mySeat === -1, 'Сава does not take his seat mid-round: ' + JSON.stringify(c.round));
+    await B.net({ up: true });
+    assert.ok(await until(async () => (await A.state()).players.join() === 'Аня,Сава,Богдан', 15000, 100), 'the room\'s order: ' + (await A.state()).players);
+    const g = await until(async () => { const x = await Promise.all([A.game(), B.game(), C.game()]); return x[0].players.join() === 'Аня,Богдан' && x[1].linked && !x[0].weak && x; }, 15000, 100);
+    assert.ok(g, 'Аня and Богдан play on: ' + JSON.stringify((await A.game()).players));
+    assert.deepEqual(g.map(x => [x.round.id, x.round.mySeat, x.seated]), [[id, 0, true], [id, 1, true], [id, -1, false]], 'the same round, the same seats');
+    assert.ok(!rlines(g[0]).some(l => l.startsWith('end')), 'never over: ' + rlines(g[0]));
+    assert.ok(await heardR(A, 'rejoin Богдан', 3000), 'his copy needs everything again');
+  });
+
+  test('quit ends the round for everyone: at once for the one who quits, as soon as its runner hears it for the others', T, async t => {
+    const W = world(t);
+    const [A, B, C] = await room(W, 'rl10', ['Аня', 'Богдан', 'Сава'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B, C], 'Аня,Богдан'));
+    await start(A);
+    assert.ok(await heardR(B, 'watch Аня', 3000) && await heardR(C, 'watch Аня', 3000));
+    assert.equal(await C.call('roff', { ev: 'end' }), true, 'Сава\'s game stops listening to end (round.off)');
+    assert.equal(await C.call('rquit'), false, 'only a player of the round');
+    await C.send({ t: 'lib-ask', v: 'g', q: 'quit', r: (await rec(A)).id });   // (and the runner takes it only from one)
+    await sleep(300);
+    assert.equal((await rec(A)).on, true, 'still on');
+    assert.equal(await B.call('rquit'), true);
+    const b = await B.game();
+    assert.deepEqual([rlines(b).at(-1), b.round.active], ['end quit Богдан', false], 'at once for him');
+    assert.ok(await heardR(A, 'end quit Богдан', 3000), 'and for Аня');
+    assert.deepEqual([(await rec(A)).on, (await rec(A)).reason, (await rec(A)).by], [false, 'quit', 'Богдан']);
+    assert.ok(await until(async () => !(await C.game()).round.active, 3000));
+    assert.ok(!rlines(await C.game()).some(l => l.startsWith('end')), 'Сава\'s game, not listening, hears nothing of it');
+    await start(A);
+    assert.ok(await heardR(B, 'watch Аня', 3000));
+    assert.equal(await A.call('rquit'), true, 'the runner quits');
+    assert.ok(await until(async () => rlines(await B.game()).at(-1) === 'end quit Аня', 3000));
+  });
+
+  test('a quit holds until its round is over: the runner back hears it; a round that moves to the one who quit, ends', T, async t => {
+    const W = world(t, { scale: SCALE });
+    const [A, B] = await room(W, 'rl11', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await start(A);
+    await save(A, { n: 1 });
+    assert.ok(await until(async () => (await saveOf(B))?.s?.n === 1, 3000));
+    await A.net({ up: false });                              // the runner cut off; Богдан quits meanwhile
+    assert.ok(await until(async () => (await B.state()).away.includes('Аня'), 5000));
+    assert.equal(await B.call('rquit'), true);
+    await A.net({ up: true });
+    assert.ok(await heardR(A, 'end quit Богдан', 10000), 'back, Аня hears it: ' + rlines(await A.game()));
+    // again, and this time Аня stays away: the round moves to Богдан, whose copy ends it
+    await start(A);
+    await save(A, { n: 2 });
+    assert.ok(await until(async () => (await saveOf(B))?.s?.n === 2, 3000));
+    await A.net({ up: false });
+    assert.ok(await until(async () => (await B.state()).away.includes('Аня'), 5000));
+    assert.equal(await B.call('rquit'), true);
+    const { AUTH_WAIT } = (await A.info()).timing;
+    const r = await until(async () => { const x = await rec(B); return x && !x.on && x.runner === 'Богдан' && x; }, AUTH_WAIT + 6000, 100);
+    assert.ok(r, 'Богдан\'s copy ends it: ' + JSON.stringify(await rec(B)));
+    assert.deepEqual([r.reason, r.by], ['quit', 'Богдан']);
+    assert.ok(!(await B.state()).lib.trace.some(l => /runs on here/.test(l)), 'ended, not run on first');
+    await A.net({ up: true });
+    assert.ok(await until(async () => rlines(await A.game()).filter(l => l === 'end quit Богдан').length === 2, 15000, 100), 'back, Аня hears it: ' + rlines(await A.game()));
+  });
+
+  test('a third player gets a seat after a round: not during it, though a player of the round left for good', T, async t => {
+    const W = world(t);
+    const [A, B, C] = await room(W, 'rl12', ['Аня', 'Богдан', 'Сава'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B, C], 'Аня,Богдан'));
+    await start(A);
+    assert.ok(await heardR(C, 'watch Аня', 3000));
+    const n = (await A.game()).events.length;
+    await B.leave();                                         // Богдан leaves the room for good
+    assert.ok(await until(async () => evs(await A.game(), n).includes('peer-gone'), 5000), 'Аня\'s game hears the room\'s peer-gone, and decides');
+    await sleep(1200);
+    const [a, c] = await Promise.all([A.game(), C.game()]);
+    assert.deepEqual([a.round.active, a.players, c.seated, c.waiting], [true, ['Аня'], false, ['Сава']], 'the round is still on (no policy), its seats frozen');
+    assert.equal(await A.call('rover', {}), true, 'the game ends it');
+    assert.ok(await until(async () => { const x = await C.game(); return x.seated && x.linked && x; }, 5000), 'now Сава has a seat');
+    await start(A);
+    const s = await until(async () => { const x = await C.game(); return rlines(x).filter(l => l === 'watch Аня').length === 2 && x; }, 3000);
+    assert.ok(s, rlines(await C.game()));
+    assert.deepEqual([s.round.seats, s.round.mySeat], [['Аня', 'Сава'], 1]);
+  });
+
+  test('a round whose snapshot is on no device ends after LOST_WAIT (lost); not while a player who may have it is away', { timeout: 60000 }, async t => {
+    const W = world(t, { scale: SCALE });
+    const [A, B] = await room(W, 'rl13', ['Аня', 'Богдан'], { lib: { g: 3 } });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await B.net({ up: false });                              // Богдан away: he may have it
+    assert.ok(await until(async () => (await A.state()).away.includes('Богдан'), 5000));
+    // a round run by Яків, who left the room for good after he saved it; nobody here has the snapshot
+    const fake = forged({ id: 'lostlost', seats: ['Яків', 'Аня', 'Богдан'], runner: 'Яків', saved: true });
+    const C = await W.tab('p3tab');                          // (a third tab passes it on to Аня: she cannot send to herself)
+    await C.lib('rl13', 'Сава', { g: 3 });
+    assert.ok(await until(async () => (await C.state()).linked, 5000));
+    await C.send(fake);
+    assert.ok(await until(async () => (await rec(A))?.id === 'lostlost', 3000));
+    const LOST = 15000 * SCALE;                              // (round.js LOST_WAIT)
+    await sleep(LOST + 2000);
+    assert.equal((await rec(A)).on, true, 'Богдан is away: the round waits (' + rlines(await A.game()) + ')');
+    await B.net({ up: true });
+    const t0 = Date.now();
+    const a = await heardR(A, 'end lost Аня', LOST + 15000);
+    assert.ok(a, 'lost: ' + rlines(await A.game()) + ' ' + JSON.stringify(await rec(A)));
+    assert.ok(Date.now() - t0 > LOST - 1500, 'not before LOST_WAIT (' + LOST + ' ms): ' + (Date.now() - t0));
+    assert.deepEqual(rlines(a).filter(l => l.startsWith('run')), [], 'never run fresh: it was saved');
+  });
+
+  test('no policies by default: a round starts with a player away, and a player of it gone for good does not end it', T, async t => {
+    const W = world(t, { scale: SCALE });
+    const [A, B, C] = await room(W, 'rl14', ['Аня', 'Богдан', 'Сава'], { lib: { g: 3 } });
+    await A.open('g');
+    assert.ok(await plays([A, B, C], 'Аня,Богдан,Сава'));
+    assert.deepEqual(await A.call('rpolicy', { p: {} }), { startNeedsEveryone: false, endWhenSeatGone: false });
+    await C.net({ up: false });
+    assert.ok(await until(async () => (await A.state()).away.includes('Сава'), 5000));
+    assert.equal(await start(A), true, 'Сава away: it starts anyway');
+    assert.deepEqual((await rec(A)).seats, ['Аня', 'Богдан', 'Сава']);
+    const n = (await A.game()).events.length;
+    await A.release('Сава');                                 // her place goes for good
+    assert.ok(await until(async () => evs(await A.game(), n).includes('leave Сава'), 5000), 'the game hears the room\'s leave');
+    await sleep(1500);
+    assert.deepEqual([(await A.game()).round.active, (await B.game()).round.active], [true, true], 'and the round goes on');
+  });
+
+  test('policy startNeedsEveryone: start is refused while a seated player is away, by the one asking and by the runner', T, async t => {
+    const W = world(t, { scale: SCALE });
+    const [A, B, C] = await room(W, 'rl15', ['Аня', 'Богдан', 'Сава'], { lib: { g: 3 } });
+    await A.open('g');
+    assert.ok(await plays([A, B, C], 'Аня,Богдан,Сава'));
+    for (const X of [A, B]) await X.call('rpolicy', { p: { startNeedsEveryone: true } });
+    await C.net({ up: false });
+    assert.ok(await until(async () => (await A.state()).away.includes('Сава') && (await B.state()).away.includes('Сава'), 5000));
+    assert.deepEqual([await start(A), await start(B)], [false, false]);
+    await B.call('rpolicy', { p: { startNeedsEveryone: false } });   // Богдан's copy asks anyway: Аня's refuses
+    assert.equal(await start(B), true);
+    await sleep(1000);
+    assert.equal((await A.game()).round.active, false, 'refused by the runner');
+    await C.net({ up: true });
+    assert.ok(await until(async () => !(await A.state()).away.length && !(await A.game()).weak, 15000, 100));
+    assert.equal(await start(A), true, 'everyone here: it starts');
+  });
+
+  test('policy endWhenSeatGone: a player\'s place gone for good ends the round (gone), also with the game closed', T, async t => {
+    const W = world(t);
+    const [A, B, C] = await room(W, 'rl16', ['Аня', 'Богдан', 'Сава'], { lib: { g: 3 } });
+    await A.open('g');
+    assert.ok(await plays([A, B, C], 'Аня,Богдан,Сава'));
+    await A.call('rpolicy', { p: { endWhenSeatGone: true } });
+    await start(A);
+    assert.ok(await heardR(C, 'watch Аня', 3000));
+    await C.leave();
+    assert.ok(await heardR(A, 'end gone Сава', 3000) && await heardR(B, 'end gone Сава', 3000), 'over for everyone: ' + rlines(await B.game()));
+    await start(A);
+    assert.ok(await heardR(B, 'start Аня', 3000));
+    await A.open(null);                                      // the game closed: nobody has it open
+    assert.ok(await onShelf([A, B]));
+    await B.leave();
+    const r = await until(async () => { const x = await rec(A); return x && !x.on && x; }, 3000);
+    assert.ok(r && r.reason === 'gone' && r.by === 'Богдан', JSON.stringify(await rec(A)));
+  });
+
+  test('the runner gone: after AUTH_WAIT the first player here runs the round on from its snapshot; back, the old runner watches', T, async t => {
+    const W = world(t, { scale: SCALE });
+    const [A, B, C] = await room(W, 'rl17', ['Аня', 'Богдан', 'Сава'], { lib: { g: 3 } });
+    await A.open('g');
+    assert.ok(await plays([A, B, C], 'Аня,Богдан,Сава'));
+    await start(A);
+    await save(A, { n: 5 });
+    assert.ok(await until(async () => (await saveOf(C))?.s?.n === 5, 3000));
+    const { AUTH_WAIT } = (await A.info()).timing;
+    await A.net({ up: false });
+    const b = await heardR(B, 'run {"n":5}', AUTH_WAIT + 6000);
+    assert.ok(b, 'Богдан runs it on: ' + rlines(await B.game()));
+    assert.ok(b.round.runs && b.round.runner === 'Богдан');
+    assert.ok(await heardR(C, 'watch Богдан', 3000), 'Сава watches Богдан\'s copy');
+    assert.ok(await until(async () => (await saveOf(C))?.a === 'Богдан', 3000), 'and keeps its snapshot, signed by Богдан');
+    assert.deepEqual(rlines(await C.game()), ['start Аня', 'watch Аня', 'watch Богдан']);
+    await A.net({ up: true });
+    const a = await heardR(A, 'watch Богдан', 15000);
+    assert.ok(a, 'back, Аня watches: ' + rlines(await A.game()));
+    assert.deepEqual([a.round.runs, await save(A, { n: 6 })], [false, false]);
+  });
+
+  test('rejoin: one of the round\'s players opens a new copy of the game (a new tab): the runner hears it, once', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'rl18', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await start(A);
+    assert.ok(await heardR(B, 'watch Аня', 3000));
+    const B2 = await W.tab('p3tab');
+    await B2.lib('rl18', 'Богдан');                          // Богдан goes on in another tab
+    assert.ok(await heardR(A, 'rejoin Богдан', 8000), 'Аня\'s game hears it: ' + rlines(await A.game()));
+    assert.ok(await heardR(B2, 'watch Аня', 3000), 'his new copy watches');
+    await sleep(500);
+    assert.deepEqual(rlines(await A.game()).filter(l => l.startsWith('rejoin')), ['rejoin Богдан'], 'once');
+  });
+
+  // (the dev server: a refused call says why, once; and a game that keeps rounds both ways hears that it does, once)
+  test('on the dev server: a refused round call says why in the console, and a game that also calls room.snapshot hears it once', T, async t => {
+    const W = world(t);
+    const A = await W.tab('p1tab', {}, { dev: true });
+    await A.lib('rl20', 'Аня');
+    assert.ok(await until(async () => (await A.state()).role === 'host', 5000));
+    const B = await W.tab('p2tab');
+    await B.lib('rl20', 'Богдан');
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    assert.equal(await save(A, { n: 1 }), false);
+    assert.equal(await save(A, { n: 2 }), false);
+    assert.equal(await A.snapshot({ v4: 1 }), true);
+    assert.equal(await start(A), true);
+    await start(A);
+    const said = (await A.takeErrors()).filter(e => /ihroteka\.round/.test(e));
+    const starts = ['ihroteka.round: save: only from the copy that runs the round', 'ihroteka.round: this game also keeps rounds with room.snapshot',
+      'ihroteka.round: start: a round is on'];
+    assert.ok(said.length === starts.length && said.every((e, i) => e.startsWith(starts[i])), 'once each: ' + said.join(' | '));
+  });
+
+  test('a game that starts listening late hears players, its part (run), linked, then the messages kept for it', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'rl19', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await start(A);
+    await save(A, { n: 13 });
+    assert.ok(await until(async () => (await saveOf(B))?.s?.n === 13, 3000));
+    await A.open(null);
+    assert.ok(await onShelf([A, B]));
+    await A.call('gameLate', { on: true });                  // Аня's game page runs its code late
+    await B.open('g');
+    assert.ok(await until(async () => (await B.game())?.linked, 5000));
+    assert.equal(await B.gsend({ t: 'hi' }), true);
+    await sleep(500);
+    const n = (await A.game()).heard.length;
+    await A.call('glisten');
+    assert.ok(await until(async () => (await A.game()).heard.length >= n + 4, 3000));
+    await sleep(200);
+    assert.deepEqual((await A.game()).heard.slice(n), ['players', 'round:run', 'linked', 'message:hi'], 'once each, in this order');
+    assert.deepEqual(rlines(await A.game()).slice(-1), ['run {"n":13}']);
+  });
+
+  // Two copies cut off from each other both write the record: the runner ends the round (quit), the other runs it on
+  // meanwhile (AUTH_WAIT, with proof). Whichever write has the later clock (the copy that wrote more meanwhile), the
+  // round is over for both once they meet again (an end is final, invariant 3): never back on for the one who quit.
+  for (const later of ['Богдан', 'Аня']) test('split: the runner quits while cut off and the other runs the round on meanwhile; together again, it is over for both (' + later + '\'s clock ahead)', { timeout: 60000 }, async t => {
+    const W = world(t, { scale: SCALE });
+    const [A, B] = await room(W, later === 'Аня' ? 'rl21' : 'rl22', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await start(A);
+    await save(A, { n: 1 });
+    assert.ok(await until(async () => (await saveOf(B))?.s?.n === 1, 3000));
+    await A.net({ up: false });
+    assert.ok(await until(async () => (await B.state()).away.includes('Аня'), 5000));
+    for (let i = 0; i < 20; i++) await (later === 'Аня' ? A : B).share('k' + (i % 3), i);   // (its clock runs ahead: each write ticks it)
+    assert.equal(await A.call('rquit'), true, 'Аня, cut off, quits: her copy runs the round, so it ends there at once');
+    const { AUTH_WAIT } = (await A.info()).timing;
+    assert.ok(await heardR(B, 'run {"n":1}', AUTH_WAIT + 8000), 'Богдан runs it on meanwhile: ' + rlines(await B.game()));
+    await A.net({ up: true });
+    const same = await until(async () => { const [a, b] = [await rec(A), await rec(B)]; return a && b && !a.on && !b.on && a.runner === b.runner && [a, b]; }, 15000, 100);
+    assert.ok(same, 'over for both: ' + JSON.stringify([await rec(A), await rec(B)]));
+    assert.deepEqual([same[0].reason, same[0].by], ['quit', 'Аня']);
+    await sleep(1500);
+    assert.deepEqual(rlines(await A.game()), ['start Аня', 'run fresh', 'end quit Аня'], 'never back in the round she quit');
+    assert.deepEqual(rlines(await B.game()), ['start Аня', 'watch Аня', 'run {"n":1}', 'end quit Аня']);
+    assert.deepEqual([(await A.game()).round.active, (await B.game()).round.active], [false, false]);
+  });
+
+  // (together.js update: one pass at a time; what the game does on an event comes in a pass of its own after it)
+  test('a round the game ends from its own listener (on start): it hears start, run, then end, once each, never its part after its end', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'rl24', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await A.call('ron', { ev: 'start', call: 'over', arg: { early: 1 } });
+    assert.equal(await start(A), true);
+    assert.ok(await heardR(B, 'end over Аня', 3000), 'over for Богдан too: ' + rlines(await B.game()));
+    await sleep(300);
+    const a = await A.game();
+    assert.deepEqual([rlines(a), a.round.active], [['start Аня', 'run fresh', 'end over Аня'], false]);
+    assert.ok(!rlines(await B.game()).slice(rlines(await B.game()).indexOf('end over Аня')).some(l => /^(run|watch)/.test(l)), rlines(await B.game()));
+  });
+
+  test('our room closed mid-round (end closed) and we are back in it, the game still open: our part again, then its real end', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'rl23', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await start(A);
+    await save(A, { n: 1 });
+    assert.ok(await until(async () => (await saveOf(B))?.s?.n === 1, 3000));
+    await B.lib('rl23', 'Богдан');                           // Богдан's library leaves the room and comes in again (his game open all along)
+    assert.ok(await heardR(B, 'end closed null', 5000), 'we lost sight of it: ' + rlines(await B.game()));
+    assert.ok(await until(async () => rlines(await B.game()).filter(l => l === 'watch Аня').length === 2, 8000), 'back in it: ' + rlines(await B.game()));
+    assert.equal(await A.call('rover', { result: 1 }), true);
+    const b = await until(async () => { const g = await B.game(); return rlines(g).at(-1) === 'end over Аня' && g; }, 5000);
+    assert.ok(b, 'its real end: ' + rlines(await B.game()));
+    assert.deepEqual(rlines(b), ['start Аня', 'watch Аня', 'end closed null', 'watch Аня', 'end over Аня']);
+  });
+
+  test('rejoin: a player\'s link with the runner starts over in place (the same copy of the game): the runner hears it too', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'rl25', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await start(A);
+    assert.ok(await heardR(B, 'watch Аня', 3000));
+    const n = (await A.game()).events.length;
+    const { topic } = await A.info('rl25', 'ihroteka');      // (the library's room: together.js LIB)
+    W.spy().publish(topic, { t: 'bye', to: A.session }, B.session);   // as if his link was lost: Аня lets it go, it starts over
+    const a = await until(async () => { const g = await A.game(); return evs(g, n).includes('relinked Богдан') && g; }, 8000);
+    assert.ok(a, 'his link starts over: ' + evs(await A.game(), n));
+    assert.ok(await heardR(A, 'rejoin Богдан', 3000), 'and her copy, which runs the round, sends his everything: ' + rlines(await A.game()));
+  });
+
+  test('a quit said while the runner\'s page reloads reaches its new copy: the round is over there too', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'rl26', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await start(A);
+    await save(A, { n: 4 });
+    assert.ok(await until(async () => (await saveOf(B))?.s?.n === 4, 3000));
+    await A.close();                                         // the runner's page goes
+    assert.ok(await until(async () => (await B.state()).away.includes('Аня'), 5000));
+    assert.equal(await B.call('rquit'), true, 'Богдан quits meanwhile');
+    const A2 = await W.tab('p3tab');
+    await A2.lib('rl26', 'Аня');                             // her new page
+    const r = await until(async () => { const x = await rec(A2); return x && !x.on && x; }, 8000);
+    assert.ok(r, 'over: ' + JSON.stringify(await rec(A2)) + ' ' + (await A2.game() && rlines(await A2.game())));
+    assert.deepEqual([r.reason, r.by], ['quit', 'Богдан']);
+  });
+
+  test('a round whose runner left waits for the player away who has its snapshot: back, it goes on from it there', { timeout: 60000 }, async t => {
+    const W = world(t, { scale: SCALE });
+    const [A, B] = await room(W, 'rl27', ['Аня', 'Богдан'], { lib: { g: 3 } });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    const C = await W.tab('p3tab');                          // (a third tab passes it on)
+    await C.lib('rl27', 'Сава', { g: 3 });
+    assert.ok(await until(async () => (await C.state()).linked, 5000));
+    await B.net({ up: false });
+    assert.ok(await until(async () => (await A.state()).away.includes('Богдан'), 5000));
+    // a round run by Яків, who left the room for good after he saved it: its snapshot went to Богдан (his outbox keeps it)
+    await C.send(forged({ id: 'heldheld', seats: ['Яків', 'Аня', 'Богдан'], runner: 'Яків', saved: true }));
+    await C.send({ t: 'lib-save', v: 'g', r: 'heldheld', s: { n: 9 }, c: Date.now() + 5000, a: 'Яків', w: 1 }, { to: 'Богдан' });
+    assert.ok(await until(async () => (await rec(A))?.id === 'heldheld', 3000));
+    await sleep(1500);
+    assert.equal((await rec(A)).runner, 'Яків', 'Аня does not run it on without its snapshot (it would refuse Яків\'s, then)');
+    await B.net({ up: true });
+    const a = await heardR(A, 'run {"n":9}', 15000);
+    assert.ok(a, 'Богдан back with it: Аня runs it on from it: ' + rlines(await A.game()) + ' ' + JSON.stringify(await rec(A)));
+    assert.ok(!rlines(a).some(l => l.startsWith('end')), rlines(a));
   });
 });

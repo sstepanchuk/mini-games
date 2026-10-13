@@ -12,10 +12,10 @@
     "user": "node tools/cli.js user",
     "check": "node tools/cli.js check",
     "lint": "eslint .",
-    "test": "node --test \"tests/**/*.test.js\"",
+    "test": "node --test --test-concurrency=3 \"tests/**/*.test.js\"",
     "e2e": "node tests/e2e/run.cjs",
     "test:games": "node --test \"games/*/test/*.test.js\"",
-    "test:games:e2e": "node games/dragons/test/e2e/run.cjs",
+    "test:games:e2e": "node tests/e2e/games.cjs",
     "perf": "node tools/perf.js",
     "migrate": "node tools/migrate.js"
   },

@@ -27,14 +27,21 @@
    - A trace for bug reports (trace.js): the room's events, what the open game is told, the shared state's keys that
      change, snapshots (their sizes), the page hidden and shown, errors (their types and places); never what a message,
      a snapshot or a value says. The last lines of it follow room.diag() (report) and are in state().
+   - Each game also gets ihroteka.round (phase 4): its rounds as one shared record, with the mechanisms around it
+     (round.js: its invariants are at its top). The room's own round words (contract 4: host, role, snapshot, 'resume',
+     'role', 'peer-gone', 'relinked'; auth:<game>, lib-snap) stay as they were, for games that use them.
    The rules of all this (who plays, who runs the round, who is away, when the round moves) are in rules.js.
    Messages on the room, besides the games' own ('lib-g'):
      lib-state { e: entries }   the shared state, or a change to it (roomstate.js); greet sends all of it in chunks of
                                 up to CAP bytes. Keys: view, here:<name>, auth:<game>, wire:<name> (a player's game wire
-                                numbers, { game: number }; only they write it), g:<game>:<key> (room.share); any other
-                                key is dropped (it would be passed on for ever)
-     lib-snap { v: game, s: snapshot | null, c: version, a: writer, p: [players seated] }   a round's latest; greet
-                                sends these before lib-state, so the update that links a game already has the snapshot
+                                numbers, { game: number }; only they write it), round:<game> (round.js; only the round's
+                                runner writes it), g:<game>:<key> (room.share); any other key is dropped (it would be
+                                passed on for ever)
+     lib-snap { v: game, s: snapshot | null, c: version, a: writer, p: [players seated] }   a round's latest (room.snapshot);
+                                greet sends these before the rest of lib-state, so the update that links a game already
+                                has the snapshot
+     lib-save, lib-ask          ihroteka.round's: a round's snapshot, a request to its runner (round.js); greet sends the
+                                round records first, then their snapshots
    What a library from before phase 1a does with each of these changes (it plays on with a new one): the wire: key it
    keeps and passes on, unread (it takes any key), and a lib-snap's a and p it ignores (it passes on only v, s, c; a
    lib-snap without a or p fits any seats here); a tombstone it takes as "no snapshot" (it deletes it, as it always
@@ -50,6 +57,7 @@
 import { HOLD, joinNearby, joinRoom, NAME, PROTO, TIMING, validRoomCode } from '../net/index.js';
 import { safe } from './dom.js';
 import { roomState, validClock } from './roomstate.js';
+import { rounds, validRecord } from './round.js';
 import * as rules from './rules.js';
 import * as trace from './trace.js';
 
@@ -148,7 +156,7 @@ export function comeBack() {
 }
 export function leave() {
   const r = room;
-  room = null; st = null; snaps.clear(); loading.clear(); gapKey = '';
+  room = null; st = null; snaps.clear(); loading.clear(); R.clear(); gapKey = '';
   session.set(REJOIN, null);                             // (a reload under way does not bring us back: we left)
   if (r) { r.leave(); setQuery(null); trace.note('left the room'); }
   update();
@@ -159,13 +167,16 @@ const remember = (k, v) => safe(() => localStorage.setItem(k, v));
 export const state = () => ({ site: SITE, trace: trace.read(), kind: room && room.kind, role: room && room.role, linked: linked(), online: !!room && room.online, status: room && room.status,
   me: room && room.me, players: room ? room.players : [], away: room ? room.players.filter(p => room.away(p)) : [], view: st && st.get('view'), myHere,
   here: room && st ? Object.fromEntries(room.players.map(p => [p, p === room.me ? myHere : st.get('here:' + p) ?? null])) : {},
-  game: ch && { players: ch.seated, linked: ch.api.linked, role: ch.api.role, host: ch.api.host, waiting: ch.api.waiting, waitingFor: waitingFor() },
+  game: ch && { players: ch.seated, linked: ch.api.linked, role: ch.api.role, host: ch.api.host, waiting: ch.api.waiting, waitingFor: waitingFor(),
+    round: { active: ch.round.api.active, id: ch.round.api.id, seats: ch.round.api.seats, runner: ch.round.api.runner, runs: ch.round.api.runs } },
   keys: st ? st.entries().map(([k]) => k) : [], snaps: Object.fromEntries([...snaps].map(([v, x]) => [v, { s: x.s, c: x.c, a: x.a, p: x.p }])),
   auth: st ? Object.fromEntries(st.entries().filter(([k]) => k.startsWith('auth:')).map(([k, e]) => [k.slice(5), e.v])) : {},   // game → whose copy runs its round
+  rounds: st ? Object.fromEntries(st.entries().filter(([k]) => k.startsWith('round:')).map(([k, e]) => [k.slice(6), e.v])) : {},   // game → its round record (round.js)
+  saves: R.state(),                                     // game → the latest snapshot of its round we keep (round.js)
   version: { gap: versionGap(), reloading, offer: offerUpdate() } });
 
 function wire(r) {
-  room = r; st = roomState(r.me); snaps.clear(); loading.clear(); replaced = null; gapKey = '';
+  room = r; st = roomState(r.me); snaps.clear(); loading.clear(); R.clear(); replaced = null; gapKey = '';
   trace.note('room: ' + r.kind + ', as ' + r.me);
   // Which game we have open. A new tab of a player who is in a game says nothing yet: it follows the room into
   // that game in a moment, and a "not in the game" meanwhile would end the round for everyone (see staleHere).
@@ -185,10 +196,15 @@ function wire(r) {
   // we know, in chunks of up to CAP bytes (players' wire numbers first: nobody is seated before their wire is known).
   // Not a here: of ours naming a game while we have none open: an older tab of ours wrote it, it is no news of this
   // one (from us, it would end the wait for our game to open: see onLibMessage, libraries from before phase 1b).
+  // The round layer's first (round.js): the records, then their rounds' snapshots (each taken only from the runner its
+  // record names, so the record goes first), and only then what may link a game.
   const greet = p => {
-    for (const [v, s] of snaps) send(snapMsg(v, s), p);
     const news = ([k, e]) => k !== 'here:' + r.me || !!myHere || !e.v, all = st.entries().filter(news);
-    for (const e of chunks(all.sort(([a], [b]) => b.startsWith('wire:') - a.startsWith('wire:')))) send({ t: 'lib-state', e }, p);
+    const isRound = ([k]) => k.startsWith('round:'), recs = all.filter(isRound);
+    for (const e of chunks(recs)) send({ t: 'lib-state', e }, p);
+    R.greet(p);
+    for (const [v, s] of snaps) send(snapMsg(v, s), p);
+    for (const e of chunks(all.filter(e => !isRound(e)).sort(([a], [b]) => b.startsWith('wire:') - a.startsWith('wire:')))) send({ t: 'lib-state', e }, p);
     trace.note('greet ' + p + ': ' + snaps.size + ' snapshots, ' + all.length + ' keys');
   };
   // Whoever comes in (back after their place dropped, or a room of ours started over) may hold our here: from before
@@ -196,24 +212,27 @@ function wire(r) {
   // so again whenever a link starts ('linked', 'join', 'relinked': ours may be the link that is new to them). (Not a
   // here: null meanwhile: a new tab on its way into its player's game would end the round, see above.)
   const sayHere = () => { if (myHere) publish(st.set('here:' + r.me, myHere)); };
+  // (R.met: a round we quit hears it again from its runner, whenever we link with it)
   on('linked', () => {
     if (r.role === 'host' && st.get('view') === undefined) publish(st.set('view', shell.current()));
     sayHere();
-    for (const p of r.players) if (p !== r.me) greet(p);
+    for (const p of r.players) if (p !== r.me) { greet(p); R.met(p); }
     update();
   });
   // Back after their place dropped: until a here: they wrote since arrives, their game is not open as far as we know.
-  on('join', p => { sayHere(); greet(p); if (rules.arrivesLoading(facts, p, 'join')) loading.set(p, performance.now()); update(); });
+  on('join', p => { sayHere(); greet(p); R.met(p); if (rules.arrivesLoading(facts, p, 'join')) loading.set(p, performance.now()); update(); });
   // Back in a new tab or device: until their game is open there again, the game waits for them (see 'here' below).
   // The same tab after its link started over: its game is still there, it only needs the full picture again.
   on('relinked', (p, fresh) => {
     sayHere();
     greet(p);
+    R.met(p);
     if (rules.arrivesLoading(facts, p, 'relinked', fresh)) loading.set(p, performance.now());
     update();
-    if (!fresh && ch && ch.others.includes(p) && !loading.has(p)) ch.emit('relinked', p);
+    if (!fresh && ch && ch.others.includes(p) && !loading.has(p)) { ch.emit('relinked', p); ch.round.rejoin(p); }
   });
-  on('leave', p => { loading.delete(p); quitRounds(p); update(); });
+  // (a round's player gone for good: a round with policy endWhenSeatGone ends now, round.js)
+  on('leave', p => { loading.delete(p); quitRounds(p); update(); R.tick(); });
   on('away', update);
   on('players', update);                                // (the room's order changed: the seats may have)
   on('peer-gone', () => {
@@ -279,12 +298,13 @@ function knownEntry([k, e]) {
   if (k.startsWith('here:')) return e.a === k.slice(5) && ID(e.v);
   if (k.startsWith('wire:')) return e.a === k.slice(5) && WIRES(e.v);
   if (k.startsWith('auth:')) return /^auth:[a-z0-9-]{1,40}$/.test(k) && (e.v === null || NAME.test(e.v));
+  if (k.startsWith('round:')) return validRecord(k, e);
   return /^g:[a-z0-9-]{1,40}:[\w-]{1,40}$/.test(k);
 }
 
 function onLibMessage(m, from) {
   if (m.t === 'lib-state' && Array.isArray(m.e)) {
-    const keys = st.merge(m.e.filter(e => Array.isArray(e) && knownEntry(e)));
+    const known = m.e.filter(e => Array.isArray(e) && knownEntry(e)), keys = st.merge(known);
     if (keys.length) trace.note('state ← ' + from + ': ' + keys.join(' '));
     if (keys.includes('view')) { const v = st.get('view'); if (ID(v) && v !== shell.current()) shell.follow(v); }
     if (keys.includes('here:' + room.me)) staleHere(st.get('view'));
@@ -296,6 +316,7 @@ function onLibMessage(m, from) {
     const h = st.get('here:' + from);
     if (loading.has(from) && h && m.e.some(e => Array.isArray(e) && e[0] === 'here:' + from && knownEntry(e) && e[1].v === h)) said.push(from);
     const back = [...new Set(said)].filter(p => loading.delete(p));
+    R.merged(keys, known);                                // (round records: an end is final whatever its clock, round.js)
     if (keys.length) update();
     if (keys.some(k => k.startsWith('wire:'))) versionCheck();
     if (ch) {
@@ -314,6 +335,10 @@ function onLibMessage(m, from) {
     trace.note('snapshot ' + m.v + ' ← ' + from + ': ' + (m.s === null ? 'over' : trace.size(m.s)), 'snap<' + from + m.v);
     snaps.set(m.v, { s: m.s, c: m.c, a: m.a, p: Array.isArray(m.p) && m.p.every(x => typeof x === 'string') ? m.p : undefined });   // (null: a tombstone)
     if (ch && ch.id === m.v) ch.maybeResume();
+  } else if (m.t === 'lib-save' && typeof m.v === 'string') {
+    R.onSave(m);
+  } else if (m.t === 'lib-ask' && typeof m.v === 'string') {
+    R.onAsk(m, from);
   } else if (m.t === 'lib-g' && ch && m.v === ch.id && myHere === ch.id) {
     ch.receive(m.m, from);
   }
@@ -353,6 +378,8 @@ export function attachGame(id) {
   queueMicrotask(update);
   return ch.api;
 }
+// the open game's ihroteka.round (round.js), next to the ihroteka.room that attachGame returned
+export const openRound = () => ch ? ch.round.api : null;
 export function detachGame() {
   if (!ch) return;
   trace.note('game ' + ch.id + ' closed');
@@ -379,23 +406,32 @@ const facts = {
 const inGameOf = c => room ? rules.inGame(facts, c.id, myHere) : [];
 // dropped out (their place is kept), or back and their game not open yet (rules.absence): for how long, ms
 const awayMs = p => room ? rules.awayMs(facts, p) : 0;
-// whose copy runs the round: the one the shared state names (authOf), if they play; else the first who plays
-const authOf = c => st && st.get('auth:' + c.id);
+// whose copy runs the round: the one the shared state names (authOf: a game's round record, round.js; else, for the
+// room of contract 4, auth:<game>), if they play; else the first who plays
+const authOf = c => st ? R.runnerOf(c.id) ?? st.get('auth:' + c.id) : undefined;
 const runnerOf = c => rules.runnerOf(c.seated, authOf(c));
 // The runner has been away for AUTH_WAIT: the first player here who plays takes the round over, if they can show
 // it is not them who dropped out (rules.takeOver); only that one writes it, everyone sees it in the shared state.
-// Counted again each second too: a player still opening the game for as long as a place is kept goes stale (out of
-// the game, rules.stale), with no event to say so.
+// (A game on the round layer: R.tick, the same rule for its round.) Counted again each second too: a player still
+// opening the game for as long as a place is kept goes stale (out of the game, rules.stale), with no event to say so.
 let onlineSince = 0;
 function watchRunner() {
   const now = performance.now();
   versionCheck();
   onlineSince = rules.onlineSince(onlineSince, !!room && room.online, now);
+  if (!room) return;
+  R.tick(now);
   if (!ch || !room) return;
   update();
-  if (!ch || !ch.api.linked) return;
+  if (!ch || !ch.api.linked || R.record(ch.id)) return;
   if (rules.takeOver(facts, { inGame: ch.inGame, seated: ch.seated, runner: runnerOf(ch), since: onlineSince, now, wait: AUTH_WAIT })) { publish(st.set('auth:' + ch.id, room.me)); update(); }
 }
+
+// The rounds of ihroteka.round (round.js), on this room.
+const R = rounds({
+  room: () => room, st: () => st, publish: e => publish(e), send: (m, to) => send(m, to), facts, lookingAgain: () => lookingAgain(),
+  wire: game => myWire(game), frame: () => ch, since: () => onlineSince, update: () => update(), play: (fn, ...a) => play(fn, ...a)
+});
 
 /* ---------- versions: the library's (PROTO) and each game's (wire) ---------- */
 // our wire number of each game we have (the shelf's game.json "wire"; null: the shell does not say, every game 1)
@@ -448,7 +484,7 @@ function reload(still) {
 // what the trace does not tell the game's way (several a second): messages, pulses, ticks, link figures
 const BUSY = new Set(['message', 'pulse', 'tick', 'stats']);
 function channel(id, seats) {
-  const handlers = new Map(), inbox = [], late = [], warned = new Set();
+  const handlers = new Map(), inbox = [], late = [], warned = new Set(), used = new Set();
   let pending = null, sendTimer = null, lastSent = 0;     // the latest snapshot not sent yet (at most two a second)
   const c = {
     id, seats, disposed: false, was: [], seen: '', weak: false, wait: '', role: null, runner: null, own: false,
@@ -458,15 +494,31 @@ function channel(id, seats) {
       const told = name === 'shared' ? [a[0], trace.size(a[1])] : name === 'resume' ? [trace.size(a[0])] : a;
       if (!BUSY.has(name)) trace.note('→ ' + id + ' ' + name + (told.length ? ' ' + trace.args(told) : ''));
       for (const fn of handlers.get(name) || []) play(fn, ...a);
-      for (let i = late.length; i--;) if (late[i][0] === name) late.splice(i, 1);   // (heard it now: nothing to replay)
+      c.heard(name);
     },
+    // Listeners added late (the room's, and the round's as 'round:<event>'): one replay pass for all of them, in its
+    // order; one that hears its event live first has nothing to replay.
+    later(key, fn) { if (late.push([key, fn]) === 1) queueMicrotask(replay); },
+    unlater(key, fn) { const i = late.findIndex(([k, f]) => k === key && f === fn); if (i >= 0) late.splice(i, 1); },
+    heard(key) { for (let i = late.length; i--;) if (late[i][0] === key) late.splice(i, 1); },
     policy: name => typeof api[name] === 'function' && play(api[name]),
     pulseOut: now => typeof api.pulse === 'function' ? play(api.pulse, now) : null,
+    // A game's message from another player. Kept (up to 64, in order) until the game listens, and while its round is on
+    // and our copy has not been told its part in it yet (round.js: 'run' comes before any message).
     receive(m, from) {
       if (!api.linked || !c.others.includes(from) || !m || typeof m !== 'object' || typeof m.t !== 'string') return;
-      if (!handlers.has('message')) { if (inbox.length < 64) inbox.push([m, from]); return; }   // the game has not started listening yet
-      for (const [x, f] of inbox.splice(0)) c.emit('message', x, f);   // (kept ones first, in order)
+      if (!handlers.has('message') || c.round.holds()) { if (inbox.length < 64) inbox.push([m, from]); return; }
+      c.deliverKept();                                 // (kept ones first, in order)
       c.emit('message', m, from);
+    },
+    deliverKept() { if (handlers.has('message') && !c.round.holds()) for (const [m, from] of inbox.splice(0)) c.emit('message', m, from); },
+    // A call the game may not make now, or with this: false (on the dev server, once per reason, the console says why).
+    refuse(why, of = 'room') { trace.note('refused: ' + why); if (DEV && !warned.has(why)) { warned.add(why); console.warn('ihroteka.' + of + ': ' + why); } return false; },
+    // (dev) a game that keeps its rounds both ways, ihroteka.round's (start, save, over, quit) and the room's of contract
+    // 4 (room.snapshot): said once, as the two do not know of each other
+    uses(kind) {
+      used.add(kind);
+      if (DEV && used.size === 2 && !warned.has('v4')) { warned.add('v4'); console.warn('ihroteka.round: this game also keeps rounds with room.snapshot (contract 4); the two do not know of each other: a game on ihroteka.round needs none of room.snapshot, host, role, \'resume\', \'role\' and \'relinked\' (README "Game API")'); }
     },
     // We run the round now, we play with someone, and this copy of the game has nothing of it: it goes on from the
     // snapshot, if the snapshot is of a round with the players seated now (not a tombstone, not someone else's).
@@ -487,8 +539,8 @@ function channel(id, seats) {
     },
     // the latest snapshot, if it still waits for its turn to go (at most two a second): now (the game closes, the page
     // goes or is hidden: it may never come back to send it)
-    snapNow() { clearTimeout(sendTimer); flush(); },
-    dispose() { c.snapNow(); handlers.clear(); inbox.length = 0; late.length = 0; c.disposed = true; }
+    snapNow() { clearTimeout(sendTimer); flush(); c.round.snapNow(); },
+    dispose() { c.snapNow(); c.round.dispose(); handlers.clear(); inbox.length = 0; late.length = 0; c.disposed = true; }
   };
   // the latest snapshot to whoever plays with us; a tombstone to everyone (whoever keeps the round, waiting for a
   // seat too, must learn it is over)
@@ -499,20 +551,21 @@ function channel(id, seats) {
     if (s.s === null) send(snapMsg(id, s));
     else for (const p of c.others) send(snapMsg(id, s), p);
   };
-  // A call the game may not make now, or with this: false (on the dev server, once per reason, the console says why).
-  const refuse = why => { trace.note('refused: ' + why); if (DEV && !warned.has(why)) { warned.add(why); console.warn('ihroteka.room: ' + why); } return false; };
-  // What a game that starts listening late missed, as update() would have told it: who plays ('players'), the round
-  // it runs on ('resume'), that it plays with someone ('linked'), that it waits ('weak'); then the messages kept for
-  // it until it listened. One pass for every listener added meanwhile, in this order whatever order they came in.
+  const refuse = why => c.refuse(why);
+  // What a game that starts listening late missed, as update() would have told it: who plays ('players'), its part in
+  // the round of ihroteka.round ('run' or 'watch', round.js), the round it runs on ('resume'), that it plays with
+  // someone ('linked'), that it waits ('weak'); then the messages kept for it until it listened. One pass for every
+  // listener added meanwhile (the room's and the round's), in this order whatever order they came in.
   const replay = () => {
     const fresh = late.splice(0), to = name => fresh.filter(([n]) => n === name).map(([, fn]) => fn);
     if (c.disposed) return;
     trace.note('→ ' + id + ' listens: ' + [...new Set(fresh.map(([n]) => n))].join(' '));
     if (c.seen) for (const fn of to('players')) play(fn, api.players);
+    c.round.replay(to);
     if (to('resume').length) c.maybeResume();
     if (api.linked) for (const fn of to('linked')) play(fn);
     if (c.weak) for (const fn of to('weak')) play(fn, true);
-    if (handlers.has('message')) for (const [m, from] of inbox.splice(0)) c.emit('message', m, from);
+    c.deliverKept();
   };
   const api = {
     get me() { return room ? room.me : null; },        // our name
@@ -534,7 +587,7 @@ function channel(id, seats) {
       if (!handlers.has(name)) handlers.set(name, []);
       handlers.get(name).push(fn);
       // late listeners still learn the current state (a game often starts after the link is up): see replay
-      if (late.push([name, fn]) === 1) queueMicrotask(replay);
+      c.later(name, fn);
       return api;
     },
     // To every other player, or { to: name }; { fast, latest } as in ../net/link.js. A reliable message becomes JSON
@@ -573,6 +626,7 @@ function channel(id, seats) {
     // → whether it was taken
     snapshot(s) {
       const x = s === undefined || s === null ? null : json(s, 'snapshot');
+      c.uses('v4');
       if (api.role !== 'host' || !room) return refuse('snapshot: only from the copy that runs the round (room.role host)');
       if (x !== null && bytes(x) > CAP) return refuse('snapshot: up to ' + CAP + ' bytes as JSON');
       // the round runs in our copy: we name it in the shared state (once), so a change of the room's order (a shaky
@@ -595,6 +649,7 @@ function channel(id, seats) {
     invite: () => shell.invite()
   };
   c.api = api;
+  c.round = R.frame(c);                                  // ihroteka.round (round.js)
   return c;
 }
 // the worst of these players' links: a game goes as fast as its slowest player
@@ -608,7 +663,7 @@ function statsOf(ps) {
 // who has the game open, who of them plays, who waits, and who we play with: counted again whenever any of it
 // may have changed, so the game's many questions (several per frame) cost nothing
 function recount(c) {
-  const s = rules.seating(inGameOf(c), c.seats, room && room.me);
+  const s = rules.seating(inGameOf(c), c.seats, room && room.me, room ? R.frozen(c.id) : null);
   c.inGame = s.inGame; c.seated = s.seated; c.waiting = s.waiting; c.others = s.others;
 }
 
@@ -616,7 +671,15 @@ function recount(c) {
 // and 'linked', or 'leave' and 'join'), then whose copy runs it ('role', and 'resume' with the snapshot for the
 // new one), then 'weak'. A round that goes on in our copy as we start to play with someone hears 'resume' before
 // 'linked' (so the game knows it runs the round on when it hears it plays); and only while we play with someone.
+// (Once at a time: what the game does on an event, say a round it starts or ends, comes in a pass of its own right
+// after this one, never in the middle of it.)
+let updating = false, again = false;
 function update() {
+  if (updating) { again = true; return; }
+  updating = true;
+  try { for (let n = 0; n < 8; n++) { again = false; updateOnce(); if (!again) break; } } finally { updating = false; }
+}
+function updateOnce() {
   if (!ch) return;
   const c = ch;
   recount(c);
@@ -624,6 +687,8 @@ function update() {
   const runner = now.length ? runnerOf(c) : null, wasRunner = c.runner;
   c.runner = runner;
   if (seen !== c.seen) { c.seen = seen; c.emit('players', c.api.players); }
+  c.round.update();                                      // the round of ihroteka.round: start, run or watch, rejoin, end
+  if (ch !== c) return;
   const role = c.api.role, before = c.role;
   if (role !== before) { c.role = role; if (role !== 'host') c.own = false; }
   if (now.join() !== was.join()) {

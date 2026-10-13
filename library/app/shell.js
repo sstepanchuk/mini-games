@@ -7,7 +7,7 @@
    ===================================================================== */
 import { $, copy, el, root, safe } from './dom.js';
 import { initInvite, openDialog } from './invite.js';
-import { attachGame, detachGame, gameError, initTogether, leave, pageError, query, report, state, viewChanged } from './together.js';
+import { attachGame, detachGame, gameError, initTogether, leave, openRound, pageError, query, report, state, viewChanged } from './together.js';
 import * as trace from './trace.js';
 
 let games = [], current, frame = null, load = null, loads = 0;   // current: the open game id, null on the shelf (undefined before the first view)
@@ -166,12 +166,12 @@ const notice = e => e.error == null && /^ResizeObserver loop/.test(e.message || 
 // the game's window: no instance of ours, told by its tag.)
 const refusal = r => Object.prototype.toString.call(r) === '[object DOMException]' && (r.name === 'NotAllowedError' || r.name === 'AbortError');
 
-// What a game gets as window.ihroteka (contract version 4, see README "Game API"). What its window throws (or rejects
-// and nobody catches) goes into the trace, and may mean it broke (gameError); a browser's notice (notice) or refusal
-// (refusal) does not.
+// What a game gets as window.ihroteka (contract version 4, see README "Game API"; ihroteka.round, phase 4, for every
+// game). What its window throws (or rejects and nobody catches) goes into the trace, and may mean it broke
+// (gameError); a browser's notice (notice) or refusal (refusal) does not.
 function api(info, win) {
   const g = find(current) || info;
-  const room = attachGame(current);
+  const room = attachGame(current), round = openRound();
   win.addEventListener('error', e => { if (win === frame?.contentWindow) { if (notice(e)) trace.note('the game\'s ResizeObserver looped (a notice)'); else gameError(e.error, e); } });
   win.addEventListener('unhandledrejection', e => {
     if (win !== frame?.contentWindow) return;
@@ -183,6 +183,7 @@ function api(info, win) {
     libraryUrl: root.href,
     home: () => go(null),
     room,
+    round,
     invite: room.invite
   });
 }

@@ -2,10 +2,10 @@
 // newgame: from nothing to two players, with no internet at all. `cli new demo2` makes a game from tools/template in a
 // scratch copy of the repository; a dev server of its own serves it with devnet (`--devnet`: the fake network between
 // the tabs of one browser, tools/devnet.js); every request that would leave this computer is refused. Аня makes a room
-// link, Богдан opens it in another tab, Аня opens the game and both follow; they play the template's round to its end
-// (turns, the other's buttons off, the same number on both screens, one winner). Midway the tab of the copy that does
-// not run the round reloads and gets it back; then the runner's: the round goes on from its snapshot. Runs on its own server: E2E_URL is
-// only checked to be up, by run.cjs.
+// link, Богдан opens it in another tab, Аня opens the game and both follow; they play the template's round (on
+// ihroteka.round) to its end (turns, the other's buttons off, the same number on both screens, one winner). Midway the
+// tab of the copy that does not run the round reloads and gets it back; then the runner's: the round goes on from its
+// snapshot ('run' with it). Runs on its own server: E2E_URL is only checked to be up, by run.cjs.
 'use strict';
 const { launch, scenario, check, step, until } = require('./support/scenario.cjs');
 const { openPage, createLink, enterName, libState, short } = require('./support/pages.cjs');
@@ -66,7 +66,7 @@ scenario('newgame: cli new, then two devnet tabs play it without internet', asyn
   };
   await turn(1); await turn(2); await turn(2);
 
-  const runner = (await libState(A)).game.host, guest = NAMES.find(n => n !== runner);
+  const runner = (await libState(A)).game.round.runner, guest = NAMES.find(n => n !== runner);
   for (const [name, what] of [[guest, 'the other copy'], [runner, 'the copy that runs the round']]) {
     step(name + '\'s tab (' + what + ') reloads mid-round');
     await P[name].reload();

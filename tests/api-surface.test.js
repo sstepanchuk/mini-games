@@ -1,8 +1,8 @@
 // The API games see, pinned: window.ihroteka (what library/app/shell.js hands a game, and the contract at the top of
-// library/game-api.js), ihroteka.room (the channel's `api` object in library/app/together.js) and the events a game
-// can get from it. Everything is read from the source, nothing is run. A member or an event added, renamed or
-// removed fails here until tests/api-surface.json and README's "Game API" say the same: an API change is made on
-// purpose, with its docs.
+// library/game-api.js), ihroteka.room (the channel's `api` object in library/app/together.js), ihroteka.round (the
+// `round` object in library/app/round.js) and the events a game can get from each. Everything is read from the
+// source, nothing is run. A member or an event added, renamed or removed fails here until tests/api-surface.json and
+// README's "Game API" say the same: an API change is made on purpose, with its docs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -119,6 +119,37 @@ function events() {
   return sorted(found);
 }
 
+/* ---------- ihroteka.round: `const round = { … }` in round.js, and what it emits ---------- */
+const ROUND = parse('library/app/round.js');
+function round() {
+  const decl = find(ROUND, n => n.type === 'VariableDeclarator' && n.id.name === 'round' && n.init?.type === 'ObjectExpression', 'const round = { … } in library/app/round.js');
+  const out = { getters: [], methods: [], policy: [] }, nodes = {};
+  for (const p of decl.init.properties) {
+    const k = keyOf(p, 'ihroteka.round');
+    nodes[k] = p;
+    if (p.kind === 'get') out.getters.push(k);
+    else if (p.method || FN.has(p.value.type)) out.methods.push(k);
+    else if (k === 'policy' && p.value.type === 'ObjectExpression') {
+      for (const q of p.value.properties) {
+        assert.ok(q.value.type === 'Literal' && q.value.value === false, 'round.policy.' + keyOf(q, 'round.policy') + ' is false by default (no policy but the game\'s)');
+        out.policy.push(keyOf(q, 'round.policy'));
+      }
+    } else assert.fail('ihroteka.round.' + k + ': neither a getter, a method nor the policy');
+  }
+  return { surface: Object.fromEntries(Object.entries(out).map(([k, v]) => [k, sorted(v)])), nodes };
+}
+// emit('x', …) in round.js (its events reach the game only through it)
+function roundEvents() {
+  const found = new Set();
+  for (const n of walk(ROUND)) {
+    if (n.type !== 'CallExpression' || n.callee.type !== 'Identifier' || n.callee.name !== 'emit') continue;
+    const a = n.arguments[0];
+    assert.ok(a && a.type === 'Literal' && typeof a.value === 'string', 'round.js line ' + n.loc.start.line + ': an event the test cannot name (emit a string)');
+    found.add(a.value);
+  }
+  return sorted(found);
+}
+
 // README's "Game API" section, up to the next "## " heading
 const README = (() => { const r = read('README.md'), at = r.indexOf('\n## Game API'); assert.ok(at >= 0, 'README has a "## Game API" section'); const end = r.indexOf('\n## ', at + 1); return r.slice(at, end < 0 ? undefined : end); })();
 const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -146,6 +177,25 @@ test('the events a game can get from ihroteka.room', () => {
   assert.deepEqual(events(), SNAP.events, 'what together.js (and rules.js) emit ≠ tests/api-surface.json "events"');
 });
 
+test('ihroteka.round: its getters, methods and policy (every one off)', () => {
+  assert.deepEqual(round().surface, SNAP.round, 'round.js `round` ≠ tests/api-surface.json "round"');
+});
+
+test('the events a game can get from ihroteka.round', () => {
+  assert.deepEqual(roundEvents(), SNAP.roundEvents, 'what round.js emits ≠ tests/api-surface.json "roundEvents"');
+});
+
+test('round.on() and round.off() return the round, so calls chain', () => {
+  const { nodes } = round();
+  for (const name of SNAP.roundChainable) {
+    const fn = nodes[name]?.value;
+    assert.ok(fn && FN.has(fn.type) && fn.body.type === 'BlockStatement', 'round.' + name + ' is a method with a body');
+    const returns = [...walk(fn.body, true)].filter(n => n.type === 'ReturnStatement');
+    for (const r of returns) assert.ok(r.argument?.type === 'Identifier' && r.argument.name === 'round', 'round.' + name + ' (line ' + r.loc.start.line + ') returns the round');
+    assert.equal(fn.body.body.at(-1).type, 'ReturnStatement', 'round.' + name + ' ends with return round');
+  }
+});
+
 test('on() returns the room, so calls chain', () => {
   const { nodes } = room();
   for (const name of SNAP.chainable) {
@@ -166,7 +216,23 @@ test('README "Game API" names every member and event', () => {
   for (const k of SNAP.game) if (!new RegExp('\\b' + esc(k) + '\\b').test(gameLine)) missing.push('ihroteka.game: ' + k);
   for (const k of Object.values(SNAP.room).flat()) has(new RegExp('room\\.' + esc(k) + '(?![\\w-])'), 'room.' + k);
   for (const e of SNAP.events) has(new RegExp("\\.on\\('" + esc(e) + "'"), ".on('" + e + "', …)");
+  for (const k of [...SNAP.round.getters, ...SNAP.round.methods]) has(new RegExp('round\\.' + esc(k) + '(?![\\w-])'), 'round.' + k);
+  for (const k of SNAP.round.policy) has(new RegExp('round\\.policy\\.' + esc(k) + '\\b'), 'round.policy.' + k);
+  for (const e of SNAP.roundEvents) has(new RegExp("round\\.on\\('" + esc(e) + "'|\\n\\s+\\.on\\('" + esc(e) + "'"), "round .on('" + e + "', …)");
   assert.deepEqual(missing, [], 'missing from README "Game API"');
+});
+
+// (phase 4: the rounds of contract 4 stay as they are, marked deprecated in README only)
+test('README "Game API" marks the room\'s round words of contract 4 deprecated, and the room still has them', () => {
+  const { surface } = room(), lines = README.split('\n'), all = Object.values(surface).flat();
+  for (const k of SNAP.deprecated.room) {
+    assert.ok(all.includes(k), 'room.' + k + ' is still there (contract 4 stays as it is)');
+    assert.ok(lines.some(l => new RegExp('room\\.' + esc(k) + '\\b').test(l) && /deprecated/.test(l)), 'README: room.' + k + ' on a line that says deprecated');
+  }
+  for (const e of SNAP.deprecated.events) {
+    assert.ok(SNAP.events.includes(e), "the room's event '" + e + "' is still there");
+    assert.ok(lines.some(l => l.includes(".on('" + e + "'") && /deprecated/.test(l)), "README: .on('" + e + "' on a line that says deprecated");
+  }
 });
 
 test('the notes name members of ihroteka.room; kick does nothing (phase 2, H1: the room checks its network itself)', () => {

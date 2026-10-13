@@ -1,6 +1,7 @@
 // tags: @ci @webkit
 // version: friends whose copies of a game speak different wire numbers (owner, decision 9). Аня's page is told its
-// copy of the game (E2E_GAME: Two Dragons by default) is wire 2 (its shelf rewritten on the way), Богдан's is 1: Богдан's page, the older, reloads itself
+// copy of the game (E2E_GAME: Two Dragons by default) is one wire newer than it is (its shelf rewritten on the way),
+// Богдан's is as it is: Богдан's page, the older, reloads itself
 // back into the room (no name asked), once only; both know it; in the game they are not seated together, and both
 // see «Онови сторінку — у друга інша версія», with «Оновити» on the older page only. Needs the dev server with the
 // plaintext games (npm run unlock), or with the probe (npm run dev -- --probe, E2E_GAME=probe).
@@ -14,10 +15,11 @@ const UPDATE = /Онови сторінку — у друга інша верс�
 scenario('version: a friend\'s copy of the game is newer', async () => {
   const ctx = await (await launch()).newContext();       // (one context: the fake network is shared by its pages)
   const pa = watch(await ctx.newPage(), 'Аня');
-  await pa.route('**/*', async route => {                // this page's shelf says the game is wire 2
+  await pa.route('**/*', async route => {                // this page's shelf says the game is one wire newer
     if (route.request().resourceType() !== 'document') return route.continue();
     const r = await route.fetch();
-    const html = (await r.text()).replace(new RegExp('("id":"' + GAME + '"[^}]*"players":\\{[^}]*\\})(,"wire":\\d+)?'), '$1,"wire":2');
+    // (one more than the game's own wire: no "wire" is 1)
+    const html = (await r.text()).replace(new RegExp('("id":"' + GAME + '"[^}]*"players":\\{[^}]*\\})(?:,"wire":(\\d+))?'), (_, a, n) => a + ',"wire":' + ((+n || 1) + 1));
     await route.fulfill({ response: r, body: html });
   });
   await pa.addInitScript(fakeNet('aaaaaaaaaaaa'));

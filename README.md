@@ -4,7 +4,8 @@ A tiny private game library. The library is public; its games are end-to-end enc
 password. Play alone, together over the internet, or side by side with no internet at all. Installs as an app
 and works offline. Hosted on GitHub Pages.
 
-**[Open](https://sstepanchuk.github.io/mini-games/)** · [🐉 Two Dragons](https://sstepanchuk.github.io/mini-games/dragons/)
+**[Open](https://sstepanchuk.github.io/mini-games/)** · [🐉 Two Dragons](https://sstepanchuk.github.io/mini-games/dragons/) ·
+[❌ Хрестики-нулики](https://sstepanchuk.github.io/mini-games/tic-tac-toe/)
 
 ## How it works
 
@@ -38,8 +39,8 @@ and works offline. Hosted on GitHub Pages.
 
 ```
 library/   everything that runs in the browser
-  app/       the library page: shell, password, together (+ rules: who plays, who runs a round; trace: what
-             happened lately, for bug reports), offline copy, page template, icons
+  app/       the library page: shell, password, together (+ rules: who plays, who runs a round; round: ihroteka.round,
+             a game's rounds; trace: what happened lately, for bug reports), offline copy, page template, icons
   net/       rooms for up to 8 players: internet (MQTT + WebRTC) and nearby (QR-paired WebRTC)
   crypto.js  keyring and sealed files (browser and Node)
   game-api.js  window.ihroteka, injected into every game
@@ -72,7 +73,7 @@ npm run lint && npm test
 npm run e2e                 # browser scenarios against a running dev server (tests/e2e/README.md; -- @ci: CI's set)
 npm run e2e -- --prod       # the production path: the assembled site, online and offline (npm run dev -- site)
 npm run test:games          # every game's own unit tests (games/*/test/*.test.js, sealed with it; after npm run unlock)
-npm run test:games:e2e      # Two Dragons' browser scenarios (games/dragons/test/e2e, against the dev server)
+npm run test:games:e2e      # every game's browser scenarios (games/*/test/e2e, against the dev server; -- <id>: one)
 npm run perf -- dragons     # a performance report next to docs/perf-reference.json (-- --profile wifi; not a gate)
 npm run migrate             # bring an old vault/keyring.json up to today's format
 
@@ -111,10 +112,12 @@ From nothing to two players on screen, then on the shelf:
    Usage.)
 5. The rules: `rules.js`, with no page and no network, so `test/*.test.js` (node:test) checks them:
    `npm run test:games`.
-6. The page: `index.html`, `style.css`, `main.js`. `main.js` shows how a game lives on the room ("Game API" below):
-   one copy runs the round and sends its state (the others show only what that copy sends), the others send their
-   moves, a snapshot after each move, `resume`, `role`, `relinked`, and with more than two `leave` (a player of the
-   round gone: it ends). Buttons rather than a canvas where you can: they work with a keyboard and a screen reader.
+6. The page: `index.html`, `style.css`, `main.js`. `main.js` shows how a game lives on its rounds (`ihroteka.round`,
+   "Game API" below): one copy runs the round (`round.runs`) and sends its state (the others show only what that copy
+   sends), the others send their moves; it saves the round after each move (`round.save`) and ends it with
+   `round.over`, goes on from the snapshot `run` brings, sends a new copy of a player everything on `rejoin`, and sets
+   its one rule (`round.policy.endWhenSeatGone`: a player gone for good ends the round, as their turn would never
+   come). Buttons rather than a canvas where you can: they work with a keyboard and a screen reader.
 7. `game.json` (validated by the dev server and the build):
    - `title`, `tagline`, `description`, `image`; optional `shareTitle`, `shareDescription`, `imageAlt`, `emoji`,
      `theme`, `players` (`"2"` or `"2-4"`; 2 when not given);
@@ -157,6 +160,7 @@ ihroteka.libraryUrl  // the library's absolute address (its shelf)
 ihroteka.home()      // back to the shelf
 ihroteka.invite()    // the library's "play together" dialog (room.invite() is the same)
 ihroteka.room        // the other players (below)
+ihroteka.round       // the game's rounds: who plays one, whose copy runs it, its snapshots (below, "The round")
 ```
 
 `game.wire` is the version of the game's messages and snapshots (game.json `"wire"`, 1 when not given). Raise it by
@@ -181,11 +185,12 @@ room.on('linked', () => …)            // we play with someone now (also fires 
     .on('players', names => …)        // who plays now, in seat order (also when only who waits changed)
     .on('weak', v => …)               // a player dropped out, went quiet or is opening the game (in a new tab, or back
                                       //   after their place dropped) / is back: pause
-    .on('peer-gone', () => …)         // the round stops: our partner (or the runner) is gone, left for good or closed the game
-    .on('relinked', name => …)        // a player's copy of the game is new (a new tab or device) or its link started over:
-                                      //   send them the full state
-    .on('role', r => …)               // the round now runs in another copy: 'host' (ours) or 'guest'
-    .on('resume', snap => …)          // we run the round now: go on from its last snapshot (before 'linked', below)
+    .on('peer-gone', () => …)         // (deprecated as a round's end: ihroteka.round) nobody to play with any more: our
+                                      //   partner (or the runner) is gone, left for good or closed the game
+    .on('relinked', name => …)        // (deprecated: round 'rejoin') a player's copy of the game is new (a new tab or
+                                      //   device) or its link started over: send them the full state
+    .on('role', r => …)               // (deprecated: round 'run'/'watch') the round now runs in another copy: 'host' (ours) or 'guest'
+    .on('resume', snap => …)          // (deprecated: round 'run') we run the round now: go on from its last snapshot (before 'linked')
     .on('shared', (key, value) => …)  // a shared value changed, ours too (below)
     .on('pulse', (g, from) => …)      // what another player's room.pulse returned (below)
     .on('stats', s => …)              // the links changed: room.stats() (the slowest player we play with)
@@ -193,9 +198,11 @@ room.on('linked', () => …)            // we play with someone now (also fires 
 room.me, room.players, room.waiting   // names: us, who plays (in seat order), who waits for a seat
 room.seats, room.seated               // how many seats the game has; whether we have one
 room.linked, room.weak                // we play with someone now; someone we play with is away or quiet (pause)
-room.role, room.host                  // 'host' (our copy runs the round), 'guest', or null (waiting); whose copy runs it
+room.role, room.host                  // (deprecated: round.runs, round.runner) 'host' (our copy runs the round), 'guest', or
+                                      //   null (waiting); whose copy runs it
 room.away(name)                       // a player we wait for (dropped out, their place kept; or opening the game): for how long, ms
-room.snapshot(state)                  // (the runner, about once a second) the round as it is, JSON-able; null: it is over
+room.snapshot(state)                  // (deprecated: round.save) (the runner, about once a second) the round as it is,
+                                      //   JSON-able; null: it is over
 room.shared('mode'), room.share('mode', 'race')   // what the game's players share: the same for everyone, whoever
                                       //   passes it on and whoever reloads (a chosen mode, a series score…)
 room.send({ t: 'move', … });                  // to everyone who plays; reliable: exactly once, in order, even across an outage
@@ -209,19 +216,29 @@ room.send({ t: 'card', … }, { to: name });    // to one player
 
 **Listening late.** A game that starts listening after things happened (it often does: the room may be linked
 before the game's code runs) still hears what it missed, once, in the order the room tells it live: `players`, then
-`resume` (if its copy runs a round on), then `linked`, then `weak` (true), then the messages kept for it (up to 64,
-in order). `resume` comes before `linked` live too, and only while we play with someone: a game that hears `linked`
-already knows whether it goes on with a round or starts afresh.
+its part in a round of `ihroteka.round` that is on (`run` or `watch`), then `resume` (if its copy runs a round of
+`room.snapshot` on), then `linked`, then `weak` (true), then the messages kept for it (up to 64, in order). `resume`
+comes before `linked` live too, and only while we play with someone: a game that hears `linked` already knows whether
+it goes on with a round or starts afresh.
 
-Seats come from the room's order (`room.players`), not from who runs the round; the same two players in another order
-(a shaky network may reorder the room) are still the same round. Whose copy runs a round is shared by the whole room
+**Deprecated.** `room.host`, `room.role`, `room.snapshot` and the events `resume`, `role` and `relinked` (and
+`peer-gone` as the end of a round) are the rounds of contract 4, kept as they are for the games that use them (today
+only the browser scenarios' probe, `tests/e2e/fixtures/probe`, which keeps them tested in CI; both games on the shelf
+and `cli new`'s template keep their rounds with `ihroteka.round`): a new game keeps its rounds with `ihroteka.round`
+(below), which says the same things per round. They go in a later
+step of the contract (docs/ROADMAP.md, phase 5); the two kinds of round do not know of each other, so a game keeps its
+rounds one way (on the dev server, the console says so once if it calls both).
+
+Seats come from the room's order (`room.players`), not from who runs the round (while a round of `ihroteka.round` is
+on, from that round: below); the same two players in another order (a shaky network may reorder the room) are still the
+same round. Whose copy runs a round is shared by the whole room
 (that copy names itself with the round's first snapshot, so the room's order does not move it). It moves only when
 that copy has been gone for 10 s, and only with proof that it was the runner who dropped out, not us: another player
 who has the game open (seated, or waiting for a seat) is here with us, or (over the internet) the brokers have
 answered us all that time; and only while we are the room's host or hear it (a player cut off from the room's host
 knows the others only as the host last told it: it vouches for nobody until it hears a host again). Then the first
 seated player still here takes over: its copy hears `role` ('host') and, at once (in the same task), `resume` with the
-latest snapshot (no `resume`: there is no round to go on; `tools/template` shows its lobby then); the others see the
+latest snapshot (no `resume`: there is no round to go on, show the lobby); the others see the
 change in `room.host`. Two phones nearby that lose each other cannot tell which of them dropped out, so there the
 round waits for its runner. A runner who comes back after the round went on elsewhere plays on as a guest (`role` →
 'guest').
@@ -230,8 +247,8 @@ round waits for its runner. A runner who comes back after the round went on else
 it is open again, the copy that runs the round hears `resume` with the snapshot, if the players seated are the same
 as when it was taken (a snapshot never goes on with someone else's seats). A round is over for good when its runner
 says so (`room.snapshot(null)`) or one of its players left the room for good (with the game open or not: back later,
-they start a new round; a game for more than two that has it open hears `leave` instead and decides for itself, as
-`tools/template` does: it ends the round): then every player keeps a tombstone in its place, so no older copy (say,
+they start a new round; a game for more than two that has it open hears `leave` instead and decides for itself: it
+may end the round, `room.snapshot(null)`): then every player keeps a tombstone in its place, so no older copy (say,
 kept by a player who waited for a seat) can bring it back. The others get the runner's snapshots at most twice a
 second, and the latest at once when the game closes or the page goes or is hidden: a reload goes on from the last
 move (a page that is killed, with no goodbye, may still lose its last half second).
@@ -283,37 +300,145 @@ loop as the layout settles, is only a line in the trace; so is a promise left re
 cut short what the game asked, a `DOMException` `NotAllowedError` or `AbortError`: a sound played before any tap.)
 
 The room's code is `library/net/` (`room.js` describes the room and its rules) and `library/app/together.js`
-(what a game sees; the rules of who plays and who runs a round are in `library/app/rules.js`).
+(what a game sees; the rules of who plays and who runs a round are in `library/app/rules.js`; `ihroteka.round` is
+`library/app/round.js`).
+
+### The round: `ihroteka.round`
+
+The room carries messages; the round says who plays a round, whose copy runs it and where it stands, the same for every
+player and through reloads (`library/app/round.js`, its invariants at its top). Every game gets it (game.json `api` 4);
+a game that keeps its rounds with `room.snapshot` needs none of it.
+
+```js
+const round = ihroteka.round;
+round.on('start', ({ id, seats, setup, by }) => …)   // a round has just begun (before its first save), to every copy
+     .on('run', ({ id, seats, setup, state }) => …)  // our copy runs it: state null, fresh (begin it from seats and
+                                                     //   setup); else go on from its snapshot
+     .on('watch', ({ id, seats, runner }) => …)      // another copy runs it (also one without a seat in it: mySeat -1)
+     .on('rejoin', name => …)                        // (our copy runs it) one of its players has a new copy of the
+                                                     //   game (a new tab or device, back in the game, a new link): send
+                                                     //   them everything
+     .on('end', ({ id, by, reason, result }) => …);  // it is over: 'over' (the runner's over(result)), 'quit' (by whom),
+                                                     //   'gone' (by: the player whose place went; policy below), 'lost'
+                                                     //   (its snapshot on no device), 'closed' (our room closed, or its
+                                                     //   end never reached us)
+round.off('run', fn)                                 // that listener no more (on and off return the round: they chain)
+round.active, round.id                               // a round is on (for us: not one we quit); its id (null between rounds)
+round.seats, round.mySeat, round.seatOf(name)        // its players by name, in seat order, frozen at its start (null
+                                                     //   between rounds); our seat, theirs: -1 when not in it
+round.runner, round.runs                             // whose copy runs it; ours does. Between rounds: whose copy starts
+                                                     //   the next one (null while nobody plays with us)
+round.start(setup?, { seats }?)                      // a new round of the players seated now (seats: the same players in
+                                                     //   another order), with the game's setup (JSON, up to 8 000 bytes)
+round.save(state)                                    // (round.runs) the round as it is, JSON, up to 32 KB: kept by its players
+round.over(result?)                                  // (round.runs) its rules ended it: 'end' { reason: 'over', result }
+round.quit()                                         // (one of its players) it ends for everyone: 'end' { reason: 'quit', by }
+round.policy.startNeedsEveryone = true               // rules for the library to apply for the game (below): none by default
+round.policy.endWhenSeatGone = true
+// start, save, over, quit → true when done (start: or asked of round.runner), false when refused (a round is on or
+// not, nobody to play with, not ours to call, too big, a policy says no…; on the dev server the console says why, once)
+```
+
+**Events.** Each round tells a copy of the game `start` once, while it has not been saved yet (a copy that comes later
+does not hear it), then exactly one of `run` and `watch`, told again only when the round moves to another copy, and
+`end` once (an end is final for everyone, whatever happened meanwhile; only `closed` says we lost sight of the round:
+back in a room where it is still on, the game hears its part again, and its end later). A game that starts listening late hears its part (`run` or `watch`) once, after `players` and before
+`linked` and the messages kept for it (see Listening late); and while our copy should run a round but has no snapshot
+of it yet (its page reloaded: the others' copies are on their way), the game hears nothing of it, messages included,
+until `run` with the snapshot: never a fresh `run` for a round that was saved.
+
+**One record, one writer.** A round is one record the whole room shares (`round:<game>`: its id, players, runner,
+whether it is on); only the copy that runs it writes it. A start or a quit from another player is a request to that
+copy: a start names the round it follows and is taken only if the runner's answer comes back within 5 s of asking, by
+the asker's clock (a start that waited out an outage starts nothing); a quit names its round and holds until that
+round is over (said again whenever we link with its runner; if the round moves to our copy, ours ends it). The round
+moves as the room's runner does (above): its runner away for 10 s with proof, or at once when its player left the room
+for good; the copy that runs it on hears `run` with the latest snapshot and signs it as its own.
+
+**Seats are frozen.** While a round is on, the game's seats (`room.players`) are its players who have the game open, in
+its order, and nobody else's: a player away or with the game closed keeps their seat, and anyone else who opens the game
+waits (`watch`, `mySeat` -1) and gets a seat when the round is over. The room's order (a shaky network may change it)
+moves nothing. Between rounds, seats come from the room's order, as above. A copy that watches without a seat has the
+round's getters and events, but none of the game's messages (they reach only who plays); a message to everyone with the
+game open, spectators too, is reserved for later (docs/ROADMAP.md, phase 5).
+
+**Snapshots.** `save(state)` (taken as a copy) goes to the round's players at most twice a second (the latest; at once
+when the game closes or the page goes or is hidden), tagged with the round's id, its writer and the game's `wire`. A
+copy keeps one only from the runner its record names, and runs a round on only from a snapshot of that round: a round
+never comes back with another round's state, nor after it is over. A game closed mid-round waits: opened again, the
+runner's copy hears `run` with the snapshot (and `rejoin` for each player whose copy opens after its own). A round that
+was saved and whose snapshot is on no device any more (every other player of it is here without one, or gone for good;
+one who is away may have it; whoever keeps one passes it on when its runner left for good) ends after 15 s, `lost`. A round never saved goes on fresh in whatever copy runs it.
+
+**No rules but the game's.** The library decides nothing a game did not ask for. `quit()` ends the round for everyone
+because that is what it is for: a game whose round goes on when a player leaves does not call it. Everything else is
+off until the game sets it in `round.policy` (in every copy, before a round starts):
+- `startNeedsEveryone`: `start` is refused while a seated player is away or still opening the game (the runner refuses
+  such a request too). Two Dragons' rule.
+- `endWhenSeatGone`: a round ends (`end` { reason: 'gone', by: that player }) as soon as one of its players' place goes
+  for good (they left, «Не чекати», or 3 minutes away), also while nobody has the game open. Without it the round stays
+  on, the game hears the room's `leave` (more than two seats) or `peer-gone`, and decides: `over()`, or wait (the same
+  name back is the same player, in the same seat).
+
+A countdown, a series score, who goes first: the game's own (`setup`, `room.share`).
+
+**A turn-based game on the round** (the way Хрестики-нулики does it; the rules are a pure module with its tests):
+
+```js
+const lib = window.ihroteka, round = lib && lib.round;   // undefined outside the library: play on one device
+let G = null;                                            // the board, or null: the lobby
+round.on('run', ({ seats, setup, state }) => { G = state ?? newGame(seats, setup); share(); })
+     .on('watch', () => { G = null; draw(); })           // the runner's copy sends the board
+     .on('rejoin', name => lib.room.send({ t: 'board', g: G }, { to: name }))
+     .on('end', ({ reason, result }) => { G = null; lobby(reason, result); });
+lib.room.on('message', (m, from) => {
+  if (round.runs && m.t === 'move') play(round.seatOf(from), m.cell);   // a move counts for the seat of who sent it
+  else if (m.t === 'board' && from === round.runner) { G = m.g; draw(); }
+});
+const move = cell => round.runs ? play(round.mySeat, cell) : lib.room.send({ t: 'move', cell });
+function play(seat, cell) {
+  const next = place(G, seat, cell);                     // null: not that seat's turn, or not a free cell
+  if (next) { G = next; share(); if (winner(G) !== null) round.over({ winner: winner(G) }); }
+}
+function share() { round.save(G); lib.room.send({ t: 'board', g: G }); draw(); }
+startButton.onclick = () => round.start();               // false while a round is on
+```
 
 ### A multiplayer game on it, the way Two Dragons does it
 
-- **One copy runs the round** (`room.role === 'host'`): it steps the game at a fixed rate and sends the whole
-  state to the others with `{ fast: true, latest: 's' }`. Make each state self-contained (or repeat the last few
-  changes in it), so a lost one costs nothing. The others send only their input (`fast`, numbered, repeated in
-  `room.pulse`; Two Dragons sends it as a `latest` stream of its own too), and commands that must arrive (start,
-  quit) as plain reliable messages. Through the brokers, the relay budget (see Links) lets 30 states a second through:
+- **One copy runs the round** (`round.runs`): it steps the game at a fixed rate and sends the whole state to the
+  others with `{ fast: true, latest: 's' }`. Make each state self-contained (or repeat the last few changes in it), so
+  a lost one costs nothing. The others send only their input (`fast`, numbered, repeated in `room.pulse`; Two Dragons
+  sends it as a `latest` stream of its own too). Starting and quitting are the round's (`round.start`, `round.quit`),
+  not messages of the game's own. Through the brokers, the relay budget (see Links) lets 30 states a second through:
   step as fast as you like, the newest goes.
-- **Write who plays what into the round** when it starts (names per seat) and read your seat from there: the
-  room's order may change on a shaky network, a round's seats must not.
-- **Snapshot the round** about once a second (`room.snapshot`) from the runner; on `resume`, go on from it; on
-  `role` → 'guest', drop your copy and ask for the full state; on `role` → 'host' with no `resume` right after it (no
-  snapshot of the round reached you), there is no round to go on: leave no frozen picture of it.
-- **Pause on `weak`**, and send the full state on `relinked` and to a guest who asks. Whom the round waits for, and why,
-  the library says itself, in one card over the game («Чекаємо на …», with «Не чекати» when it makes sense): draw no
-  waiting message of your own, only your own reasons to pause (a hidden tab, a countdown, or a pause the runner's room
-  sees and yours does not: Two Dragons says the link is weak).
+- **Seats are the round's**: draw and steer by `round.mySeat`, credit input by `round.seatOf(from)`, and write
+  `round.seats` into the round's own state when it begins: the room's order may change on a shaky network, a round's
+  seats do not. A player waiting for a seat hears `watch` with `mySeat` -1: show them who plays, never them on a seat.
+- **Save the round** about once a second (`round.save`) from the runner, and `round.over()` when its rules end it.
+  On `run`, go on from `state` (null: begin it from `seats` and `setup`); on `watch`, drop your copy of it and take
+  pictures only from that runner (an old runner back after the round was quit must not pull you back in); on `rejoin`,
+  send that player the full picture. A copy that runs the round on after a reload numbers its pictures above the old
+  copy's (Two Dragons: from the snapshot's, plus a margin), so the others take them.
+- **Pause on `weak`**. Whom the round waits for, and why, the library says itself, in one card over the game
+  («Чекаємо на …», with «Не чекати» when it makes sense): draw no waiting message of your own, only your own reasons
+  to pause (a hidden tab, a countdown, or a pause the runner's room sees and yours does not: Two Dragons says the link
+  is weak). A partner whose game closed mid-round (`room.linked` false, `round.active` true): the round stands still
+  and goes on when they are back.
 - **Show the others a little ahead**: predict both players to the moment your own input will reach the round
   (`room.lag()` is the one-way delay), and when a new state corrects the prediction, let the difference fade
   over ~0.1 s instead of jumping. The runner delays its own input and picture by `room.lag()`, so the round
   feels the same for everyone.
-- **Keep settings in `room.share`** (the chosen mode, a series score): everyone sees the same, through reloads.
-- **Quitting mid-round ends it for everyone** (send a reliable message, the runner tells the rest). It may miss a runner
-  whose copy is reopening (a new tab hears nothing until its game is open), and the round then goes on from its
-  snapshot, there or in your copy: remember the round you quit (its players and step) until the runner says it is over,
-  say it again when that round's state comes back, and end it with `room.snapshot(null)` if it moves to you.
+- **Keep settings in `room.share`** (the chosen mode, a series score): everyone sees the same, through reloads; pass
+  the mode a round is played in as its `setup`.
+- **Say your rules** in `round.policy`, in every copy: Two Dragons and Хрестики-нулики set `startNeedsEveryone` (no
+  start while a player is away) and `endWhenSeatGone` (a player gone for good ends the round), and quit with
+  `round.quit()` (the round ends for both, also when the quit reaches a runner whose copy is reopening: the library
+  says it again).
 - **Keep the game's tests with the game** (`games/<id>/test/`): they are sealed with its sources, so a private game
   keeps them private, and `npm run build` runs its `test/*.test.js` (node:test, no browser) first: a game whose tests
-  fail is not sealed. Two Dragons does.
+  fail is not sealed. Both games do; their browser scenarios are in `test/e2e/` too, each with its `run.cjs` (`npm run
+  test:games:e2e` runs every game's; `-- tic-tac-toe pair`: one game's, some of them).
 
 ### Under it: one room for the whole library
 

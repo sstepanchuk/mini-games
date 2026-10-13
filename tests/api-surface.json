@@ -1,7 +1,7 @@
 {
   "//": "What games see (README \"Game API\"), pinned by tests/api-surface.test.js, which reads it from the source. Change it on purpose, with the README, when the API changes.",
   "version": 4,
-  "ihroteka": ["game", "home", "invite", "libraryUrl", "room", "version"],
+  "ihroteka": ["game", "home", "invite", "libraryUrl", "room", "round", "version"],
   "game": ["id", "players", "title", "wire"],
   "room": {
     "getters": ["direct", "host", "linked", "me", "nearby", "players", "role", "seated", "seats", "waiting", "weak"],
@@ -10,6 +10,18 @@
   },
   "events": ["join", "leave", "linked", "message", "peer-gone", "players", "pulse", "relinked", "resume", "role", "shared", "stats", "tick", "weak"],
   "chainable": ["on"],
+  "deprecated": {
+    "//": "the rounds of contract 4 (phase 4: ihroteka.round says the same per round): kept as they are, marked so in README; they go in the contract step (docs/ROADMAP.md, phase 5)",
+    "room": ["host", "role", "snapshot"],
+    "events": ["peer-gone", "relinked", "resume", "role"]
+  },
+  "round": {
+    "getters": ["active", "id", "mySeat", "runner", "runs", "seats"],
+    "methods": ["off", "on", "over", "quit", "save", "seatOf", "start"],
+    "policy": ["endWhenSeatGone", "startNeedsEveryone"]
+  },
+  "roundEvents": ["end", "rejoin", "run", "start", "watch"],
+  "roundChainable": ["off", "on"],
   "notes": {
     "frame": "an optional hint (phase 2, H1): while a game is played, the library keeps the direct link alive by itself",
     "kick": "does nothing since phase 2 (H1), kept for games that call it: the room checks its network by itself"

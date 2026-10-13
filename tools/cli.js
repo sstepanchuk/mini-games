@@ -141,7 +141,7 @@ const commands = {
     console.log('✓ site/ assembled: ' + n + ' game(s)');
   },
 
-  // A new game from tools/template (a small turn-based game on the room: rules with tests, a page, a placeholder
+  // A new game from tools/template (a small turn-based game on ihroteka.round: rules with tests, a page, a placeholder
   // cover), ready to play in the dev server, alone or together.
   async new(id, ...flags) {
     const opt = options(flags, ['--players', '--title']);

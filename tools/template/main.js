@@ -1,132 +1,135 @@
-/* Гра на сторінці: екран, кнопки й гра разом через бібліотеку (window.ihroteka.room; README, «Game API»).
+/* Гра на сторінці: екран, кнопки й гра разом через бібліотеку (window.ihroteka.round і .room; README, «Game API» і
+   «The round»).
    Без бібліотеки (сторінку відкрито окремо) або поки з нами ніхто не грає — гра на одному пристрої: гравці ходять по
-   черзі тут. Разом раунд веде одна копія гри (room.role === 'host', «ведучий»): лише вона застосовує ходи (правила —
-   rules.js) і розсилає стан; інші шлють їй свої ходи й показують те, що вона прислала. На події кімнати:
-     linked     граємо разом: ведучий шле стан (якщо раунд іде), інші просять його ('sync')
-     resume     раунд тепер ведемо ми, з його останнього знімка: продовжуємо (приходить раніше за linked)
-     role       раунд переїхав: 'guest' — просимо стан; 'host' без resume одразу за ним — раунду немає: лобі
-     relinked   у гравця нова копія гри (вкладка, пристрій): ведучий шле йому стан
-     peer-gone  раунд зупинився (хтось пішов або закрив гру): лобі; коли той повернеться, ведучий почує resume
-     leave      (більше двох місць) гравця цього раунду більше немає (вийшов із кімнати, його місце скінчилося): ніхто
-                не піде за нього, тож ведучий завершує раунд для всіх (з двома місцями це каже сама бібліотека: peer-gone)
-     players    змінилося, хто грає і хто чекає на місце: перемалювати
-   Повідомлення: інші шлють ведучому 'start', 'move', 'sync' (дай стан) і 'newer' (нижче); ведучий — 'state' з раундом
-   (null — раунду немає: лобі). Інші показують лише 'state' від ведучого (room.host): стан від когось іншого — від
-   колишнього ведучого, що надіслав його, поки раунд переїжджав, — не рахується.
-   Знімок (room.snapshot) ведучий дає бібліотеці після кожного ходу: раунд гри, яку закрили посеред нього, іде далі з
-   нього, навіть в іншій копії; null — раунд скінчився. Бібліотека розсилає знімки не частіше ніж двічі на секунду (а
-   останній — одразу, коли гру закривають або сторінка йде), тож якщо сторінку ведучого вбито (без прощання), останній
-   хід у знімок може не потрапити; але стан того ходу вже є в інших гравців: хто бачить, що ведучий продовжив старіший
-   стан того самого раунду, відсилає йому свій ('newer').
+   черзі тут. Разом раунд веде одна копія гри (round.runs, «ведучий»): лише вона застосовує ходи (правила — rules.js),
+   зберігає знімок (round.save) і розсилає стан; інші шлють їй свої ходи й показують те, що вона прислала. Хто яким
+   місцем грає, бібліотека заморожує на старті раунду (round.seats, round.seatOf). Події раунду (кожна — раз на його
+   id):
+     start    раунд почався (натиснув будь-хто: round.start просить ту копію, що його починає)
+     run      раунд ведемо ми: state — його знімок (гру відкрили знову, сторінку перезавантажили, раунд перейшов до
+              нас), null — новий
+     watch    його веде інша копія: показуємо лише те, що пришле вона
+     rejoin   (ведучому) у гравця нова копія гри (вкладка, пристрій): шлемо йому стан
+     end      раунду кінець: 'over' — хтось виграв (ведучий кличе round.over з останнім станом); інакше раунд перервано
+              ('gone' — його гравця вже немає в кімнаті, 'quit', 'lost', 'closed'): лобі
+   Правило, яке обирає ця гра (сама бібліотека жодних не нав'язує): гравця раунду вже немає в кімнаті — раунду кінець
+   (policy.endWhenSeatGone), бо його черга не настала б ніколи. Решта — як дає бібліотека: почати можна й тоді, коли
+   когось немає (його черга почекає), а гра, яку закрили посеред раунду, чекає й іде далі з його знімка.
+   Повідомлення (room.send, надійні; стан несе id свого раунду: стан іншого раунду не рахується): інші шлють ведучому
+   'move' (крок і номер ходу, на який він зроблений: подвійний клік — один хід) і 'newer' (нижче); ведучий — 'state' з
+   раундом. Інші показують лише 'state' від ведучого (round.runner): стан від когось іншого — від колишнього ведучого,
+   що надіслав його, поки раунд переїжджав, — не рахується.
+   Знімки бібліотека розсилає не частіше ніж двічі на секунду (останній — одразу, коли гру закривають або сторінка
+   йде), тож якщо сторінку ведучого вбито (без прощання), останній хід у знімок може не потрапити; але стан того ходу
+   вже є в інших гравців: хто бачить, що ведучий продовжив старіший стан того самого раунду, відсилає йому свій
+   ('newer').
    На кого чекаємо, каже картка бібліотеки над грою: гра своєї не малює. */
 /* global document, window */
 import { newRound, move, newer, valid, TARGET, STEPS } from './rules.js';
 
-const lib = window.ihroteka, room = lib ? lib.room : null;
+const lib = window.ihroteka, round = lib ? lib.round : null, room = round ? lib.room : null;
 const $ = id => document.getElementById(id);
-let round = null;        // раунд на екрані (rules.js) або null — лобі
-let last = null;         // найновіший стан раунду, який ця копія бачила (і після того, як показала лобі)
-let resumed = false;     // чи прийшов resume (після role → host і перед linked)
+let G = null;            // раунд на екрані (rules.js) або null — лобі
+let last = null;         // найновіший стан раунду разом, який ця копія бачила (і після того, як показала лобі)
+let note = '';           // чому раунд разом перервано (не правилами): у лобі
+let locals = 0;          // раунди на одному пристрої: їхні id — 'local-1', 'local-2'… (id раунду разом такого не має)
 
-const together = () => !!room && room.linked;            // граємо з кимось: у нас місце, і ще хтось тут
-const runs = () => !together() || room.role === 'host';  // раунд ведемо ми (на одному пристрої — завжди)
+// граємо разом: з кимось (у нас місце, і ще хтось тут), або наш раунд іде (хтось лише закрив гру чи відкриває її знову)
+const together = () => !!room && (room.linked || round.mySeat >= 0);
+const isLocal = r => r.id.startsWith('local-');         // раунд на одному пристрої
+// раунд на екрані — той, що йде разом (а не на одному пристрої чи вже скінчений)
+const ours = () => !!G && !!round && round.active && G.id === round.id;
+const runs = () => !ours() || round.runs;               // раунд ведемо ми (на одному пристрої — завжди)
 // гравці на одному пристрої: стільки, скільки гра хоче щонайменше, але не менше двох
 const local = () => Array.from({ length: Math.max(2, lib ? lib.game.players.min : 2) }, (_, i) => 'Гравець ' + (i + 1));
 // чи можна нам ходити: разом — лише на своєму місці й у свою чергу; на одному пристрої — завжди
-const myTurn = () => !!round && round.winner < 0 && (!together() || round.seats[round.turn] === room.me);
-const name = i => round.seats[i] + (together() && round.seats[i] === room.me ? ' (ти)' : '');
+const myTurn = () => !!G && G.winner < 0 && (ours() ? G.seats[G.turn] === room.me : !together());
+const name = i => G.seats[i] + (ours() && G.seats[i] === room.me ? ' (ти)' : '');
 
 // показати раунд (null — лобі)
 function show(r) {
-  round = r;
-  if (r) last = newer(last, r) || r;
+  G = r;
+  if (r && round && r.id === round.id) last = newer(last, r) || r;
   draw();
 }
-// ведучий: стан — усім, хто грає, знімок — бібліотеці
-function publish() {
+// ведучий: стан — усім, хто грає (або одному: to), знімок — бібліотеці; переможець — кінець раунду
+function publish(to) {
   draw();
-  if (!together() || room.role !== 'host' || !round) return;
-  room.send({ t: 'state', round });
-  room.snapshot(round.winner >= 0 ? null : round);
+  if (!ours() || !round.runs) return;
+  room.send({ t: 'state', round: G }, to ? { to } : undefined);
+  if (to) return;
+  if (G.winner >= 0) round.over(G); else round.save(G);
 }
 function start() {
-  if (!runs()) { room.send({ t: 'start' }); return; }
-  show(newRound(together() ? room.players : local(), Date.now().toString(36) + Math.random().toString(36).slice(2, 6)));
-  publish();
+  note = '';
+  if (together()) { round.start(); draw(); return; }      // (ведучий почне, а всі почують run чи watch)
+  show(newRound(local(), 'local-' + ++locals));
 }
 function play(n) {
   if (!myTurn()) return;
-  if (!runs()) { room.send({ t: 'move', n, at: round.moves }); return; }   // at: на який стан цей хід (подвійний клік — один хід)
-  const next = move(round, round.turn, n);
+  if (!runs()) { room.send({ t: 'move', id: G.id, n, at: G.moves }); return; }   // at: на який стан цей хід (подвійний клік — один хід)
+  const next = move(G, G.turn, n);
   if (next) { show(next); publish(); }
 }
 
-if (room) {
+if (round) {
+  round.policy.endWhenSeatGone = true;                  // правило цієї гри (див. угорі)
+  round.on('start', () => { note = ''; });
+  round.on('run', ({ id, seats, state }) => {
+    // знімок цього раунду, або новіший стан того самого раунду, який ми бачили (вели його раніше чи дивились); інакше — новий
+    const seen = last && last.id === id ? last : null, snap = valid(state) && state.id === id ? state : null;
+    show(snap ? newer(snap, seen) || snap : seen || newRound(seats, id));
+    publish();
+  });
+  round.on('watch', ({ id }) => { if (!G || G.id !== id) show(last && last.id === id ? last : null); });   // (стан пришле ведучий)
+  round.on('rejoin', who => publish(who));
+  round.on('end', ({ id, by, reason, result }) => {
+    if (reason === 'over') { if (valid(result) && result.id === id) show(newer(result, last) || result); return; }   // (переможець — на екрані)
+    note = reason === 'gone' && by ? 'Раунд перервано: ' + by + ' уже не в кімнаті.' : 'Раунд перервано.';
+    if (G && G.id === id) show(null); else draw();
+  });
   room.on('message', (m, from) => {
-    if (!runs()) {
-      if (m.t !== 'state' || from !== room.host) return;    // лише від того, хто веде раунд
-      if (m.round === null) { show(null); return; }
-      if (!valid(m.round)) return;
-      const best = newer(m.round, last) || m.round;
-      if (best !== m.round && best.moves > m.round.moves) room.send({ t: 'newer', round: best }, { to: from });   // (ми бачили новіший)
-      show(best);
+    if (ours() && round.runs) {
+      if (m.t === 'move' && m.id === G.id && m.at === G.moves) {
+        const next = move(G, round.seatOf(from), m.n);   // хід рахується тому, хто його надіслав
+        if (next) { show(next); publish(); }
+      } else if (m.t === 'newer' && newer(G, m.round) === m.round && m.round.moves > G.moves) { show(m.round); publish(); }   // хтось бачив новіший стан
       return;
     }
-    if (m.t === 'start' && (!round || round.winner >= 0)) start();
-    else if (m.t === 'move' && round && m.at === round.moves) {
-      const next = move(round, round.seats.indexOf(from), m.n);   // хід рахується тому, хто його надіслав
-      if (next) { show(next); publish(); }
-    } else if (m.t === 'sync') room.send({ t: 'state', round }, { to: from });   // (null теж: раунду немає)
-    else if (m.t === 'newer' && round && newer(round, m.round) === m.round) { show(m.round); publish(); }   // хтось бачив новіший стан
+    if (m.t !== 'state' || from !== round.runner || !valid(m.round) || m.round.id !== round.id) return;   // лише від того, хто веде цей раунд
+    const best = newer(m.round, last) || m.round;
+    if (best !== m.round && best.moves > m.round.moves) room.send({ t: 'newer', round: best }, { to: from });   // (ми бачили новіший)
+    show(best);
   });
-  // (новіший стан того самого раунду, який ми бачили гостем, лишаємо)
-  // (resumed: лише для linked чи role, що йдуть одразу за resume; потім — знову false)
-  room.on('resume', snap => { if (valid(snap)) { show(newer(snap, last) || snap); resumed = true; queueMicrotask(() => { resumed = false; }); publish(); } });
-  room.on('linked', () => {
-    if (room.role === 'host') { if (!resumed) show(null); publish(); }   // (раунд на одному пристрої разом не продовжуємо)
-    else { show(null); room.send({ t: 'sync' }); }
-    resumed = false;
-  });
-  room.on('role', r => {
-    if (r === 'guest') { room.send({ t: 'sync' }); return; }
-    resumed = false;
-    queueMicrotask(() => { if (!resumed) show(null); resumed = false; });
-  });
-  room.on('relinked', who => { if (runs()) room.send({ t: 'state', round }, { to: who }); });
-  room.on('peer-gone', () => show(null));
-  room.on('leave', who => {
-    if (!round || round.winner >= 0 || !round.seats.includes(who) || !together() || !runs()) return;
-    show(null);
-    room.send({ t: 'state', round: null });
-    room.snapshot(null);                                    // і назавжди: жодна копія його не поверне
-  });
+  // граємо разом: раунд на одному пристрої разом не продовжуємо
+  room.on('linked', () => { if (G && isLocal(G)) show(null); else draw(); });
   room.on('players', draw);
 }
 
 function draw() {
-  $('lobby').hidden = !!round;
-  $('play').hidden = !round;
-  if (!round) {
+  $('lobby').hidden = !!G;
+  $('play').hidden = !G;
+  if (!G) {
     const waits = !!room && !room.seated && room.waiting.includes(room.me);
     $('lobby-text').textContent = !room ? 'Гра на одному пристрої: ходіть по черзі.'
       : waits ? 'Ти чекаєш на місце. Грають: ' + room.players.join(', ') + '.'
       : together() ? 'Грають: ' + room.players.join(', ') + (room.waiting.length ? '. Чекають на місце: ' + room.waiting.join(', ') : '') + '.'
       : 'Поки що ти сам: грайте по черзі на цьому пристрої або запроси друзів.';
-    $('start').hidden = waits;
+    $('start').hidden = waits || (!!round && round.active);   // (раунд уже йде: його стан ось-ось прийде)
     $('invite').hidden = !room || together();
-    $('say').textContent = '';
+    $('say').textContent = note;
     return;
   }
-  $('total').textContent = round.total;
-  $('seats').replaceChildren(...round.seats.map((s, i) => {
+  $('total').textContent = G.total;
+  $('seats').replaceChildren(...G.seats.map((s, i) => {
     const li = document.createElement('li');
     li.textContent = name(i);
-    if (i === (round.winner >= 0 ? round.winner : round.turn)) li.className = round.winner >= 0 ? 'won' : 'turn';
+    if (i === (G.winner >= 0 ? G.winner : G.turn)) li.className = G.winner >= 0 ? 'won' : 'turn';
     return li;
   }));
-  const over = round.winner >= 0, mine = together() && round.seats[over ? round.winner : round.turn] === room.me;
-  $('say').textContent = over ? (mine ? 'Ти виграв!' : 'Виграв: ' + round.seats[round.winner] + '!') : mine ? 'Твій хід' : 'Хід: ' + round.seats[round.turn];
-  for (const b of $('steps').children) b.disabled = !myTurn() || round.total + +b.dataset.n > TARGET;
+  const over = G.winner >= 0, mine = !isLocal(G) && G.seats[over ? G.winner : G.turn] === room.me;
+  $('say').textContent = over ? (mine ? 'Ти виграв!' : 'Виграв: ' + G.seats[G.winner] + '!') : mine ? 'Твій хід' : 'Хід: ' + G.seats[G.turn];
+  for (const b of $('steps').children) b.disabled = !myTurn() || G.total + +b.dataset.n > TARGET;
   $('again').hidden = !over;
 }
 

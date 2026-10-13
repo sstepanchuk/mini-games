@@ -1,10 +1,11 @@
 // tags: @ci @webkit
 // newgame3: the template (tools/template) for three, `cli new demo3 --players 2-3`, in three devnet tabs with no
-// internet, as newgame does for two. The others show only what the copy that runs the round sends: a state from
-// anyone else (an old runner's, sent before the round moved on) changes nothing. A player of the round who leaves the
-// room mid-round: the round cannot go on without them (no seat of theirs moves again), so it is over for everyone
-// (with two seats, the library says so itself: peer-gone); the two left start a new one. Runs on its own server:
-// E2E_URL is only checked to be up, by run.cjs.
+// internet, as newgame does for two, on ihroteka.round. The others show only what the copy that runs the round sends:
+// a state from anyone else (an old runner's, sent before the round moved on) changes nothing. A player of the round who
+// leaves the room mid-round: the round cannot go on without them (no seat of theirs moves again), so the template's
+// rule (round.policy.endWhenSeatGone) ends it for everyone ('gone', and the lobby says why); the two left start a new
+// one. The one who left comes back meanwhile: the seats of a round are frozen, so they wait for a seat («Ти чекаєш на
+// місце»), get one when that round is over, and start a round of three. Runs on its own server: E2E_URL is only checked to be up, by run.cjs.
 'use strict';
 const { launch, scenario, check, step, until, w } = require('./support/scenario.cjs');
 const { openPage, createLink, libState, short } = require('./support/pages.cjs');
@@ -14,11 +15,11 @@ const { newGame } = require('./support/newgame.cjs');
 const view = f => f.evaluate(() => {
   const $ = id => document.getElementById(id);
   return { lobby: !$('lobby').hidden, text: $('lobby-text').textContent, play: !$('play').hidden, total: +$('total').textContent, say: $('say').textContent,
-    seats: [...$('seats').children].map(li => li.textContent), steps: [...$('steps').children].map(b => !b.disabled) };
+    seats: [...$('seats').children].map(li => li.textContent), steps: [...$('steps').children].map(b => !b.disabled), again: !$('again').hidden };
 }).catch(() => null);
 const frame = async p => { const e = await p.waitForSelector('iframe.frame', { timeout: 15000 }); const f = await e.contentFrame(); await f.waitForSelector('#lobby', { timeout: 15000 }); return f; };
 
-scenario('newgame3: the template for three, in devnet tabs: only the runner\'s state counts; a player who leaves mid-round ends it', async () => {
+scenario('newgame3: the template for three, in devnet tabs: only the runner\'s state counts; a player who leaves mid-round ends it; frozen seats', async () => {
   const G = await newGame('demo3', ['--players', '2-3', '--title', 'Демо три'], { devnet: true }), { port, url: U2 } = G;
   if (!check(G.made, 'cli new demo3 --players 2-3', G.out)) return;
   if (!check(G.up, 'its dev server, with --devnet, at ' + U2)) return;
@@ -66,22 +67,31 @@ scenario('newgame3: the template for three, in devnet tabs: only the runner\'s s
   check(await until(async () => (await libState(P[R])).players.join() === R + ',' + O, 10000), R + '\'s room: ' + R + ' and ' + O, await short(P[R]));
   const over = await until(inLobby([R, O], [R, O]), 10000);
   check(over, 'the round is over for ' + R + ' and ' + O + ': both in the lobby (nobody would ever move for ' + X + ')', over || await views([R, O]));
-  check(await until(async () => { const s = (await libState(P[R])).snaps.demo3; return s && s.s === null; }, 5000), 'and over for good: a tombstone, so no copy brings it back',
-    (await libState(P[R])).snaps);
+  check(over && [R, O].every(n => over[n].say === 'Раунд перервано: ' + X + ' уже не в кімнаті.'), 'and it says why', over);
+  const rec = await until(async () => { const r = (await libState(P[R])).rounds.demo3; return r && !r.on && r; }, 5000);
+  check(rec && rec.reason === 'gone' && rec.by === X, 'the round\'s record: over, gone (' + X + ')', rec);
 
-  step('a copy that shows a round the runner no longer has asks for the state, and is told: none');
-  // (as a runner back after the round went on elsewhere without it: role → 'guest', 'sync'; here the runner's own
-  // old state makes the other copy show a round, then it asks)
-  await F[R].evaluate(([to, seats]) => window.ihroteka.room.send({ t: 'state', round: { id: 'gone', seats, total: 3, turn: 1, winner: -1, moves: 2 } }, { to }), [O, [R, O]]);
-  check(await until(async () => { const x = await view(F[O]); return x.play && x.total === 3; }, 5000), O + ' shows that round', await view(F[O]));
-  await F[O].evaluate(() => window.ihroteka.room.send({ t: 'sync' }));
-  check(await until(inLobby([R, O], [R, O]), 5000), 'the runner answers «no round» (state null): ' + O + ' is back in the lobby', await views([R, O]));
-
-  step('the two of them play a new round');
+  step('the two of them play a new round; ' + X + ' comes back meanwhile and waits for a seat');
   await F[O].click('#start');
   const fresh = await until(async () => { const x = await views([R, O]); return Object.values(x).every(y => y && y.play && y.total === 0 && y.seats.length === 2) && x; }, 10000);
-  check(fresh && fresh[R].say === 'Твій хід' && fresh[O].say === 'Хід: ' + R, 'a round of two', fresh || await views([R, O]));
-  await F[R].click('#steps button[data-n="2"]');
-  v = await until(async () => { const x = await views([R, O]); return x[R].total === 2 && x[O].total === 2 && x[O].say === 'Твій хід' && x; }, 10000);
-  check(v, R + ' +2: 2 on both, ' + O + '\'s turn', v || await views([R, O]));
+  check(fresh && fresh[R].say === 'Твій хід' && fresh[O].say === 'Хід: ' + R, 'a round of two, ' + R + ' first', fresh || await views([R, O]));
+  await P[X].close();
+  P[X] = await openPage(ctx, 'x2', link, { name: X, net: false });
+  F[X] = await frame(P[X]);
+  const waits = await until(async () => { const x = await view(F[X]); return x && x.lobby && x.text === 'Ти чекаєш на місце. Грають: ' + R + ', ' + O + '.' && x; }, 20000);
+  check(waits, X + ' back in the room, the game open: «Ти чекаєш на місце. Грають: ' + R + ', ' + O + '.» (the round\'s seats are frozen)', waits || await view(F[X]));
+  let total = 0;
+  const turn = async (who, next) => {                       // who +2; both see it, then it is next's turn (none: the end)
+    await F[who].click('#steps button[data-n="2"]');
+    total += 2;
+    return until(async () => { const x = await views([R, O]); return [R, O].every(n => x[n] && x[n].total === total && (next ? true : x[n].again)) && (!next || x[next].say === 'Твій хід') && x; }, 10000);
+  };
+  for (const [who, next] of [[R, O], [O, R], [R, O], [O, R]]) check(await turn(who, next), who + ' +2', await views([R, O]));
+  v = await turn(R, null);
+  check(v && v[R].say === 'Ти виграв!' && v[O].say === 'Виграв: ' + R + '!' && v[R].total === 10, R + ' +2 = 10: ' + R + ' wins', v || await views([R, O]));
+  const seated = await until(async () => { const x = await view(F[X]), g = (await libState(P[X])).game; return x && x.again && x.say === 'Виграв: ' + R + '!' && g.players.length === 3 && x; }, 10000);
+  check(seated, 'the round over: ' + X + ' sees how it ended, and has a seat (three play now), «Ще раз»', [seated || await view(F[X]), await short(P[X])]);
+  await F[X].click('#again');
+  const three = await until(async () => { const x = await views(); return Object.values(x).every(y => y && y.play && y.total === 0 && y.seats.length === 3) && x; }, 10000);
+  check(three, X + ' presses «Ще раз»: a round of the three of them', three || await views());
 }, { timeout: 180000 });

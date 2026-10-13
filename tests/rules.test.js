@@ -1,10 +1,11 @@
 // The room's rules for an open game (library/app/rules.js), as they work today: who plays and who waits, whose
 // copy runs the round, who is away and why, when the round moves to another copy, what the game hears when its
-// players change.
+// players change; and those of the round layer (library/app/round.js): frozen seats, our part in a round, who runs it
+// on or ends it, a snapshot on no device.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { absence, arrivesLoading, awayMs, canRelease, goneForGood, inGame, offerUpdate, onlineSince, paused, playersChange, reloadNow, roleOf, runnerOf, sameWire,
-  seating, snapFits, stale, takeOver, versionGap, waitingFor } from '../library/app/rules.js';
+import { absence, arrivesLoading, awayMs, canRelease, everyoneHere, goneForGood, inGame, offerUpdate, onlineSince, paused, playersChange, reloadNow, roleOf, roundPart,
+  roundTaker, roundWriter, runnerOf, sameWire, seating, seatsGone, snapFits, snapshotLost, stale, takeOver, versionGap, waitingFor } from '../library/app/rules.js';
 
 const G = 'dragons', WAIT = 10000, HOLD = 180000, NOW = 1000000;   // AUTH_WAIT and HOLD as the library has them
 // The room as together.js shows it to the rules. here: the game each player has open (everyone: G, unless given);
@@ -423,4 +424,73 @@ test('versions: the note offers «Оновити» only on the older page, and n
   assert.equal(offerUpdate({ ...older, older: false }, { nearby: false }), false);   // the newer page has nothing newer to get
   assert.equal(offerUpdate(older, { nearby: true }), false);                         // a reload would end the room for every phone
   assert.equal(offerUpdate(null, { nearby: false }), false);
+});
+
+/* ---------- the round layer (round.js) ---------- */
+// a round record (round.js): its players, whose copy runs it, on, saved
+const rec = o => ({ id: 'abcdefgh', seats: ['Аня', 'Богдан'], runner: 'Аня', on: true, saved: true, ...o });
+
+test('round seats are frozen: while a round is on its players are seated, in its order, and nobody else', () => {
+  const f = room({ players: ['Сава', 'Аня', 'Богдан'] });
+  assert.deepEqual(seating(inGame(f, G, G), 2, 'Аня', ['Аня', 'Богдан']), { inGame: ['Сава', 'Аня', 'Богдан'], seated: ['Аня', 'Богдан'], waiting: ['Сава'], others: ['Богдан'] });
+  assert.deepEqual(seating(inGame(f, G, G), 2, 'Аня', ['Богдан', 'Аня']).seated, ['Богдан', 'Аня'], 'the round\'s order, not the room\'s');
+  assert.deepEqual(seating(inGame(f, G, G), 2, 'Аня', null).seated, ['Сава', 'Аня'], 'between rounds: the room\'s order');
+  // one of them with the game closed (or gone): their seat waits; nobody else takes it, even with seats to spare
+  const g = room({ players: ['Сава', 'Аня', 'Богдан'], here: { Сава: G, Аня: G, Богдан: null } });
+  assert.deepEqual(seating(inGame(g, G, G), 2, 'Аня', ['Аня', 'Богдан']), { inGame: ['Сава', 'Аня'], seated: ['Аня'], waiting: ['Сава'], others: [] });
+  assert.deepEqual(seating(inGame(f, G, G), 4, 'Сава', ['Аня', 'Богдан']), { inGame: ['Сава', 'Аня', 'Богдан'], seated: ['Аня', 'Богдан'], waiting: ['Сава'], others: [] });
+  // away, a player keeps their seat in the round as anywhere
+  assert.deepEqual(seating(inGame(room({ players: ['Сава', 'Аня', 'Богдан'], away: { Богдан: 60000 } }), G, G), 2, 'Аня', ['Аня', 'Богдан']).seated, ['Аня', 'Богдан']);
+});
+
+test('round part: run (from its snapshot, or fresh when never saved), watch, wait for its snapshot, or none', () => {
+  assert.equal(roundPart(undefined, 'Аня', {}), null);
+  assert.equal(roundPart(rec({ on: false }), 'Аня', { have: true }), null, 'over');
+  assert.equal(roundPart(rec(), 'Аня', { quit: 'abcdefgh', have: true }), null, 'the one we quit');
+  assert.equal(roundPart(rec(), 'Аня', { quit: 'zzzzzzzz', have: true }), 'run', 'an older one we quit');
+  assert.equal(roundPart(rec(), 'Аня', { have: true }), 'run');
+  assert.equal(roundPart(rec({ saved: false }), 'Аня', { have: false }), 'run', 'fresh: there is no snapshot of it anywhere');
+  assert.equal(roundPart(rec(), 'Аня', { have: false }), 'wait', 'saved: its snapshot is on its way (never fresh)');
+  assert.equal(roundPart(rec(), 'Богдан', { have: true }), 'watch');
+  assert.equal(roundPart(rec(), 'Сава', {}), 'watch', 'also without a seat in it');
+});
+
+test('round: the players gone for good; everyone here; who ends a round nobody else can', () => {
+  const f = room({ players: ['Аня', 'Богдан'], away: { Богдан: 5000 } });
+  assert.deepEqual(seatsGone(f, rec({ seats: ['Аня', 'Богдан', 'Сава'] })), ['Сава']);
+  assert.equal(everyoneHere(f, ['Аня', 'Богдан']), false);
+  assert.equal(everyoneHere(f, ['Аня']), true);
+  assert.equal(everyoneHere(room({ loading: { Богдан: NOW - 100 } }), ['Аня', 'Богдан']), false, 'still opening the game');
+  assert.equal(roundWriter(f, rec({ runner: 'Богдан', seats: ['Аня', 'Богдан', 'Сава'] })), 'Богдан', 'its runner while in the room, away or not');
+  assert.equal(roundWriter(f, rec({ runner: 'Сава', seats: ['Сава', 'Богдан', 'Аня'] })), 'Аня', 'else the first of its players here');
+  assert.equal(roundWriter(room({ players: ['Аня'], away: { Аня: 0 } }), rec({ runner: 'Сава', seats: ['Сава', 'Богдан'] })), null);
+});
+
+test('round taker: its runner gone for good, at once (no proof needed: the room says so); away, as takeOver says', () => {
+  const take = (f, o = {}) => roundTaker(f, { rec: rec(), seated: ['Аня', 'Богдан'], inGame: ['Аня', 'Богдан'], since: NOW - WAIT, now: NOW, wait: WAIT, lookingAgain: false, ...o });
+  const me = (o = {}) => room({ me: 'Богдан', players: ['Аня', 'Богдан'], role: 'host', host: 'Богдан', ...o });
+  assert.equal(take(me()), null, 'its runner here');
+  assert.equal(take(me({ away: { Аня: WAIT - 1 } })), null, 'not before AUTH_WAIT');
+  assert.equal(take(me({ away: { Аня: WAIT } })), 'reached');
+  assert.equal(take(me({ away: { Аня: WAIT }, nearby: true })), null, 'nearby, without company: it waits for its runner');
+  assert.equal(take(room({ me: 'Аня' }), {}), null, 'ours runs it');
+  assert.equal(take(me(), { rec: rec({ on: false }) }), null, 'over');
+  // gone for good: not in the room any more
+  const gone = (o = {}) => room({ me: 'Богдан', players: ['Богдан', 'Сава'], role: 'guest', host: 'Сава', ...o });
+  assert.equal(take(gone(), { seated: ['Богдан'] }), 'gone');
+  assert.equal(take(gone({ nearby: true }), { seated: ['Богдан'], since: 0 }), 'gone', 'nearby too');
+  assert.equal(take(gone(), { seated: ['Богдан'], lookingAgain: true }), null, 'not while we look for the room again');
+  assert.equal(take(gone({ me: 'Сава' }), { rec: rec({ seats: ['Аня', 'Богдан', 'Сава'] }), seated: ['Богдан', 'Сава'] }), null, 'only the first of its players here');
+  assert.equal(take(gone({ me: 'Сава', away: { Богдан: 100 } }), { rec: rec({ seats: ['Аня', 'Богдан', 'Сава'] }), seated: ['Богдан', 'Сава'] }), 'gone', 'Богдан away: the next one');
+  // here with the game closed (not seated, not away): the round waits for its game (owner, decision 3)
+  assert.equal(take(me(), { seated: ['Богдан'], inGame: ['Богдан'] }), null);
+});
+
+test('a snapshot on no device: every other player of the round is here (they would have sent it) or gone for good', () => {
+  const r = rec({ seats: ['Яків', 'Аня', 'Богдан'], runner: 'Яків' });
+  assert.equal(snapshotLost(room({ players: ['Аня', 'Богдан'] }), r), true);
+  assert.equal(snapshotLost(room({ players: ['Аня', 'Богдан'], away: { Богдан: 5000 } }), r), false, 'Богдан is away: he may have it');
+  assert.equal(snapshotLost(room({ players: ['Аня', 'Богдан'], loading: { Богдан: NOW - 100 } }), r), false, 'or his new copy is still opening');
+  assert.equal(snapshotLost(room({ players: ['Аня'] }), r), true);
+  assert.equal(snapshotLost(room({ players: ['Аня', 'Богдан', 'Яків'], away: { Яків: 60000 } }), r), false, 'its runner away: it may still have it');
 });

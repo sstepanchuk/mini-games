@@ -1,8 +1,8 @@
 // One browser tab in a worker thread, for node:test (tests/net, tests/app): a few browser shims, the fake brokers
 // (fakenet.js) and, if asked, fake direct links (fakertc.js; else no WebRTC: everything goes through the brokers),
 // then the real library/net, and for a library tab library/app/together.js with a stand-in for the shell and one
-// open game. The test drives it with messages (world.js: { id, cmd, args } → { id, ok, value | error }); the
-// commands are below (cmds).
+// open game (its ihroteka.room and, from a library of phase 4 on, its ihroteka.round). The test drives it with
+// messages (world.js: { id, cmd, args } → { id, ok, value | error }); the commands are below (cmds).
 //
 // workerData: { pid: the session's first part (window.__pid), bus: the world's BroadcastChannel, scale:
 // window.__timeScale (config.js TIMING), brokerMs, rtc: fake direct links, net: fakenet switches to start with,
@@ -82,10 +82,12 @@ const room = () => (T ? T.currentRoom() : netRoom);
 const need = () => { const r = room(); if (!r) throw new Error('tab.js: no room yet'); return r; };
 
 /* ---------- a library tab: the shell, as together.js sees it, and the open game ---------- */
-let view = null, game = null;
+let view = null, game = null, round = null;             // round: the open game's ihroteka.round (none from a library before phase 4)
 const follows = [];
 const gEvents = [], gGot = [], heard = [];               // heard: the names of what it heard, messages ('message:' t) too, in order
 const GAME_EVENTS = ['linked', 'join', 'leave', 'players', 'weak', 'peer-gone', 'relinked', 'role', 'resume', 'shared'];
+const ROUND_EVENTS = ['start', 'run', 'watch', 'end', 'rejoin'];   // (heard as 'round:<event>', with its one argument)
+const roundOff = new Map();                              // round event → the listener listen() added (cmds.roff)
 let seatsOf = {}, shell = false, later = false;          // later: the game's code starts listening only when told (glisten)
 let slow = false;                                        // slow: the game's page opens only when told (gameSlow off)
 let framing = null, pulses = 0;                          // the game's frames (gframes), the pulses it heard (gpulse)
@@ -95,7 +97,7 @@ const reloads = [];                                      // what together.js ask
 function go(id, byPeer = false) {
   if (id === view) return;
   if (view) T.detachGame();
-  game = null;
+  game = null; round = null;
   view = id;
   if (byPeer) follows.push(id);
   T.viewChanged(id, byPeer);
@@ -104,10 +106,12 @@ function go(id, byPeer = false) {
 // the game's page runs: it gets ihroteka.room and listens to everything a game may hear (at once, or when told)
 function openGame(id) {
   game = T.attachGame(id);
+  round = T.openRound ? T.openRound() : null;
   if (!later) listen();
 }
 function listen() {
   for (const ev of GAME_EVENTS) game.on(ev, (...a) => { gEvents.push([ms(), ev, ...a]); heard.push(ev); });
+  if (round) for (const ev of ROUND_EVENTS) { const fn = a => { gEvents.push([ms(), 'round:' + ev, a]); heard.push('round:' + ev); }; roundOff.set(ev, fn); round.on(ev, fn); }
   game.on('message', (m, from) => { gGot.push([from, m]); heard.push('message:' + m.t); });
 }
 
@@ -204,8 +208,9 @@ const cmds = {
   game() {
     if (!game) return null;
     const g = game;
+    const r = round && { active: round.active, id: round.id, seats: round.seats, mySeat: round.mySeat, runner: round.runner, runs: round.runs };
     return { me: g.me, players: g.players, waiting: g.waiting, seats: g.seats, seated: g.seated, host: g.host, role: g.role,
-      linked: g.linked, weak: g.weak, events: gEvents.slice(), got: gGot.slice(), heard: heard.slice(), follows: follows.slice(), view };
+      linked: g.linked, weak: g.weak, round: r, events: gEvents.slice(), got: gGot.slice(), heard: heard.slice(), follows: follows.slice(), view };
   },
   // the game's next page runs its code late: it listens only when told (glisten), as a game that starts after the room
   gameLate: ({ on }) => { later = on; },
@@ -214,6 +219,17 @@ const cmds = {
   glisten: () => { listen(); },
   // what the game calls → what the call returns (send, snapshot, share: whether it was done)
   gsend: ({ m, opts }) => game.send(m, opts),
+  // the game's ihroteka.round: what it calls → what the call returns; its policy (merged into round.policy); roff: the
+  // listener of ev that listen() added goes (round.off); rseatOf: round.seatOf(name)
+  rstart: ({ setup, opts }) => round.start(setup, opts),
+  rsave: ({ s }) => round.save(s),
+  rover: ({ result }) => round.over(result),
+  rquit: () => round.quit(),
+  rpolicy: ({ p }) => { Object.assign(round.policy, p); return { ...round.policy }; },
+  roff: ({ ev }) => { round.off(ev, roundOff.get(ev)); return true; },
+  rseatOf: ({ name }) => round.seatOf(name),
+  // the game's next round event ev makes it call round[call](arg) from its own listener (once; after listen()'s)
+  ron({ ev, call, arg }) { const fn = () => { round.off(ev, fn); round[call](arg); }; round.on(ev, fn); return true; },
   gsnapshot: ({ s }) => game.snapshot(s),
   gshare: ({ k, v }) => game.share(k, v),
   gshared: ({ k }) => game.shared(k),

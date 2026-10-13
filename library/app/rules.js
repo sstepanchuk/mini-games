@@ -1,7 +1,8 @@
 /* =====================================================================
    The room's rules for an open game, as pure functions: who plays it and who waits, whose copy runs the round,
-   who is away and why, when the round moves to another copy, and what the game hears when its players change.
-   together.js holds the state and calls these with it; tests/rules.test.js pins them (with the known bugs).
+   who is away and why, when the round moves to another copy, and what the game hears when its players change; and
+   those of the round layer (round.js, at the end): frozen seats, our part in a round, who runs it on or ends it.
+   together.js and round.js hold the state and call these with it; tests/rules.test.js pins them.
    No DOM, no state of its own: everything comes in as arguments. `f` is the room as it is now:
      me, players          our name; everyone in the room, in the order they came (ours too)
      here(p)              the game p has open (their here: key in the shared state; null/undefined: none)
@@ -64,10 +65,12 @@ export const reloadNow = (gap, { nearby, playing, done }) => !!gap && gap.older 
 export const offerUpdate = (gap, { nearby }) => !!gap && gap.older && !nearby;
 
 // The first `seats` of them play; anyone after them waits for a seat. We play with the others who are seated,
-// and with nobody while we wait ourselves.
-export function seating(all, seats, me) {
-  const seated = all.slice(0, seats);
-  return { inGame: all, seated, waiting: all.slice(seats), others: seated.includes(me) ? seated.filter(p => p !== me) : [] };
+// and with nobody while we wait ourselves. While a round of the round layer is on (frozen: its players, round.js),
+// its seats are frozen: its players who have the game open are seated, in the round's order, and nobody else (the
+// others wait, and may watch), whatever the room's order (a shaky network may change it) and whoever else comes.
+export function seating(all, seats, me, frozen) {
+  const seated = frozen ? frozen.filter(p => all.includes(p)).slice(0, seats) : all.slice(0, seats);
+  return { inGame: all, seated, waiting: all.filter(p => !seated.includes(p)), others: seated.includes(me) ? seated.filter(p => p !== me) : [] };
 }
 
 // Whose copy runs the round: the one the shared state names (auth:<game>), if they play; else the first who plays.
@@ -171,3 +174,40 @@ export const waitingFor = (f, others) => others.flatMap(p => {
   const a = absence(f, p);
   return a ? [{ name: p, left: Math.max(0, f.hold - awayMs(f, p)), why: a.why, release: a.why === 'link' && canRelease(f, p) }] : [];
 });
+
+/* ---------- the round layer (round.js): a round record of the game's (rec: { id, seats, runner, on, saved, … }) ---------- */
+// What our copy is in a round: 'run' (ours runs it: from its snapshot, have; or afresh, as it began, when its runner
+// never saved it), 'watch' (another copy runs it; also ours without a seat in it), 'wait' (ours runs it and has no
+// snapshot of it yet: one may still come, see snapshotLost), or null: no round on for us (none, it is over, or it is
+// the one we quit). → 'run' | 'watch' | 'wait' | null
+export function roundPart(rec, me, { quit, have }) {
+  if (!rec || !rec.on || rec.id === quit) return null;
+  if (rec.runner !== me) return 'watch';
+  return have || !rec.saved ? 'run' : 'wait';
+}
+// The round's players whose place dropped for good: no longer in the room (left, «Не чекати», or 3 minutes away).
+export const seatsGone = (f, rec) => rec.seats.filter(p => !f.players.includes(p));
+// Whether every one of these players is here (none dropped out or still opening the game: policy startNeedsEveryone)
+export const everyoneHere = (f, names) => names.every(p => !isAway(f, p));
+// Who ends a round nobody else can (a seat gone with policy endWhenSeatGone): its runner while it is in the room
+// (away or not: it says so when it is back, or whoever takes the round over does), else the first of its players
+// who is here. Only that one writes the record (round.js, one writer). → a name | null
+export const roundWriter = (f, rec) => f.players.includes(rec.runner) ? rec.runner : rec.seats.find(p => f.players.includes(p) && !isAway(f, p)) || null;
+// The round's runner can no longer run it: does our copy run it on? Only the first of the round's players who is
+// here with the game open (seated: they, the round's seats being frozen) takes it over —
+//   - 'gone': at once, when its runner left the room for good (the room's word: nothing to prove; not while we look
+//     for the room again, lookingAgain: our list is not the room's then), or
+//   - as takeOver says ('company' | 'reached'): its runner away for `wait`, with proof that it was not us.
+// A runner here with the game closed is not taken over: the round waits for its game (owner, decision 3).
+// → 'gone' | 'company' | 'reached' | null
+export function roundTaker(f, { rec, seated, inGame, since, now, wait, lookingAgain }) {
+  if (!rec || !rec.on || rec.runner === f.me) return null;
+  if (!f.players.includes(rec.runner)) return !lookingAgain && seated.find(p => !isAway(f, p)) === f.me ? 'gone' : null;
+  return takeOver(f, { inGame, seated, runner: rec.runner, since, now, wait });
+}
+// A round our copy should run and whose snapshot it has not got (it was saved): is that snapshot on no device any
+// more? Its runner sends each one to all of its players, whoever has one greets every newcomer with it, and passes it
+// on to the round's other players once its runner left for good (round.js tick); so when every other player of the
+// round is here (and would have sent it) or gone for good, nobody has it. One who is away may have it: the round waits
+// for them (as long as their place is kept). (round.js: ends 'lost' after LOST_WAIT.)
+export const snapshotLost = (f, rec) => rec.seats.every(p => p === f.me || !f.players.includes(p) || !isAway(f, p));
