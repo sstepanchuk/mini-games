@@ -53,7 +53,7 @@ const rnd = (o = {}) => ({ id: ID, seats: AB, total: 0, turn: 0, winner: -1, mov
 scenario('template: its page on the round\'s events (a stand-in library)', async () => {
   const G = await newGame('demo1'), U2 = G.url;
   if (!check(G.made, 'cli new demo1', G.out)) return;
-  if (!check(G.up, 'its dev server')) return;
+  if (!check(G.up, 'its dev server at ' + U2, G.log)) return;
   const ctx = await (await launch()).newContext();
   await ctx.addInitScript(STUB);
   const open = async () => { const p = watch(await ctx.newPage(), 'demo1'); await p.goto(U2 + 'demo1/?frame'); await p.waitForSelector('#lobby'); return p; };

@@ -1,7 +1,8 @@
 // Library versions in one room (config.js PROTO, phase 1a: J1), in worker tabs over fake brokers and fake direct
 // links (tests/support), each tab running a library of its own: this one; this one with PROTO + 1 (what the next
-// wire version will be); and the newest release tag that speaks an older version (git archive; skipped in a checkout
-// without tags, such as CI's shallow clone). Another version is not linked, over the internet or nearby,
+// wire version will be); and the release before the commit that set this wire version, from git history (git archive,
+// tests/support/release.js: no tags needed; skipped, with the reason, where there is none, such as a shallow clone; CI
+// fetches the whole history and fails instead). Another version is not linked, over the internet or nearby,
 // and both sides say status 'version' with the other's number (room.versionMismatch). The previous release speaks
 // version 1, before the brokers' traffic was sealed (phase 5, J2: PROTO 2, on another topic): it meets this one only at
 // the door (internet.js), where this one says its version and nothing else, and only once the old page spoke there.
@@ -11,12 +12,12 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { previousRelease } from '../support/release.js';
+import { noPrevious, previousRelease } from '../support/release.js';
 import { settled, shows, sleep, states, until, world } from '../support/world.js';
 
 const T = { timeout: 40000 };
 const LIB = fileURLToPath(new URL('../../library', import.meta.url));
-let dir, next, prev;
+let dir, next, prev, why;
 
 // this library with PROTO + 1
 function nextVersion() {
@@ -33,7 +34,8 @@ const lastStatus = async tab => (await tab.events()).filter(e => e[1] === 'statu
 before(() => {
   dir = mkdtempSync(join(tmpdir(), 'ihroteka-versions-'));
   next = nextVersion();
-  prev = previousRelease(dir, { older: true });            // (tests/support/release.js: the newest of an older version)
+  prev = previousRelease(dir, { older: true });            // (tests/support/release.js: the library just before this PROTO)
+  why = noPrevious();
 });
 after(() => { if (dir) rmSync(dir, { recursive: true, force: true }); });
 
@@ -99,7 +101,7 @@ describe('library versions in one room', { concurrency: 3 }, () => {
   // code) nothing of ours goes before it speaks there; then only our version, from a session of the door's own: no name.
   for (const oldFirst of [true, false]) {
     test('internet: the previous release (before the seal) and this one are not linked; both say \'version\' (' + (oldFirst ? 'the old one' : 'this one') + ' holds the room first)', T, async t => {
-      if (!prev) { t.skip('no earlier release tag in this checkout'); return; }
+      if (!prev) { t.skip('no previous release: ' + why); return; }
       const W = world(t), code = oldFirst ? 'ver3' : 'ver4', S = W.spy({ stranger: true });
       const old = await W.tab('p1tab', {}, { library: prev.library }), neu = await W.tab('p2tab');
       const { proto } = await neu.info(), { legacy } = await neu.info(code), was = (await old.info()).proto ?? 1;
@@ -157,7 +159,7 @@ describe('library versions in one room', { concurrency: 3 }, () => {
   for (const which of ['next', 'previous']) {
     test('nearby: a phone of the ' + which + ' version is not linked; both say \'version\' and the pairing ends (no \'failed\')', T, async t => {
       const library = which === 'next' ? next : prev && prev.library;
-      if (!library) { t.skip('no earlier release tag in this checkout'); return; }
+      if (!library) { t.skip('no previous release: ' + why); return; }
       const W = world(t, { rtc: true });
       const H = await W.tab('p1tab'), G = await W.tab('p2tab', {}, { library });
       const { proto } = await H.info(), theirs = (await G.info()).proto ?? 1;

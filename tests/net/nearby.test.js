@@ -175,13 +175,15 @@ describe('nearby rooms: places, names', { concurrency: 3 }, () => {
   });
 });
 
-// A phone locked for longer than places are kept (HOLD; the room's timing scaled down: 0.2, HOLD 36 s, WEAK 0.3 s)
+// A phone locked for longer than places are kept (HOLD; the room's timing scaled down: 0.2, WEAK 0.3 s, GRACE 1 s, and
+// HOLD set to 8 s outright: tests/support world timing, config.js __timing; scaled, it would be 36 s)
 describe('nearby rooms: a long sleep', () => {
   // (phase 1b, C6: awake, it used to count the others here for GRACE, then wait a fresh HOLD for them)
   test('a phone awake after a sleep longer than HOLD sees the others away at once (they have let it go); its place waits again', { timeout: 90000 }, async t => {
-    const W = world(t, { rtc: true, scale: 0.2 });
+    const W = world(t, { rtc: true, scale: 0.2, timing: { HOLD: 8000 } });
     const [H, G] = await phones(W, ['Ганна', 'Гліб']);
     const { HOLD, GRACE } = (await H.info()).timing;
+    assert.equal(HOLD, 8000, 'HOLD as the test set it (a sleep of 10 s, not 38)');
     const n = (await G.events()).length;
     const woke = await G.freeze(HOLD + 2000);
     assert.ok(await until(async () => (await H.state()).players.join() === 'Ганна', 5000), 'the host let him go meanwhile (HOLD): ' + show(await H.state()));

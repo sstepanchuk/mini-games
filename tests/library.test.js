@@ -32,6 +32,8 @@ const write = (p, data) => { fs.mkdirSync(path.dirname(file(p)), { recursive: tr
 const kr = () => JSON.parse(fs.readFileSync(file('vault/keyring.json'), 'utf8'));
 const kidOf = p => vault.fileKid(fs.readFileSync(file(p)));
 const libKey = async password => { const k = kr(), who = await vault.signIn(k, password); return vault.importKey(await vault.libraryKey(k, who.person.id, who.priv)); };
+// what vault/demo/source.bin holds: { file: base64 }
+const sealedSource = async () => JSON.parse(zlib.gunzipSync(Buffer.from(await vault.openFile(await libKey(pw.bob), fs.readFileSync(file('vault/demo/source.bin')), vault.label.source('demo'))))).files;
 const game = (id, extra = {}) => {
   write(`games/${id}/game.json`, JSON.stringify({ title: 'Test ' + id, tagline: 't', description: 'd', image: 'preview.png', ...extra }));
   write(`games/${id}/index.html`, '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head><body><img src="dot.png"><script type="module" src="main.js"></script></body></html>');
@@ -132,8 +134,89 @@ test('unlock refuses an archive with paths outside the game folder', async () =>
   assert.ok(!fs.existsSync(path.join(root, '..', 'escaped.txt')) && !fs.existsSync(file('escaped.txt')));
 });
 
+test('the public cover is not sealed in source.bin; unlock restores it from vault/', async () => {
+  const files = await sealedSource(), cover = fs.readFileSync(file('vault/demo/preview.png'));
+  assert.ok(!('preview.png' in files) && 'dot.png' in files, 'only the cover is left out: ' + Object.keys(files).join(' '));
+  fs.rmSync(file('games'), { recursive: true });
+  assert.doesNotMatch(must(['unlock'], pw.bob), /local changes/);
+  assert.ok(fs.readFileSync(file('games/demo/preview.png')).equals(cover));
+  assert.doesNotMatch(must(['unlock'], pw.bob), /local changes/, 'the cover put back is no local change');
+  write('games/demo/preview.png', Buffer.concat([cover, Buffer.from('edited')]));
+  assert.match(must(['unlock'], pw.bob), /local changes in preview\.png/);    // a cover of this copy's own is kept…
+  must(['unlock', '--force'], pw.bob);                                         // …until --force takes the vault's
+  assert.ok(fs.readFileSync(file('games/demo/preview.png')).equals(cover));
+  // an archive from before (the cover inside) still unlocks; the next build seals it again without the cover, once
+  const old = zlib.gzipSync(JSON.stringify({ v: 1, files: { ...files, 'preview.png': cover.toString('base64') } }));
+  fs.writeFileSync(file('vault/demo/source.bin'), await vault.sealFile(await libKey(pw.bob), kr().kid, old, vault.label.source('demo')));
+  fs.rmSync(file('games'), { recursive: true });
+  assert.doesNotMatch(must(['unlock'], pw.bob), /local changes/);
+  assert.ok(fs.readFileSync(file('games/demo/preview.png')).equals(cover));
+  assert.doesNotMatch(must(['build', '--no-tests'], pw.bob), /demo: .*\(unchanged\)/);
+  assert.ok(!('preview.png' in await sealedSource()));
+  assert.match(must(['build', '--no-tests'], pw.bob), /demo: .*\(unchanged\)/);
+});
+
+test('build never seals a games/ that is behind vault/ over it (someone else built since), and unlock brings it up to date', async () => {
+  const sealedMain = async () => Buffer.from((await sealedSource())['main.js'], 'base64').toString();
+  const mine = scratch(file('games'));                                         // this copy, as built: in step with vault/
+  write('games/demo/main.js', '// theirs');                                    // someone else builds a newer demo…
+  must(['build', '--no-tests'], pw.alice);
+  const theirs = fs.readFileSync(file('vault/demo/source.bin'));
+  fs.rmSync(file('games'), { recursive: true }); fs.cpSync(mine, file('games'), { recursive: true });   // …and this copy pulls it
+  let r = run(['build', '--no-tests'], pw.bob);
+  assert.ok(!r.ok, r.out);
+  assert.match(r.out, /vault\/demo changed since your last npm run unlock or build \(main\.js\)/);
+  assert.match(r.out, /npm run unlock .*npm run build -- --force/);
+  assert.ok(fs.readFileSync(file('vault/demo/source.bin')).equals(theirs), 'vault/ untouched');
+  assert.match(must(['unlock'], pw.bob), /✓ games\/demo \(updated: main\.js\)/);    // no --force: nothing of this copy's own is lost
+  assert.equal(fs.readFileSync(file('games/demo/main.js'), 'utf8'), '// theirs');
+  assert.match(must(['build', '--no-tests'], pw.bob), /demo: .*\(unchanged\)/);
+  // both changed: unlock keeps the local edit and names both; the build refuses; --force seals this copy's
+  const base = fs.readFileSync(file('games/demo/.vault-base'));
+  write('games/demo/main.js', '// mine');
+  write('games/demo/style.css', 'body{}');
+  must(['build', '--no-tests'], pw.alice);                                     // (someone else's build)
+  fs.writeFileSync(file('games/demo/.vault-base'), base);                      // this copy, from before that build…
+  write('games/demo/main.js', '// mine, again');                               // …with an edit of its own
+  // (style.css is the same on both sides: no edit of this copy's own)
+  assert.match(must(['unlock'], pw.bob), /local changes in main\.js, and vault\/demo changed too \(main\.js, style\.css\).*npm run unlock -- --force.*npm run build -- --force/);
+  assert.equal(fs.readFileSync(file('games/demo/main.js'), 'utf8'), '// mine, again');
+  r = run(['build', '--no-tests'], pw.bob);
+  assert.ok(!r.ok && /changed since your last npm run unlock or build \(main\.js, style\.css\); yours: main\.js$/m.test(r.out), r.out);
+  must(['build', '--no-tests', '--force'], pw.bob);
+  assert.equal(await sealedMain(), '// mine, again');
+  // the same edit on both sides (or an unlock cut short before it wrote the base): no conflict, only the base to write
+  const before = fs.readFileSync(file('games/demo/.vault-base'));
+  write('games/demo/main.js', '// both');
+  must(['build', '--no-tests'], pw.alice);
+  fs.writeFileSync(file('games/demo/.vault-base'), before);
+  const both = must(['unlock'], pw.bob);
+  assert.doesNotMatch(both, /local changes/);
+  assert.match(both, /^✓ games\/demo$/m);
+  assert.match(must(['build', '--no-tests'], pw.bob), /demo: .*\(unchanged\)/);
+  // the cover is public, beside source.bin: a newer one in vault/ is someone else's change too
+  const cover = Buffer.concat([fs.readFileSync(file('vault/demo/preview.png')), Buffer.from('theirs')]);
+  fs.writeFileSync(file('vault/demo/preview.png'), cover);
+  assert.match(run(['build', '--no-tests'], pw.bob).out, /vault\/demo changed since your last npm run unlock or build \(preview\.png\)/);
+  assert.match(must(['unlock'], pw.bob), /✓ games\/demo \(updated: preview\.png\)/);
+  assert.ok(fs.readFileSync(file('games/demo/preview.png')).equals(cover));
+  // a folder from before .vault-base: in step → recorded by the next build; not in step → refused until --force
+  fs.rmSync(file('games/demo/.vault-base'));
+  must(['build', '--no-tests'], pw.bob);
+  assert.ok(fs.existsSync(file('games/demo/.vault-base')));
+  fs.rmSync(file('games/demo/.vault-base'));
+  write('games/demo/main.js', '// older');
+  r = run(['build', '--no-tests'], pw.bob);
+  assert.ok(!r.ok && /games\/demo differs from vault\/demo, and nothing here records which version it was unlocked from/.test(r.out), r.out);
+  must(['build', '--no-tests', '--force'], pw.bob);
+  assert.equal(await sealedMain(), '// older');
+  assert.ok(!('.vault-base' in await sealedSource()), 'never sealed: not a file of the game');
+});
+
 test('removing a person rotates the key; their password stops working', () => {
   const pwCarol = must(['user', 'add', 'carol'], pw.alice).match(/shown once\): (\S+)/)[1];
+  // the site's keyring too, so that the assembled site (npm run dev -- site) already lets carol in
+  assert.ok(JSON.parse(fs.readFileSync(file('site/keyring.json'), 'utf8')).people.some(p => p.name === 'carol'), 'site/keyring.json lists carol');
   const oldKid = kr().kid;
   must(['user', 'remove', 'carol'], pw.alice);
   assert.notEqual(kr().kid, oldKid);
@@ -144,6 +227,16 @@ test('removing a person rotates the key; their password stops working', () => {
   assert.match(must(['build'], pw.bob), /unchanged/);
   assert.match(must(['check']), /valid/);
   assert.ok(!run(['user', 'remove', 'alice'], pw.alice).ok);                // not yourself
+});
+
+test('a person added before there is any game: the password is shown, and nothing fails after it', () => {
+  root = scratch();
+  fs.writeFileSync(file('package.json'), JSON.stringify({ homepage: 'https://example.github.io/lib/' }));
+  const alice = must(['init', 'alice']).match(/^\s+alice\s+(\S+)$/m)[1];
+  const r = run(['user', 'add', 'carol'], alice);
+  assert.ok(r.ok, r.out);
+  assert.match(r.out, /carol has access\. Password \(shown once\): \S+/);
+  assert.ok(kr().people.some(p => p.name === 'carol'));
 });
 
 test('a failed rotation writes nothing', () => {
@@ -227,19 +320,21 @@ test('remove-game takes a game off the shelf', () => {
   assert.match(must(['check']), /1 game/);
 });
 
-// `node tools/cli.js dev …` in this test's copy; `first` resolves with what it said first (its address, or why not)
+// `node tools/cli.js dev …` in this test's copy; `first` resolves with what it said first (its address, or why not),
+// said(re) with all it said once that matches re (or once it stopped)
 function devServer(...args) {
   const server = spawn(process.execPath, [CLI, 'dev', ...args], { env: { ...ENV, IHROTEKA_ROOT: root } });
-  let out = '';
-  const first = new Promise(resolve => {
-    const said = d => { out += d; resolve(out); };
-    server.stdout.on('data', said); server.stderr.on('data', said); server.on('exit', () => resolve(out));
-  });
+  let out = '', ended = false;
+  const waits = [];                                      // [re, resolve]
+  const heard = () => { for (const w of waits.splice(0)) if (ended || w[0].test(out)) w[1](out); else waits.push(w); };
+  server.stdout.on('data', d => { out += d; heard(); }); server.stderr.on('data', d => { out += d; heard(); });
+  server.on('close', () => { ended = true; heard(); });
+  const said = (re = /./) => new Promise(resolve => { waits.push([re, resolve]); heard(); });
   const stop = () => new Promise(resolve => {
     if (server.exitCode !== null || server.signalCode !== null) return resolve();
     server.once('exit', resolve); server.kill();
   });
-  return { first, stop };
+  return { first: said(), said, stop };
 }
 const get = (port, p) => new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path: p }, res => {
   let body = '';
@@ -251,6 +346,10 @@ test('dev server stays inside its folder and survives bad requests', async () =>
   const port = somePort(), dev = devServer(port);
   try {
     assert.match(await dev.first, new RegExp(':' + port + '/'));
+    // every link it prints has one origin (a page's storage, its sign-in included, is per origin)
+    const said = await dev.said(/devnet/);
+    assert.deepEqual([...new Set(said.match(/https?:\/\/[^/\s]+/g))], ['http://localhost:' + port], said);
+    assert.match(said, new RegExp('^  demo: http://localhost:' + port + '/demo/$', 'm'));
     const status = async p => (await get(port, p)).status;
     fs.mkdirSync(file('games-backup'), { recursive: true }); fs.writeFileSync(file('games-backup/x'), 'x');
     assert.equal(await status('/..%2fgames-backup/x'), 403);
@@ -280,4 +379,26 @@ test('dev server serves the built site, on 8001 unless given a port', async () =
   // no port: 8001 (if something else has it, the server says so and stops: either way it is 8001)
   const auto = devServer('site');
   try { assert.match(await auto.first, /:8001\/|Port 8001 is busy/); } finally { await auto.stop(); }
+  // a port typed is that port, 8000 too
+  const typed = devServer('site', '8000');
+  try { assert.match(await typed.first, /:8000\/|Port 8000 is busy/); } finally { await typed.stop(); }
+});
+
+test('dev server: a game.json that does not read takes only its own game off the shelf', async () => {
+  game('typo');
+  write('games/typo/game.json', fs.readFileSync(file('games/typo/game.json'), 'utf8').replace('"title"', '"titel"'));
+  const port = somePort(), dev = devServer(port);
+  try {
+    assert.match(await dev.first, new RegExp(':' + port + '/'));
+    const shelf = await get(port, '/');
+    assert.equal(shelf.status, 200, shelf.body);
+    assert.match(shelf.body, /"id":"demo"/);
+    assert.doesNotMatch(shelf.body, /"id":"typo"/);
+    assert.equal((await get(port, '/demo/')).status, 200);
+    assert.equal((await get(port, '/demo/?frame')).status, 200);
+    const typo = await get(port, '/typo/');                                     // its own page says why
+    assert.equal(typo.status, 500);
+    assert.match(typo.body, /games\/typo\/game\.json: unknown field "titel"/);
+    assert.match(await dev.said(/left off the shelf/), /✗ games\/typo\/game\.json: unknown field "titel" \(left off the shelf\)/);
+  } finally { await dev.stop(); }
 });

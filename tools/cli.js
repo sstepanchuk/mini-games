@@ -2,35 +2,18 @@
 // Library tooling: `node tools/cli.js help`. The password comes from VAULT_PASSWORD or a prompt.
 import fs from 'node:fs';
 import path from 'node:path';
-import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import * as vault from '../library/crypto.js';
 import * as repo from './repo.js';
-import { readManifest, bundleGame, buildSite, checkVault, testGame, playersOf, apiVersion, validId } from './build.js';
+import * as prompt from './prompt.js';
+import { readManifest, bundleGame, buildSite, checkVault, testGame, coverWarnings, playersOf, apiVersion, validId } from './build.js';
 import { serve } from './dev.js';
 import { cover } from './png.js';
 
 const { P, rel, exists, problem } = repo;
 
-// Passwords are taken exactly as typed (no trimming), the same way the browser takes them.
-let piped = null;                                      // input that is not a terminal: its lines, read in turn
-async function ask(question, hidden) {
-  if (!process.stdin.isTTY) {
-    if (hidden) console.error('(input is not a terminal: the password will be visible; prefer VAULT_PASSWORD)');
-    process.stdout.write(question);
-    piped ??= readline.createInterface({ input: process.stdin })[Symbol.asyncIterator]();
-    const { value, done } = await piped.next();
-    if (done) problem('No input for: ' + question.trim());
-    return value.replace(/\r$/, '');
-  }
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-  if (hidden) rl._writeToOutput = s => { if (s.startsWith(question)) process.stdout.write(question); };
-  return new Promise(resolve => rl.question(question, answer => {
-    rl.close();
-    if (hidden) process.stdout.write('\n');
-    resolve(answer);
-  }));
-}
+// a question, answered as typed (prompt.js); no answer (the input ended) is a mistake
+const ask = async (question, hidden) => (await prompt.ask(question, hidden)) ?? problem('No input for: ' + question.trim());
 const password = (q = 'Password: ') => process.env.VAULT_PASSWORD ?? ask(q, true);
 const signIn = async () => repo.open(await password());
 
@@ -51,13 +34,16 @@ const TEMPLATE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'templa
 
 const HELP = `Library commands
 
-  npm run unlock [-- --force]    decrypt game sources into games/ (--force: overwrite local changes)
+  npm run unlock [-- --force]    decrypt game sources into games/, or bring them up to date with vault/ (local
+                                 changes are kept and named; --force: overwrite them)
   npm run dev [-- site] [port]   the library with your games/ (or the built site/), on this computer only
                                  (--lan: also to your network; with games/ that serves plaintext games;
                                  --devnet: a fake network, so tabs play together without internet, as ?devnet does;
                                  --probe: also the browser scenarios' open game, tests/e2e/fixtures/probe)
-  npm run build [-- --no-tests]  run each game's own tests (games/<id>/test/*.test.js), then bundle and encrypt
-                                 the games into vault/ and assemble site/ (--no-tests: build without running them)
+  npm run build [-- --no-tests] [--force]
+                                 run each game's own tests (games/<id>/test/*.test.js), then bundle and encrypt
+                                 the games into vault/ and assemble site/ (--no-tests: build without running them;
+                                 --force: seal games/ even over a vault/ that changed since your last unlock or build)
   npm run site                   assemble site/ from library/ and vault/ (no password; CI does this)
   npm run check                  validate vault/ (no password needed)
 
@@ -92,41 +78,70 @@ const commands = {
     console.log('\nNext: npm run build');
   },
 
+  // vault/<id> into games/<id>: a folder only behind it is brought up to date; one with changes of its own is left as
+  // it is (--force: overwritten)
   async unlock(...flags) {
     const lib = await signIn(), force = flags.includes('--force');
     for (const id of repo.vaultIds()) {
       const dir = path.join(P.games, id);
-      const files = repo.unpackSource(await repo.readSealed(repo.vaultPath(id, 'source.bin'), vault.label.source(id), lib));
+      // the sources with the cover beside them, against this folder and the version it last came from (repo.js)
+      const { sealed: files, local, ours, theirs } = await repo.compareSource(id, lib, { strict: true });
       // names come from the archive: none may point outside the game's folder
       for (const f of Object.keys(files)) if (!path.resolve(dir, f).startsWith(path.resolve(dir) + path.sep)) problem(id + ': unsafe path in the archive: ' + f);
-      const local = exists(dir) ? repo.walk(dir) : [];
-      const changed = local.filter(f => !(f in files) || !repo.same(fs.readFileSync(path.join(dir, f)), Buffer.from(files[f], 'base64')));
-      if (changed.length && !force) {
-        console.log('! ' + id + ': local changes in ' + changed.join(', ') + ' — skipped. Overwrite them: npm run unlock -- --force');
+      // this copy's own changes (with no record of the version it came from: every file unlike the vault's); one the
+      // vault has made too (the same edit on both sides, an unlock cut short before its base) is no conflict
+      const differs = f => local?.[f] !== files[f];
+      const edits = (ours ?? Object.keys(local ?? {})).filter(differs), updated = theirs?.filter(differs);
+      if (edits.length && !force) {
+        const mine = '! ' + id + ': local changes in ' + edits.join(', ');
+        const which = 'Take the vault\'s: npm run unlock -- --force; seal yours over it: npm run build -- --force';
+        if (theirs?.length) console.log(mine + ', and vault/' + id + ' changed too (' + theirs.join(', ') + ') — skipped. ' + which);
+        else if (theirs) console.log(mine + ' — skipped. Overwrite them: npm run unlock -- --force');
+        else console.log(mine + ' — skipped (nothing here records which version they were unlocked from). ' + which);
         continue;
       }
-      for (const f of local) if (!(f in files)) fs.rmSync(path.join(dir, f));       // --force: the folder ends up exactly like the archive
+      for (const f of Object.keys(local ?? {})) if (!(f in files)) fs.rmSync(path.join(dir, f));   // the folder ends up exactly like the archive
       for (const [f, b64] of Object.entries(files)) repo.writeAtomic(path.join(dir, f), Buffer.from(b64, 'base64'));
-      console.log('✓ ' + rel(dir));
+      repo.writeBase(id, files);
+      console.log('✓ ' + rel(dir) + (updated?.length ? ' (updated: ' + updated.join(', ') + ')' : ''));
     }
   },
 
   async build(...flags) {
-    const bad = flags.filter(f => f !== '--no-tests');
+    const bad = flags.filter(f => f !== '--no-tests' && f !== '--force');
     if (bad.length) problem('Unknown option: ' + bad.join(' ') + '. See: node tools/cli.js help');
     const ids = repo.gameIds(), missing = repo.vaultIds().filter(id => !ids.includes(id));
     if (missing.length) problem('games/' + missing.join(', games/') + ' missing. Run npm run unlock, or remove the game: node tools/cli.js remove-game ' + missing[0]);
     if (!ids.length) problem('No games in games/.');
     const games = ids.map(id => [id, readManifest(id)]);                 // validate everything before asking for the password
-    // a game whose own tests fail is not sealed (CI cannot see sealed games: this is their only gate)
-    if (flags.includes('--no-tests')) console.log('! games\' own tests skipped (--no-tests)');
-    else for (const [id] of games) { const n = testGame(id); if (n) console.log('✓ ' + id + ': its tests pass (' + n + ' file' + (n > 1 ? 's' : '') + ')'); }
+    // a game whose own tests fail is not sealed (CI cannot see sealed games: this is their only gate); a cover the
+    // shelf and link previews will not show well is named next to them
+    const tests = !flags.includes('--no-tests');
+    if (!tests) console.log('! games\' own tests skipped (--no-tests)');
+    for (const [id, g] of games) {
+      const n = tests ? testGame(id) : 0;
+      if (n) console.log('✓ ' + id + ': its tests pass (' + n + ' file' + (n > 1 ? 's' : '') + ')');
+      for (const w of coverWarnings(id, g)) console.log('! ' + w);
+    }
     const lib = await signIn();
+    // A games/<id> behind vault/<id> (someone else built since, and this checkout pulled it) is not sealed over it
+    // unless asked: every game is checked before anything is written.
+    const behind = [];
+    for (const [id] of games) {
+      const { sealed, local, same, ours, theirs } = await repo.compareSource(id, lib);
+      if (!sealed || same || theirs?.length === 0) continue;
+      const mine = (ours ?? []).filter(f => local?.[f] !== sealed[f]);   // (an edit the vault has too is no one's own)
+      behind.push(theirs ? 'vault/' + id + ' changed since your last npm run unlock or build (' + theirs.join(', ') + ')' + (mine.length ? '; yours: ' + mine.join(', ') : '')
+        : 'games/' + id + ' differs from vault/' + id + ', and nothing here records which version it was unlocked from');
+    }
+    if (behind.length && !flags.includes('--force')) {
+      problem(behind.join('\n  ') + '\n  Take the vault\'s: npm run unlock (it keeps your edits and says which); seal yours over it: npm run build -- --force');
+    }
     for (const [id, g] of games) {
       const html = await bundleGame(id, g, { warn: m => console.log('! ' + m) });
       const changed = [
         await repo.writeGame(id, html, lib),
-        await repo.writeSource(id, lib),
+        await repo.writeSource(id, g, lib),
         repo.writeIfChanged(repo.vaultPath(id, 'game.json'), JSON.stringify(g, null, 2) + '\n'),
         repo.writeIfChanged(repo.vaultPath(id, g.image), fs.readFileSync(path.join(P.games, id, g.image)))
       ].some(Boolean);
@@ -194,6 +209,9 @@ const commands = {
       await repo.addPerson(kr, raw, name, pw);
       repo.writeKeyring(kr);
       console.log('✓ ' + name + ' has access. Password (shown once): ' + pw);
+      // the site's keyring too (after the password, which nothing may hide: with no game yet there is no site)
+      if (repo.vaultIds().length) await commands.site();
+      console.log('Commit vault/.');
     } else if (sub === 'remove') {
       repo.requireClean(P.vault);
       const lib = await signIn(), { kr, me } = lib;
@@ -233,7 +251,7 @@ const commands = {
   dev(...args) {
     const bad = args.filter(a => !['site', '--lan', '--devnet', '--probe'].includes(a) && !/^\d+$/.test(a));
     if (bad.length) problem('Unknown option: ' + bad.join(' ') + '. See: node tools/cli.js help');
-    serve(args.includes('site') ? 'site' : 'games', args.find(a => /^\d+$/.test(a)) || '8000', args.includes('--lan') ? '0.0.0.0' : '127.0.0.1',
+    serve(args.includes('site') ? 'site' : 'games', args.find(a => /^\d+$/.test(a)), args.includes('--lan') ? '0.0.0.0' : '127.0.0.1',
       { devnet: args.includes('--devnet'), probe: args.includes('--probe') });
   }
 };

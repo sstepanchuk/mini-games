@@ -1,6 +1,7 @@
 // A game's own tests gate its sealing: `npm run build` runs games/<id>/test/*.test.js (node:test) before it asks for
-// the password, refuses to build when one fails, and `--no-tests` skips them. Works on a scratch copy (IHROTEKA_ROOT)
-// with no keyring: a build that gets past the tests stops at the missing keyring, so nothing is ever sealed here.
+// the password, refuses to build when one fails, and `--no-tests` skips them; next to them it names a cover that is
+// still the placeholder of `cli new`. Works on a scratch copy (IHROTEKA_ROOT) with no keyring: a build that gets past
+// the tests stops at the missing keyring, so nothing is ever sealed here.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -57,4 +58,16 @@ test('a game whose tests fail is not built; --no-tests builds anyway', () => {
   r = build('--no-test');
   assert.match(r.out, /Unknown option: --no-test/);
   fs.rmSync(path.join(root, 'games/broken'), { recursive: true });
+});
+
+test('a cover that is still the placeholder of cli new is named next to the tests, before the password', () => {
+  const made = spawnSync(process.execPath, [CLI, 'new', 'fresh'], { env: { ...ENV, IHROTEKA_ROOT: root }, encoding: 'utf8' });
+  assert.equal(made.status, 0, made.stdout + made.stderr);
+  const r = build();
+  assert.ok(pastTests(r.out), r.out);
+  assert.match(r.out, /✓ fresh: its tests pass/);
+  const lines = r.out.split('\n').filter(l => /placeholder/.test(l));
+  assert.deepEqual(lines, ['! games/fresh/preview.png is still the placeholder from cli new: replace it with a picture of the game (README, Adding a game, 8)'], r.out);
+  assert.ok(r.out.indexOf(lines[0]) < r.out.indexOf('No vault/keyring.json'), 'before the password');
+  fs.rmSync(path.join(root, 'games/fresh'), { recursive: true });
 });

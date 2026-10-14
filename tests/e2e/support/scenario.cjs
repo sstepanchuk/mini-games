@@ -1,13 +1,17 @@
 // What every browser scenario needs: the library's address, Playwright's browser, waits, checks and the exit code.
 //   scenario('title', async () => { … check(cond, 'what must hold', detail) … })
-// prints each check, then PASS or FAIL; the process exits non-zero when a check failed, the scenario threw, a page
-// threw an uncaught error, or it ran longer than its timeout. todo(cond, …) is a known bug: reported, never failing.
-// skip(why) leaves before it starts: SKIP and the exit code 77 (run.cjs counts it apart).
+// prints each check, then PASS or FAIL; the process exits non-zero when a check failed, the scenario threw, a watched
+// page (watch: openPage does it) threw an uncaught error or its code called console.error (the library logs the
+// failures it catches that way; the browser's own messages, a 404 or a refusal, carry no arguments and do not count;
+// console.warn never does), or it ran longer than its timeout. forgive(from, re) lets expected ones go. todo(cond, …)
+// is a known bug: reported, never failing. skip(why) leaves before it starts: SKIP and the exit code 77 (run.cjs counts
+// it apart). exitOnSignals(before) makes SIGINT, SIGTERM and SIGHUP exit through process 'exit' (cleanups run).
 // E2E_PERF=<file>: a report for tools/perf.js (npm run perf). Every page counts its long tasks (its frames too) and,
 // while its game is played together, what went out per path (the fake network's __wire); when the scenario ends, all
 // of it goes into that file: [{ page, frame: 'page' | 'game', long: [ms, …], linkedS, bytes: { path: characters } }].
 'use strict';
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { execSync } = require('node:child_process');
 
@@ -59,15 +63,26 @@ async function launch(opt = {}) {
   return b;
 }
 
-const errs = [];                                       // uncaught errors on the pages (see watch)
+const errs = [];                                       // uncaught errors and console.error on the pages (see watch)
 const labels = new WeakMap();                          // page → its label (see watch)
 // an uncaught error as it is reported: its kind (unless a plain Error), its message and where it was thrown
 const describe = e => {
   const at = (e.stack || '').split('\n').map(l => l.trim()).find(l => /:\d+:\d+\)?$/.test(l));
   return (e.name && e.name !== 'Error' ? e.name + ': ' : '') + e.message + (at ? ' @ ' + at : '');
 };
-// a page's uncaught errors fail the scenario
-const watch = (page, label) => { labels.set(page, label); page.on('pageerror', e => errs.push(label + ': ' + describe(e))); return page; };
+// a page's uncaught errors fail the scenario, and so does its code's console.error (any frame of it): the library
+// catches most of its own failures and logs them that way (dom.js safe, room handlers, the brokers). Page code always
+// passes arguments; the browser's own messages (a 404, a refused script, a permissions notice) have none.
+const watch = (page, label) => {
+  labels.set(page, label);
+  page.on('pageerror', e => errs.push(label + ': ' + describe(e)));
+  page.on('console', m => {
+    if (m.type() === 'error' && m.args().length) errs.push(label + ': console.error ' + m.text().split('\n')[0] + ' @ ' + (m.location().url || 'evaluate') + ':' + m.location().lineNumber);
+  });
+  return page;
+};
+// expected errors (errs[from] on that match re) are let go
+const forgive = (from, re) => { for (let i = errs.length - 1; i >= from; i--) if (re.test(errs[i])) errs.splice(i, 1); };
 // E2E_PERF: what every page and frame counted, into that file
 async function perfReport() {
   const out = [];
@@ -114,10 +129,25 @@ function scenario(title, fn, { timeout = 300000, at = U } = {}) {
   console.log(title + '  (' + at + (CHROMIUM ? '' : ', ' + BROWSER) + ')');
   (async () => {
     try { await fn(); } catch (e) { failed++; console.log('  ✗ ' + (e && e.stack || e)); }
-    check(!errs.length, 'no uncaught errors on the pages', errs);
+    check(!errs.length, 'no errors on the pages (uncaught, or console.error)', errs);
     console.log((failed ? 'FAIL' : 'PASS') + ': ' + passed + ' passed, ' + failed + ' failed' + (todos ? ', ' + todos + ' todo' : '') + ' in ' + Math.round((Date.now() - t0) / 1000) + ' s');
     await finish(failed ? 1 : 0);
   })();
 }
 
-module.exports = { U, SITE, BROWSER, CHROMIUM, GAME, w, playwright, launch, watch, errs, check, todo, step, until, scenario, SKIP, skip };
+// SIGINT, SIGTERM or SIGHUP ends the process as if it exited (its process 'exit' handlers run: scratch copies,
+// servers), with the code a shell gives it (128 + the signal's number); each call's before(signal) runs first. Its
+// handlers are registered on the first call, and stay (process.on).
+const befores = [];
+let onSignals = false;
+function exitOnSignals(before = () => {}) {
+  befores.push(before);
+  if (onSignals) return;
+  onSignals = true;
+  for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(s, () => {
+    for (const f of befores) try { f(s); } catch (e) { console.error(e); }
+    process.exit(128 + os.constants.signals[s]);
+  });
+}
+
+module.exports = { U, SITE, BROWSER, CHROMIUM, GAME, w, playwright, launch, watch, errs, forgive, check, todo, step, until, scenario, SKIP, skip, exitOnSignals };

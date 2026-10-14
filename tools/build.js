@@ -7,6 +7,7 @@ import path from 'node:path';
 import * as esbuild from 'esbuild';
 import * as vault from '../library/crypto.js';
 import { P, MIME, rel, esc, exists, problem, homepage, vaultIds, vaultPath, walk, writeAtomic } from './repo.js';
+import { pngInfo, isPlaceholder } from './png.js';
 
 const RESERVED = new Set(['lib']);                     // top-level names the site itself uses
 
@@ -72,36 +73,60 @@ export function readManifest(id, dir = path.join(P.games, id)) {
   return g;
 }
 
+// what the shelf and link previews will make of a game's cover (games/<id>/<image>) → [warning, …]; it is sealed anyway
+export function coverWarnings(id, g) {
+  const name = 'games/' + id + '/' + g.image, buf = fs.readFileSync(path.join(P.games, id, g.image)), info = pngInfo(buf);
+  if (!info) return [name + ' is not a PNG'];
+  if (info.w !== 1200 || info.h !== 630) return [name + ' is ' + info.w + '×' + info.h + ': the shelf and link previews expect 1200×630'];
+  if (isPlaceholder(buf, g.theme)) return [name + ' is still the placeholder from cli new: replace it with a picture of the game (README, Adding a game, 8)'];
+  return [];
+}
+
 /* ---------- a game's own tests: games/<id>/test/*.test.js (node:test), run before the game is sealed ---------- */
-// → how many test files ran (0: the game has none). Throws a Problem with their report when one fails. They run in
-// Node without the password (sealed games keep their tests in source.bin; CI never sees them, so this is the gate).
-export function testGame(id) {
+const TEST_TIMEOUT = 120000;                           // ms for each test file, and each test, of a game
+// → how many test files ran (0: the game has none). Throws a Problem with their report when one fails, or does not
+// finish in time. They run in Node without the password (sealed games keep their tests in source.bin; CI never sees
+// them, so this is the gate). timeout: ms instead of TEST_TIMEOUT.
+export function testGame(id, { timeout = TEST_TIMEOUT } = {}) {
   const dir = path.join(P.games, id, 'test');
   const files = exists(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.test.js')).sort().map(f => path.join(dir, f)) : [];
   if (!files.length) return 0;
   // (without the password, and as a run of its own even when the build itself runs under node --test)
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(VAULT_PASSWORDS?|NODE_TEST_CONTEXT)$/.test(k)));
-  const r = spawnSync(process.execPath, ['--test', '--test-reporter=spec', ...files], { cwd: path.join(P.games, id), env, encoding: 'utf8' });
-  if (r.status !== 0) problem('games/' + id + ': its tests fail, so it is not sealed (npm run test:games; to build anyway: npm run build -- --no-tests)\n' + (r.stdout + r.stderr).trim());
+  // Each file runs in a process of its own, which --test-timeout bounds and --test-force-exit ends once its tests are
+  // done (a timer or server left open does not keep it). spawnSync's own timeout is only a last resort: it stops the
+  // runner, not that process.
+  const r = spawnSync(process.execPath, ['--test', '--test-reporter=spec', '--test-force-exit', '--test-timeout=' + timeout, ...files],
+    { cwd: path.join(P.games, id), env, encoding: 'utf8', maxBuffer: 64 << 20, timeout: timeout * (files.length + 1) + 60000 });
+  const report = ((r.stdout || '') + (r.stderr || '')).trim();
+  if (r.error?.code === 'ETIMEDOUT' || /test timed out after \d+ms/.test(report)) {
+    problem('games/' + id + ': its tests did not finish in ' + (timeout >= 60000 ? timeout / 60000 + ' min' : timeout / 1000 + ' s') + ' (an open timer or server, ' +
+      'a promise that never settles?), so it is not sealed (npm run test:games; to build anyway: npm run build -- --no-tests)\n' + report);
+  }
+  if (r.error) problem('games/' + id + ': its tests did not run: ' + r.error.message);
+  if (r.status !== 0) problem('games/' + id + ': its tests fail, so it is not sealed (npm run test:games; to build anyway: npm run build -- --no-tests)\n' + report);
   return files.length;
 }
 
 /* ---------- the library API (library/game-api.js), first thing in <head> ---------- */
-export function withLibraryApi(html, id, g) {
-  const api = fs.readFileSync(P.gameApi, 'utf8')
-    .replace(/^\/\*[\s\S]*?\*\/\s*/, '')
-    .replace('/* GAME */ null', () => JSON.stringify({ id, title: g.title, players: playersOf(g.players), wire: wireOf(g) }).replace(/</g, '\\u003c'));
+export const withLibraryApi = (html, id, g) => atApiPlace(html, id, libraryApi(id, g));
+const libraryApi = (id, g) => '<script>' + fs.readFileSync(P.gameApi, 'utf8')
+  .replace(/^\/\*[\s\S]*?\*\/\s*/, '')
+  .replace('/* GAME */ null', () => JSON.stringify({ id, title: g.title, players: playersOf(g.players), wire: wireOf(g) }).replace(/</g, '\\u003c')).trim() + '</script>';
+// the page with what put right after its charset meta, or after <head>
+function atApiPlace(html, id, what) {
   const at = /<meta charset[^>]*>/i.test(html) ? /<meta charset[^>]*>/i : /<head>/i;   // charset must stay near the top
   if (!at.test(html)) problem('games/' + id + '/index.html has no <head>');
-  return html.replace(at, m => m + '\n<script>' + api.trim() + '</script>');
+  return html.replace(at, m => m + '\n' + what);
 }
 
 /* ---------- one self-contained page ---------- */
-// Styles and module scripts are bundled inline; images, fonts and sounds they use become data: URLs.
-// Anything else the page points to by a relative URL would not exist on the site, so the build stops.
+// The page's own markup is read once, piece by piece: styles and module scripts are bundled inline, and the images,
+// fonts and sounds they or the markup use become data: URLs. Anything else the markup points to by a relative URL would
+// not exist on the site (it serves only the page, game.bin and the cover under /<id>/), so the build stops. What is
+// inside a script or a style is code, not markup: it is not read for links, and neither is anything the build put in.
 const ASSETS = Object.fromEntries(Object.entries(MIME).filter(([, t]) => /^(image|font|audio)\/|json/.test(t)));   // inlined as data: URLs
 const loader = Object.fromEntries(Object.keys(ASSETS).filter(e => e !== '.json').map(e => [e, 'dataurl']));   // scripts import JSON as data
-const attr = (tag, name) => tag.match(new RegExp('\\s' + name + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s>]+))', 'i'))?.slice(1).find(v => v !== undefined);
 const local = url => url && !/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(url);
 const dataUrl = file => 'data:' + ASSETS[path.extname(file).toLowerCase()] + ';base64,' + fs.readFileSync(file).toString('base64');
 // A string in a game's code that looks like a file next to it ('img/hero.png', './hit.mp3'): on the site the game is
@@ -109,9 +134,20 @@ const dataUrl = file => 'data:' + ASSETS[path.extname(file).toLowerCase()] + ';b
 const ASSET_STRING = new RegExp('([\'"`])((?:\\.{1,2}/)?(?:[\\w-]+/)*[\\w-][\\w.-]*\\.(?:' + Object.keys(ASSETS).map(e => e.slice(1)).join('|') + '))\\1', 'gi');
 export const assetStrings = js => [...new Set(Array.from(js.matchAll(ASSET_STRING), m => m[2]))];
 
-// one entry point → one minified file (also used for the site's own script and stylesheet)
+// the page's markup, piece by piece: a comment; a script or a style, with its body; any other start tag (a quoted value
+// may hold ">"); a script or a style never closed
+const MARKUP = /<!--[\s\S]*?(?:-->|$)|<(script|style)(?=[\s/>])((?:=\s*"[^"]*"|=\s*'[^']*'|[^>])*)>([\s\S]*?)<\/\1\s*>|<(?!(?:script|style)[\s/>])([a-z][\w:-]*)((?:=\s*"[^"]*"|=\s*'[^']*'|[^>])*)>|<(script|style)(?=[\s/>])/gi;
+const ATTR = /\s([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>]+))/g;   // an attribute with a value, quoted or not
+const unescape = v => v.replace(/&quot;/g, '"').replace(/&#39;/g, '\'').replace(/&amp;/g, '&');
+const attrsOf = s => { const a = {}; for (const m of s.matchAll(ATTR)) a[m[1].toLowerCase()] ??= unescape(m[2] ?? m[3] ?? m[4]); return a; };
+const URL_ATTRS = new Set(['src', 'href', 'xlink:href', 'poster', 'background', 'data']);   // each holds one URL
+// the URLs of a srcset: each candidate starts with one (a data: URL may hold commas), then its size
+const srcsetUrls = v => Array.from(v.matchAll(/(?:^|,)[\s,]*([^\s,]\S*?)(?=,*(?:\s|$))/g), m => m[1]);
+const CSS_URL = /url\(\s*(?:(["']|&quot;|&#39;)(.*?)\1|([^\s"')]*))\s*\)/gi;   // in a style="" as written (&quot; for ")
+
+// one entry point (a file, or { stdin }) → one minified file (also used for the site's own script and stylesheet)
 async function esbuildText(entry, extra, where) {
-  const r = await esbuild.build({ entryPoints: [entry], bundle: true, minify: true, write: false, charset: 'utf8',
+  const r = await esbuild.build({ ...(entry.stdin ? entry : { entryPoints: [entry] }), bundle: true, minify: true, write: false, charset: 'utf8',
     legalComments: 'none', logLevel: 'silent', loader, ...extra }).catch(e => problem(where + ': ' + (e.errors?.[0]?.text || e.message)));
   return r.outputFiles[0].text.trim();
 }
@@ -120,35 +156,60 @@ const JS = { format: 'esm', target: 'es2020' };
 // warn(message): what the page names that may not exist on the site (assetStrings); the page is bundled anyway
 export async function bundleGame(id, g, { warn = () => {} } = {}) {
   const dir = path.join(P.games, id), where = 'games/' + id + '/index.html';
-  let html = fs.readFileSync(path.join(dir, 'index.html'), 'utf8').replace(/^\uFEFF/, '');
-  if (!/^\s*<!doctype html>/i.test(html)) problem(where + ' must start with <!doctype html> (without it the page renders in quirks mode)');
-  html = withLibraryApi(html, id, g);
-  const build = (entry, extra) => esbuildText(path.join(dir, entry), extra, where);
-
-  for (const tag of html.match(/<link\b[^>]*>/gi) || []) {
-    if (!/\brel\s*=\s*["']?stylesheet/i.test(tag) || !local(attr(tag, 'href'))) continue;
-    const css = await build(attr(tag, 'href'), {});
-    html = html.replace(tag, () => '<style>' + css + '</style>');
-  }
-  for (const tag of html.match(/<script\b[^>]*>\s*<\/script>/gi) || []) {
-    const src = attr(tag, 'src');
-    // (the site's policy lets scripts come only from the site, or inline: README, Trust)
-    if (src && !local(src)) problem(where + ': <script src="' + src + '"> is from elsewhere, which the site refuses (README: Trust): keep the file next to the game, and import it from a module');
-    if (!local(src)) continue;
-    if (!/\btype\s*=\s*["']?module/i.test(tag)) problem(where + ': <script src="' + src + '"> must be type="module" to be bundled');
-    const js = await build(src, JS);
+  const source = fs.readFileSync(path.join(dir, 'index.html'), 'utf8').replace(/^\uFEFF/, '');
+  if (!/^\s*<!doctype html>/i.test(source)) problem(where + ' must start with <!doctype html> (without it the page renders in quirks mode)');
+  // the library API goes in last, where withLibraryApi puts it: a comment keeps its place while the page is read
+  const mark = '<!--' + crypto.randomUUID() + '-->', html = atApiPlace(source, id, mark);
+  const inline = { resolveDir: dir, sourcefile: 'index.html' };
+  const named = (what, js) => {
+    for (const s of assetStrings(js)) warn(what + ' names "' + s + '", which looks like a file next to the game: on the site the game is one page, so it is not there (import it from a module: the build inlines what a module imports)');
+  };
+  const moduleScript = async (entry, what) => {
+    const js = await esbuildText(entry, JS, where);
     if (/<\/script/i.test(js)) problem(where + ': the bundle contains "</script" and cannot be inlined');
-    for (const s of assetStrings(js)) warn('games/' + id + '/' + src + ' names "' + s + '", which looks like a file next to the game: on the site the game is one page, so it is not there (import it from a module: the build inlines what a module imports)');
-    html = html.replace(tag, () => '<script type="module">' + js + '</script>');   // still a module: runs after the page is parsed, as before
-  }
-  // remaining relative src/href: inline known assets, refuse everything else
-  html = html.replace(/(\s(?:src|href)\s*=\s*)(["'])([^"']*)\2/gi, (m, pre, q, url) => {
-    if (!local(url)) return m;
+    named(what, js);
+    return '<script type="module">' + js + '</script>';   // still a module: runs after the page is parsed, as before
+  };
+  // a relative URL of the markup → the file it names as a data: URL, when it is a media file next to the page
+  const asset = (url, attr) => {
     const file = path.join(dir, url.split(/[?#]/)[0]);
-    if (!file.startsWith(dir + path.sep) || !exists(file) || !ASSETS[path.extname(file).toLowerCase()]) problem(where + ': "' + url + '" would not exist on the site (only styles, module scripts and media files are bundled)');
-    return pre + q + dataUrl(file) + q;
-  });
-  return html;
+    if (!file.startsWith(dir + path.sep) || !exists(file) || !ASSETS[path.extname(file).toLowerCase()]) problem(where + ': ' + attr + ': "' + url + '" would not exist on the site (only styles, module scripts and media files are bundled)');
+    return dataUrl(file);
+  };
+  const tag = (name, attrs) => '<' + name + attrs.replace(ATTR, (m, attr, dq, sq, bare) => {
+    const raw = dq ?? sq ?? bare, v = unescape(raw), n = attr.toLowerCase(), q = sq === undefined ? '"' : '\'';
+    if (URL_ATTRS.has(n)) return local(v) ? m[0] + attr + '="' + asset(v, n) + '"' : m;
+    const set = /^(image)?srcset$/.test(n) && srcsetUrls(v).find(local);
+    if (set) problem(where + ': ' + n + ': "' + set + '" would not exist on the site; use src, the build inlines it');
+    if (n !== 'style') return m;
+    const css = raw.replace(CSS_URL, (u, _, quoted, url) => local(unescape(quoted ?? url)) ? 'url(' + asset(unescape(quoted ?? url), n) + ')' : u);
+    return css === raw ? m : m[0] + attr + '=' + q + css + q;
+  }) + '>';
+
+  let out = '', last = 0;
+  for (const m of html.matchAll(MARKUP)) {
+    const [all, el, elAttrs, body, name, attrs, open] = m;
+    out += html.slice(last, m.index);
+    last = m.index + all.length;
+    if (all.startsWith('<!--')) out += all;              // a comment: as it is
+    else if (open) problem(where + ': <' + open + '> has no </' + open + '>');
+    else if (el && el.toLowerCase() === 'style') out += '<' + el + elAttrs + '>' + await esbuildText({ stdin: { ...inline, contents: body, loader: 'css' } }, {}, where) + '</' + el + '>';
+    else if (el) {
+      const a = attrsOf(elAttrs), src = a.src, isModule = (a.type || '').trim().toLowerCase() === 'module';
+      // (the site's policy lets scripts come only from the site, or inline: README, Trust)
+      if (src && !local(src)) problem(where + ': <script src="' + src + '"> is from elsewhere, which the site refuses (README: Trust): keep the file next to the game, and import it from a module');
+      if (src && !isModule) problem(where + ': <script src="' + src + '"> must be type="module" to be bundled');
+      if (src && body.trim()) problem(where + ': <script src="' + src + '"> must be empty (a browser runs only the file)');
+      if (src) out += await moduleScript(path.join(dir, src), 'games/' + id + '/' + src);
+      else if (isModule) out += await moduleScript({ stdin: { ...inline, contents: body, loader: 'js' } }, 'an inline module of ' + where);
+      else { named('an inline script of ' + where, body); out += all; }
+    } else {
+      const a = attrsOf(attrs), rel = (a.rel || '').toLowerCase().split(/\s+/);
+      if (name.toLowerCase() === 'link' && rel.includes('stylesheet') && !rel.includes('alternate') && local(a.href)) out += '<style>' + await esbuildText(path.join(dir, a.href), {}, where) + '</style>';
+      else out += tag(name, attrs);
+    }
+  }
+  return (out + html.slice(last)).replace(mark, () => libraryApi(id, g));
 }
 
 /* ---------- the site's pages: one template (library/app/page.html) for the shelf and every game ---------- */

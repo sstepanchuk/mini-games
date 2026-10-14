@@ -1,17 +1,26 @@
 // devnet (tools/devnet.js): the dev server's fake network, so that tabs play together without internet. Only the dev
 // server puts it into a page, and only when asked (--devnet, or ?devnet, which a session cookie remembers; ?devnet=0
 // forgets it); never into a game's own page; and the assembled site never has it, whatever the build does. The dev
-// server's probe (--probe: the browser scenarios' open game) is served only when asked too.
+// server's probe (--probe: the browser scenarios' open game) is served only when asked too. The tools work on a scratch
+// copy (IHROTEKA_ROOT: the committed vault/ and a package.json, no games/ until a test makes one), so a developer's own
+// games/ changes nothing here, and every branch runs here as it does in CI.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
+import { spawnSync } from 'node:child_process';
 import { DEVNET_TAG, devnetFor, devnetScript } from '../tools/devnet.js';
-import { devServer } from '../tools/dev.js';
-import { buildSite } from '../tools/build.js';
-import { walk } from '../tools/repo.js';
+
+const REPO = path.join(import.meta.dirname, '..');
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ihroteka-devnet-'));
+fs.cpSync(path.join(REPO, 'vault'), path.join(root, 'vault'), { recursive: true });
+fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ homepage: 'https://example.github.io/lib/' }));
+process.env.IHROTEKA_ROOT = root;                      // (before the tools load: repo.js reads it once)
+const { devServer } = await import('../tools/dev.js');
+const { buildSite } = await import('../tools/build.js');
+const { walk } = await import('../tools/repo.js');
 
 const MARKS = [DEVNET_TAG, '__devnet'];                 // what only devnet's script says
 const servers = [];
@@ -21,7 +30,11 @@ const start = async opt => {
   servers.push(s);
   return 'http://127.0.0.1:' + s.address().port;
 };
-after(() => { for (const s of servers) s.close(); });
+after(() => {
+  for (const s of servers) s.close();
+  fs.rmSync(root, { recursive: true, force: true });
+  delete process.env.IHROTEKA_ROOT;
+});
 const get = async (url, cookie) => {
   const r = await fetch(url, { headers: cookie ? { cookie } : {}, redirect: 'manual' });
   return { status: r.status, text: await r.text(), cookie: r.headers.get('set-cookie') };
@@ -73,11 +86,16 @@ test('the probe is served only when asked, with the library API in front of its 
   const page = (await get(plain + '/probe/?frame')).text;
   assert.ok(page.indexOf('window.ihroteka') > 0 && page.indexOf('window.ihroteka') < page.indexOf('__probe'), 'the API first');
   assert.equal((await get(plain + '/probe/preview.png')).status, 200);
-  assert.equal((await get(plain + '/probe/../../package.json')).status, 404);
-  // without --probe: not on the shelf, its files not served (or, with no games/ at all, as in CI, no server either)
-  const none = await start({}).catch(e => { assert.match(e.message, /^No games/); return null; });
-  if (!none) return;
-  assert.doesNotMatch((await get(none + '/')).text, /"id":"probe"/);
+  // nothing outside its folder (fetch takes ../ and %2e%2e out of the address before it is sent; %2f reaches the server,
+  // which decodes it: only its guard stops this one)
+  assert.equal((await get(plain + '/probe/..%2f..%2f..%2f..%2fpackage.json')).status, 403);
+  // without --probe: with no games/ (as in CI), no server; with a game, the probe neither on the shelf nor served
+  assert.throws(() => devServer('games', {}), { message: /^No games/ });
+  const made = spawnSync(process.execPath, [path.join(REPO, 'tools', 'cli.js'), 'new', 'demo'], { env: { ...process.env, IHROTEKA_ROOT: root }, encoding: 'utf8' });
+  assert.equal(made.status, 0, made.stdout + made.stderr);
+  const none = await start({}), only = (await get(none + '/')).text;
+  assert.match(only, /"id":"demo"/);
+  assert.doesNotMatch(only, /"id":"probe"/);
   assert.equal((await get(none + '/probe/preview.png')).status, 404);
 });
 

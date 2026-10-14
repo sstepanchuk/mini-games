@@ -5,19 +5,32 @@
 // messages (world.js: { id, cmd, args } → { id, ok, value | error }); the commands are below (cmds).
 //
 // workerData: { pid: the session's first part (window.__pid), bus: the world's BroadcastChannel, scale:
-// window.__timeScale (config.js TIMING), brokerMs, rtc: fake direct links, net: fakenet switches to start with,
-// library: another library/ folder to run (say, a checkout of an older version; default: this repository's), dev: the
-// page says it is the dev server's (its version meta: 'dev', so together.js warns in the console), insecure: the page
-// has no Web Crypto (crypto.subtle), as one served over plain http; kept: what the tab's sessionStorage holds when
-// the page starts, [[key, value], …] (world.js reload: what the page before it in this tab kept) }.
+// window.__timeScale (config.js TIMING), timing: window.__timing (any of TIMING set outright, ms; read only with a
+// scale), brokerMs, rtc: fake direct links, net: fakenet switches to start with, library: another library/ folder to
+// run (say, a checkout of an older version; default: this repository's), dev: the page says it is the dev server's
+// (its version meta: 'dev', so together.js warns in the console), insecure: the page has no Web Crypto
+// (crypto.subtle), as one served over plain http; kept: what the tab's sessionStorage holds when the page starts,
+// [[key, value], …] (world.js reload: what the page before it in this tab kept); initial: the game the page's address
+// names (/<id>/?room=: a page reloaded in a game, world.js reload), shown as the shell starts, before any room; strip:
+// what this browser does not have, names such as 'Array.prototype.at' or 'structuredClone' (an older Safari), taken
+// away before anything of the library loads; reloadAnswer: what the shell's reload says (see shellUp) }.
 // Like a browser, an exception thrown by a timer or a listener does not stop the tab: it goes to `errors`
-// (console.error and console.warn too), which the test reads.
+// (console.error and console.warn too), which the test reads. A library that does not load (config.js refuses its
+// timing, say) is said to the test ({ failed }), which then does not get the tab.
 import { pathToFileURL } from 'node:url';
 import { parentPort, workerData } from 'node:worker_threads';
 import { install } from './fakenet.js';
 import { install as installRtc } from './fakertc.js';
 
-const { pid, bus, scale = 1, brokerMs = 25, rtc: withRtc = false, net: start = {}, library, dev = false, insecure = false, kept = [] } = workerData;
+const { pid, bus, scale = 1, timing = null, brokerMs = 25, rtc: withRtc = false, net: start = {}, library, dev = false, insecure = false, kept = [],
+  initial = null, strip = [], reloadAnswer = 'reload' } = workerData;
+// a browser without these (strip), before anything else: a name it does not have is a mistake of the test's
+for (const name of strip) {
+  const path = name.split('.'), key = path.pop(), on = path.reduce((o, k) => (o == null ? o : o[k]), globalThis);
+  if (on == null || !(key in on)) throw new Error('tab.js: cannot strip ' + name + ': there is no such thing');
+  delete on[key];
+  if (key in on) throw new Error('tab.js: cannot strip ' + name);
+}
 const root = library ? pathToFileURL(library.replace(/\/?$/, '/')) : new URL('../../library/', import.meta.url);
 const lib = p => new URL(p, root).href;
 const t0 = performance.now(), ms = () => Math.round(performance.now() - t0);
@@ -39,18 +52,59 @@ const live = new Map();
 const tracked = (on, target) => [(type, fn, o) => { const k = on + ':' + type; if (!live.has(k)) live.set(k, new Set()); live.get(k).add(fn); target.addEventListener(type, fn, o); },
   (type, fn, o) => { const s = live.get(on + ':' + type); if (s) s.delete(fn); target.removeEventListener(type, fn, o); }];
 const [winOn, winOff] = tracked('window', win), [docOn, docOff] = tracked('document', doc);
-// the intervals that run now, timer → its period (cmds.timers): which the page keeps ticking (clearTimeout stops one too)
-const ticking = new Map(), [setI, clearI, clearT] = [setInterval, clearInterval, clearTimeout];
+// The page's timers (the library's, the shell's) are real ones, which the tab can hold back as Chrome does a hidden
+// tab's (cmds.throttle): a timer that is due then runs at the next wake-up, every `every` ms for one chained 5 deep or
+// more (an interval from its 5th run, a timeout set from a callback 4 deep: intensive throttling), every second for
+// the others (basic throttling). The fake network's own timers (fakenet.js, fakertc.js) stay real: they took them first.
+const [setT, setI, clearT, clearI] = [setTimeout, setInterval, clearTimeout, clearInterval];
+const pageTimers = new Map();                            // id → { fn, a, interval, nest, h: the real timer, held, go, woke }
+const ticking = new Map();                               // the intervals that run now, id → their period (cmds.timers)
+let timerIds = 0, depth = 0, every = 0;                  // depth: how deep the callback that runs now is chained; every: 0, not held back
+// a timer is due: it runs now, or (held back) at the next wake-up; an interval due again meanwhile runs once there
+function due(id) {
+  const P = pageTimers.get(id);
+  if (!P || P.held) return;
+  P.go = () => {
+    P.held = null;
+    if (pageTimers.get(id) !== P) return;
+    if (!P.interval) pageTimers.delete(id);
+    const was = depth;
+    depth = P.interval ? P.nest++ : P.nest;
+    try { P.fn(...P.a); } finally { depth = was; }
+  };
+  const wake = !every ? 0 : P.nest >= 5 ? every : 1000, now = performance.now();
+  if (!wake) { P.go(); return; }
+  // the next wake-up, and one run in each: a held timer may fire a moment before its wake-up (Node's clock counts
+  // whole ms), and the interval, due again just then, must not take that wake-up twice
+  let at = Math.ceil(now / wake) * wake;
+  if (at <= P.woke) at = Math.floor(P.woke / wake) * wake + wake;
+  P.woke = at;
+  if (at > now) P.held = setT(P.go, at - now); else P.go();
+}
+function addTimer(fn, ms, a, interval) {
+  if (typeof fn !== 'function') return (interval ? setI : setT)(fn, ms, ...a);
+  const id = ++timerIds;
+  pageTimers.set(id, { fn, a, interval, nest: depth + 1, held: null, go: null, woke: 0, h: (interval ? setI : setT)(() => due(id), ms) });
+  if (interval) ticking.set(id, ms);
+  return id;
+}
+function clearTimer(id) {
+  const P = pageTimers.get(id);
+  ticking.delete(id);
+  if (!P) return;
+  pageTimers.delete(id);
+  (P.interval ? clearI : clearT)(P.h);
+  if (P.held) clearT(P.held);
+}
 Object.assign(globalThis, {
-  setInterval: (fn, ms, ...a) => { const id = setI(fn, ms, ...a); ticking.set(id, ms); return id; },
-  clearInterval: id => { ticking.delete(id); clearI(id); },
-  clearTimeout: id => { ticking.delete(id); clearT(id); }
+  setTimeout: (fn, ms, ...a) => addTimer(fn, ms, a, false), setInterval: (fn, ms, ...a) => addTimer(fn, ms, a, true),
+  clearTimeout: clearTimer, clearInterval: clearTimer
 });
 const storage = m => ({ getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: k => { m.delete(k); } });
 const tabSession = new Map(kept), local = storage(new Map()), session = storage(tabSession);   // (sessionStorage: the tab's, through reloads)
 const blocked = s => () => { if (!siteData) throw new DOMException('The site data is blocked', 'SecurityError'); return s; };
 Object.assign(globalThis, {
-  window: globalThis, self: globalThis, __pid: pid, __timeScale: scale,
+  window: globalThis, self: globalThis, __pid: pid, __timeScale: scale, ...(timing && { __timing: timing }),
   addEventListener: winOn, removeEventListener: winOff, dispatchEvent: win.dispatchEvent.bind(win),
   document: {
     get hidden() { return hidden; }, get visibilityState() { return hidden ? 'hidden' : 'visible'; },
@@ -69,8 +123,10 @@ let fake = null;
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { get onLine() { return !fake || fake.up; }, userAgent: 'node (tests/support/tab.js)' } });
 
 /* ---------- the library ---------- */
-const config = await import(lib('net/config.js'));        // (after the shims: it reads __pid and __timeScale)
-fake = install({ bus, urls: config.BROKERS.map(b => b.url), brokerMs, emit: type => win.dispatchEvent(new Event(type)), ...start });
+// (after the shims: config.js reads __pid, __timeScale and __timing; it may refuse them)
+const config = await import(lib('net/config.js')).catch(e => { parentPort.postMessage({ failed: (e && e.stack) || String(e) }); return new Promise(() => {}); });
+const said = { online: 0, offline: 0 };                // the 'online' / 'offline' events the network fired (netState)
+fake = install({ bus, urls: config.BROKERS.map(b => b.url), brokerMs, emit: type => { said[type]++; win.dispatchEvent(new Event(type)); }, ...start });
 const rtc = withRtc ? installRtc({ bus, pid, live: () => fake.direct, loss: () => fake.loss }) : null;
 const net = await import(lib('net/index.js'));
 let T = null;                                              // library/app/together.js, for a library tab
@@ -89,6 +145,8 @@ const need = () => { const r = room(); if (!r) throw new Error('tab.js: no room 
 
 /* ---------- a library tab: the shell, as together.js sees it, and the open game ---------- */
 let view = null, game = null, round = null;             // round: the open game's ihroteka.round (none from a library before phase 4)
+let opening = null, wire = null;                         // the wire the game opening now speaks (open), that of the open one
+let shelf = null;                                        // the games on this tab's shelf: shellUp's wires (none: every game)
 const follows = [];
 const gEvents = [], gGot = [], heard = [];               // heard: the names of what it heard, messages ('message:' t) too, in order
 const GAME_EVENTS = ['linked', 'join', 'leave', 'players', 'weak', 'peer-gone', 'relinked', 'role', 'resume', 'shared'];
@@ -98,20 +156,27 @@ let seatsOf = {}, shell = false, later = false;          // later: the game's co
 let slow = false;                                        // slow: the game's page opens only when told (gameSlow off)
 let framing = null, pulses = 0;                          // the game's frames (gframes), the pulses it heard (gpulse)
 let broke = 0;                                           // how often together.js told the shell the open game broke (gameError)
-const reloads = [];                                      // what together.js asked of the shell's reload: its still, or null
-// Go to a view (null: the shelf; else a game, which opens a moment later, as its frame would). byPeer: following.
-function go(id, byPeer = false) {
+// what together.js asked of the shell's reload, the latest last: { still, out: what the reload said (null: not yet),
+// scripted, done(out) } (see shellUp)
+const reloads = [];
+let reloadAs = reloadAnswer;
+// Go to a view (null: the shelf; else a game, which opens a moment later, as its frame would). byPeer: following;
+// w: the wire its copy speaks (open). A game this tab's shelf does not have: the shelf (as shell.js go does).
+function go(id, byPeer = false, w = null) {
+  if (id && shelf && !(id in shelf)) id = null;
   if (id === view) return;
   if (view) T.detachGame();
-  game = null; round = null;
-  view = id;
+  game = null; round = null; wire = null;
+  view = id; opening = w;
   if (byPeer) follows.push(id);
   T.viewChanged(id, byPeer);
   if (id) setTimeout(() => { if (view === id && !game && !slow) openGame(id); }, 5);
 }
-// the game's page runs: it gets ihroteka.room and listens to everything a game may hear (at once, or when told)
+// the game's page runs: it gets ihroteka.room (its copy's wire, if open said one: a library before it takes no wire)
+// and listens to everything a game may hear (at once, or when told)
 function openGame(id) {
-  game = T.attachGame(id);
+  wire = opening;
+  game = T.attachGame(id, wire ?? undefined);
   round = T.openRound ? T.openRound() : null;
   if (!later) listen();
 }
@@ -130,19 +195,32 @@ async function topics(g, code) {
 }
 
 // together.js and the shell around it, once (seats: game id → seats, default 2; wires: game id → its wire number on
-// this tab's shelf, the first call only; none: the shell does not say, every game 1)
+// this tab's shelf, the first call only, and the games on it; none: the shell does not say, every game 1, any game).
+// The shell's reload(still) answers as shell.js does: once the newer offline copy is in place (here: when the test says
+// so, reloadDone) 'reload' if still() lets it, else 'stay'; or at once what the tab's reloadAnswer scripts ('storage',
+// 'failed', 'timeout', 'same': there is no newer copy to reload into), without asking still().
 async function shellUp(seats, wires) {
   T = T || await import(lib('app/together.js'));
   seatsOf = seats;
   if (shell) return;
-  shell = true;
+  shell = true; shelf = wires || null;
+  const reload = still => new Promise(res => {
+    const R = { still: still || null, out: null, scripted: reloadAs !== 'reload', done: v => { if (R.out === null) { R.out = v; res(v); } } };
+    reloads.push(R);
+    if (R.scripted) R.done(reloadAs);
+  });
   T.initTogether({ current: () => view, follow: id => go(id, true), invite() {}, address: () => globalThis.location.href, seats: id => seatsOf[id] || 2, askName() {},
-    reload: still => { reloads.push(still || null); }, gameError: () => { broke++; }, ...(wires && { wires: () => wires }) });
-  // (what the open game's screens say changed: together.js 'waiting', in the events as 'lib:waiting')
-  if (T.onChange) T.onChange(what => { if (what === 'waiting') events.push([ms(), 'lib:waiting']); });
+    reload, gameError: () => { broke++; }, ...(wires && { wires: () => wires }) });
+  // (what the open game's screens say changed, and the versions: together.js 'waiting' and 'version', in the events as
+  // 'lib:waiting' and 'lib:version')
+  if (T.onChange) T.onChange(what => { if (what === 'waiting' || what === 'version') events.push([ms(), 'lib:' + what]); });
+  if (initial) go(initial);                              // (the page's address: shell.js startShell, show(initial), before any room)
 }
 
 /* ---------- the commands ---------- */
+// the tab stops for ms (a locked phone, a frozen background tab): no timer, no message, then everything late at once
+const freeze = wait => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait); };
+const ticks = [];                                        // what each page interval of ptick noted
 const cmds = {
   // a room of library/net (a net-level tab) → this tab's session
   join({ code, name, max, game: g = 'test' }) {
@@ -152,11 +230,14 @@ const cmds = {
     return config.me;
   },
   // a nearby room of library/net (needs the world's fake direct links, rtc) → this tab's session; then its pairing:
-  // pair 'offer' → the host's code, 'answer' (code) → the guest's code, 'finish' (code) at the host
-  near({ name, max, game: g = 'test' }) {
+  // pair 'offer' → the host's code, 'answer' (code) → the guest's code, 'finish' (code) at the host. leaveOn: a status
+  // on which the page leaves the room at once, in the same call (as the library's dialog does on 'version', invite.js
+  // otherVersion: a linked room only ends the pairing), in the events as 'leaveOn' and the status
+  near({ name, max, game: g = 'test', leaveOn }) {
     if (netRoom) netRoom.leave();
-    netRoom = net.joinNearby({ game: g, name, max });
-    watchRoom(netRoom);
+    const r = netRoom = net.joinNearby({ game: g, name, max });
+    watchRoom(r);
+    if (leaveOn) r.on('status', s => { if (s !== leaveOn || r !== netRoom) return; events.push([ms(), 'leaveOn', s]); if (r.linked) r.pair.cancel(); else r.leave(); });
     return config.me;
   },
   pair: ({ step, code }) => step === 'offer' ? need().pair.offer() : step === 'answer' ? need().pair.answer(code) : need().pair.finish(code),
@@ -176,11 +257,13 @@ const cmds = {
     if (!watched.has(r)) watchRoom(r);
     return config.me;
   },
-  open: ({ id }) => { go(id); },                          // open a game (or the shelf: null) ourselves
+  open: ({ id, wire: w = null }) => { go(id, false, w); },   // open a game (or the shelf: null) ourselves; wire: its copy's
+  view: () => view,                                       // the view now: null (the shelf) or a game (world.js reload)
   // this tab's session, the brokers, the room's topic (for a spy; and legacy: that of a library before PROTO 2), the room's
-  // timing (TIMING, scaled) and the library's wire version (PROTO; undefined before it had one)
+  // timing (TIMING, scaled) and its scale (SCALE; undefined from a library before it said it), and the library's wire
+  // version (PROTO; undefined before it had one)
   info: async ({ code, game: g = 'test' } = {}) => ({ session: config.me, urls: fake.urls, ...(code ? await topics(g, code) : { topic: null }), timing: config.TIMING,
-    proto: config.PROTO }),
+    scale: net.SCALE, proto: config.PROTO }),
   state() {
     const r = room();
     if (!r) return null;
@@ -213,11 +296,40 @@ const cmds = {
   leave: ({ final = true } = {}) => { if (T) T.leave(); else need().leave(final); },   // (the library always leaves for good)
   kick: () => { need().kick(); },
   // the page closes: it says goodbye (pagehide), and is gone: nothing more goes out or comes in. hidden: a page still in
-  // sight is hidden first, in the same go (a closed tab: visibilitychange, then pagehide; nothing else runs between them)
-  pagehide: ({ hidden: first = false } = {}) => {
+  // sight is hidden first, in the same go (a closed tab: visibilitychange, then pagehide; nothing else runs between them);
+  // persisted: it goes into the back-forward cache (pagehide persisted; Safari closes its sockets: pageshow brings it
+  // back); lost: its sockets were already dead (closed, or a network that changed), so whatever it says as it goes is
+  // lost, its goodbye too (and no 'offline' fires before it); quiet: no 'offline' after it either (a browser fires none
+  // for the back-forward cache: with quiet here and on pageshow, nothing but pageshow tells the page it is back)
+  pagehide: ({ hidden: first = false, persisted = false, lost = false, quiet = false } = {}) => {
+    const was = fake.state();
+    if (lost) fake.set({ send: false, direct: false });
     if (first && !hidden) { hidden = true; doc.dispatchEvent(new Event('visibilitychange')); }
-    win.dispatchEvent(new Event('pagehide')); fake.set({ up: false });
+    win.dispatchEvent(Object.assign(new Event('pagehide'), { persisted }));
+    fake.set({ up: false, send: was.send, direct: was.direct }, { quiet });
   },
+  // back from the back-forward cache, in one go: the page stays frozen `after` ms (no timer, no message), then its
+  // network is up and pageshow (persisted) fires before anything else runs (and it is in sight again, if pagehide hid
+  // it) → when it runs again, on the clock of its events; quiet: no 'online' before it (see pagehide)
+  pageshow: ({ after = 0, quiet = false } = {}) => {
+    freeze(after);
+    fake.set({ up: true }, { quiet });
+    win.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+    if (hidden) { hidden = false; doc.dispatchEvent(new Event('visibilitychange')); }
+    return ms();
+  },
+  // the page's timers held back as a hidden tab's in Chrome (see the top): every, ms between the wake-ups of those
+  // chained 5 deep or more (the others: every second); 0: as they are, and what was held back runs now
+  throttle: ({ every: e = 0 } = {}) => {
+    every = e > 0 ? e : 0;
+    if (!every) for (const P of pageTimers.values()) if (P.held) { clearT(P.held); P.held = setT(P.go, 0); }
+    return every;
+  },
+  // a page interval of ms that notes when it runs (performance.now()) → its number; pticks: what each noted
+  ptick: ({ ms: period }) => { const runs = []; ticks.push(runs); setInterval(() => runs.push(Math.round(performance.now())), period); return ticks.length - 1; },
+  pticks: () => ticks,
+  // typeof each name ('Array.prototype.at', 'structuredClone' …): whether this browser has it (strip)
+  typeOf: ({ names }) => names.map(n => typeof n.split('.').reduce((o, k) => (o == null ? undefined : o[k]), globalThis)),
   // the page's own pagehide listener, added now (before a room's, as the library's is): it sends each of list
   // ({ m, opts }) on the room, as the page goes; at 'hidden': as it is hidden (visibilitychange), as app/together.js does
   onHide({ list, at = 'pagehide' }) {
@@ -228,21 +340,34 @@ const cmds = {
   // the browser lets the page keep site data (localStorage, sessionStorage) or blocks it: they throw
   siteData: ({ on }) => { siteData = on; },
   // the shell's reload (shell.js), once the newer offline copy is in place, for the latest one asked: 'reload' (the
-  // page reloads now), 'stay' (called off meanwhile) or null (none asked)
-  reloadDone: () => { const s = reloads.at(-1); return s === undefined ? null : !s || s() ? 'reload' : 'stay'; },
+  // page reloads now), 'stay' (called off meanwhile) or null (none asked); one the tab scripted (reloadAnswer): that
+  reloadDone: () => {
+    const R = reloads[reloads.length - 1];
+    if (!R) return null;
+    if (R.scripted) return R.out;
+    const v = !R.still || R.still() ? 'reload' : 'stay';
+    R.done(v);
+    return v;
+  },
+  // what each reload asked said so far, the latest last (null: not yet); reloadAnswer: what the next ones say ('reload':
+  // once the copy is in place, reloadDone; or 'storage', 'failed', 'timeout', 'same' at once)
+  reloads: () => reloads.map(R => R.out),
+  reloadAnswer: ({ answer }) => { reloadAs = answer; },
+  // the player asks for the newer version («Оновити»: together.js updateNow)
+  updateNow: () => { T.updateNow(); },
   // what the page keeps in sessionStorage under k (JSON), as the next page in this tab would find it
   stored: ({ k }) => JSON.parse(session.getItem(k)),
   // everything the page keeps in sessionStorage, [[key, value], …]: the next page in this tab starts with it (world.js reload)
   sessionAll: () => [...tabSession],
   // the tab stops for ms (a locked phone, a frozen background tab): no timer, no message, then everything late at once
   // → when it runs again, on the clock of its events (log)
-  freeze: ({ ms: wait }) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait); return ms(); },
+  freeze: ({ ms: wait }) => { freeze(wait); return ms(); },
   // how many listeners the page has on window and document now, by type ({ 'window:pagehide': 1, … }; none: left out)
   listeners: () => Object.fromEntries([...live].filter(([, s]) => s.size).map(([k, s]) => [k, s.size])),
   net: o => { fake.set(o); return fake.state(); },
   // the device's clock is set back (by < 0) or on, as a phone's by the network: Date.now() from now on → it
   clock: ({ by }) => { skew += by; return Date.now(); },
-  netState: () => ({ ...fake.state(), dc: rtc && rtc.count }),
+  netState: () => ({ ...fake.state(), dc: rtc && rtc.count, said: { ...said } }),
   killDc: () => { rtc.kill(); },                          // the phone's OS dropped the direct links
   errors: () => errors.slice(),
   takeErrors: () => errors.splice(0),                     // what went wrong so far, read and forgotten (expected ones)
@@ -253,7 +378,7 @@ const cmds = {
     const g = game;
     const r = round && { active: round.active, id: round.id, seats: round.seats, mySeat: round.mySeat, runner: round.runner, runs: round.runs };
     return { me: g.me, players: g.players, waiting: g.waiting, seats: g.seats, seated: g.seated, host: g.host, role: g.role,
-      linked: g.linked, weak: g.weak, round: r, events: gEvents.slice(), got: gGot.slice(), heard: heard.slice(), follows: follows.slice(), view };
+      linked: g.linked, weak: g.weak, round: r, events: gEvents.slice(), got: gGot.slice(), heard: heard.slice(), follows: follows.slice(), view, wire };
   },
   // the game's next page runs its code late: it listens only when told (glisten), as a game that starts after the room
   gameLate: ({ on }) => { later = on; },
@@ -262,6 +387,9 @@ const cmds = {
   glisten: () => { listen(); },
   // what the game calls → what the call returns (send, snapshot, share: whether it was done)
   gsend: ({ m, opts }) => game.send(m, opts),
+  // the game's streaming policy (it streams its state every frame: a direct link counts as dead sooner) → what the room
+  // says of it now (room.streaming(): only while linked)
+  gstream: ({ on }) => { game.streaming = on ? () => true : null; return !!need().streaming(); },
   // the game's ihroteka.round: what it calls → what the call returns; its policy (merged into round.policy); roff: the
   // listener of ev that listen() added goes (round.off); rseatOf: round.seatOf(name)
   rstart: ({ setup, opts }) => round.start(setup, opts),

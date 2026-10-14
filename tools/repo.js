@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as vault from '../library/crypto.js';
@@ -150,7 +151,7 @@ export function walk(dir, base = dir, all = false) {
     .sort();
 }
 const readFolder = dir => Object.fromEntries(walk(dir).map(f => [f, fs.readFileSync(path.join(dir, f)).toString('base64')]));
-const packSource = dir => zlib.gzipSync(JSON.stringify({ v: 1, files: readFolder(dir) }), { level: 9 });
+const packSource = files => zlib.gzipSync(JSON.stringify({ v: 1, files }), { level: 9 });
 export const unpackSource = buf => JSON.parse(zlib.gunzipSync(buf)).files;
 // archives are compared by their files, not by gzip bytes (those differ between zlib versions)
 const sameFiles = (a, b) => { const x = unpackSource(a), y = unpackSource(b); return JSON.stringify(x) === JSON.stringify(y); };
@@ -158,4 +159,46 @@ const sameFiles = (a, b) => { const x = unpackSource(a), y = unpackSource(b); re
 const gz = b => b[0] === 0x1f && b[1] === 0x8b;
 export const writeGame = (id, html, lib) => writeSealed(vaultPath(id, 'game.bin'), zlib.gzipSync(html, { level: 9 }), vault.label.game(id), lib,
   (old, now) => gz(old) && same(zlib.gunzipSync(old), zlib.gunzipSync(now)));
-export const writeSource = (id, lib) => writeSealed(vaultPath(id, 'source.bin'), packSource(path.join(P.games, id)), vault.label.source(id), lib, sameFiles);
+// A game's sources, without its cover: that is public in vault/<id>/ already, and a PNG does not compress (readSource
+// puts it back). The folder is then in step with vault/<id>: its base says so (the cover too, which the build writes).
+export async function writeSource(id, g, lib) {
+  const files = readFolder(path.join(P.games, id)), sources = { ...files };
+  delete sources[g.image];
+  const written = await writeSealed(vaultPath(id, 'source.bin'), packSource(sources), vault.label.source(id), lib, sameFiles);
+  writeBase(id, files);
+  return written;
+}
+// vault/<id>'s sources → { file: base64 }, its public cover put back beside them (an older archive still carries it)
+export async function readSource(id, lib) {
+  const files = unpackSource(await readSealed(vaultPath(id, 'source.bin'), vault.label.source(id), lib));
+  let image = null;
+  try { image = JSON.parse(fs.readFileSync(vaultPath(id, 'game.json'), 'utf8')).image; } catch (e) { /* no cover to put back */ }
+  if (typeof image === 'string' && exists(vaultPath(id, image))) files[image] ??= fs.readFileSync(vaultPath(id, image)).toString('base64');
+  return files;
+}
+
+/* ---------- which version of vault/<id> a games/<id> folder came from ---------- */
+// games/<id>/.vault-base: the SHA-256 of each of its files as of its last unlock or build in this checkout (a dotfile:
+// walk() leaves it out, so it is never sealed; games/ is not in git). Plaintext hashes: a key rotation changes nothing.
+const BASE = '.vault-base';
+const digest = files => Object.fromEntries(Object.keys(files).sort().map(f => [f, crypto.createHash('sha256').update(Buffer.from(files[f], 'base64')).digest('hex')]));
+const differ = (a, b) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(f => a[f] !== b[f]).sort();
+function readBase(id) {
+  try { const b = JSON.parse(fs.readFileSync(path.join(P.games, id, BASE), 'utf8')); return b.v === 1 && b.files || null; } catch (e) { return null; }
+}
+export const writeBase = (id, files) => writeIfChanged(path.join(P.games, id, BASE), JSON.stringify({ v: 1, files: digest(files) }, null, 1) + '\n');
+
+// vault/<id> (its sources and cover, readSource) and games/<id> against that base → { sealed, local, same, ours, theirs }:
+//   sealed  vault/<id>'s files, or null when there are none or none that open with this library key (strict: that
+//           is an error instead, as readSealed says it)
+//   local   games/<id>'s files, or null with no such folder
+//   same    both there, and the same files
+//   ours, theirs  the files changed here / in vault/<id> since the base, sorted (null with no base)
+export async function compareSource(id, lib, { strict = false } = {}) {
+  const dir = path.join(P.games, id);
+  const sealed = strict ? await readSource(id, lib) : await readSource(id, lib).catch(() => null);
+  const local = exists(dir) ? readFolder(dir) : null, base = readBase(id);
+  const s = sealed && digest(sealed), l = local && digest(local);
+  return { sealed, local, same: !!(s && l) && !differ(s, l).length,
+    ours: base && l ? differ(base, l) : null, theirs: base && s ? differ(base, s) : null };
+}

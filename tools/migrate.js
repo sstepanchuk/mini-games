@@ -17,14 +17,13 @@
 //   v1 → v2       labels 'drakony:…' → 'ihroteka:…': every ciphertext sealed again, everyone's password (7ccf849)
 //   v2 → v3       names in plain text; the sealed shelf list (docs/library.bin) dropped (d432127)
 import fs from 'node:fs';
-import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import * as vault from '../library/crypto.js';
 import * as repo from './repo.js';
+import { ask } from './prompt.js';
 
 const { subtle } = globalThis.crypto, enc = new TextEncoder();
-const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-const { problem } = repo;
+const { unb64 } = vault, { problem } = repo;
 
 // v3: every private key sealed with a key from the password and the keyring's one salt
 async function sharedSaltKey(kr, password) {
@@ -74,20 +73,6 @@ export async function v3to4(kr, known, ask) {
 
 const STEPS = { 3: v3to4 };
 
-// Passwords are taken exactly as typed (no trimming), the same way the browser takes them.
-let piped = null;
-async function ask(question) {
-  if (!process.stdin.isTTY) {
-    process.stdout.write(question);
-    piped ??= readline.createInterface({ input: process.stdin })[Symbol.asyncIterator]();
-    const { value, done } = await piped.next();
-    return done ? null : value.replace(/\r$/, '');
-  }
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-  rl._writeToOutput = s => { if (s.startsWith(question)) process.stdout.write(question); };
-  return new Promise(resolve => rl.question(question, answer => { rl.close(); process.stdout.write('\n'); resolve(answer); }));
-}
-
 async function main(args) {
   const dry = args.includes('--dry-run');
   if (args.some(a => a !== '--dry-run')) problem('Usage: node tools/migrate.js [--dry-run]');
@@ -97,11 +82,11 @@ async function main(args) {
   if (kr.v > vault.KEYRING_V) problem(repo.rel(repo.P.keyring) + ' is v' + kr.v + ', newer than these tools (v' + vault.KEYRING_V + '): update them.');
   if (!STEPS[kr.v]) problem(repo.rel(repo.P.keyring) + ' is v' + kr.v + ': only v3 and later can be migrated (see tools/migrate.js).');
   if (!dry) repo.requireClean(repo.P.vault);
-  const known = [process.env.VAULT_PASSWORD, ...(process.env.VAULT_PASSWORDS || '').split('\n')];
+  const known = [process.env.VAULT_PASSWORD, ...(process.env.VAULT_PASSWORDS || '').split(/\r?\n/)];
   while (kr.v < vault.KEYRING_V) {
     const from = kr.v, step = STEPS[from];
     if (!step) problem('No step from v' + from + '.');
-    const r = await step(kr, known, p => ask('Password of ' + p.name + ': '));
+    const r = await step(kr, known, p => ask('Password of ' + p.name + ': ', true));   // (none: 'No password for …')
     kr = r.kr;
     console.log((dry ? '· would migrate' : '✓ migrated') + ' v' + from + ' → v' + kr.v + ': ' + r.names.join(', '));
   }

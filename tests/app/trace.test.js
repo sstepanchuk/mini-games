@@ -22,6 +22,17 @@ describe('the trace (phase 2, G5)', () => {
     assert.match(trace.read().at(-1), /room weak true  ×2$/);
   });
 
+  // (Safari 15.0–15.3, older iPhones: no .at(); trace.note() runs on every page, so the library opened no room there)
+  test('works in a browser without Array.prototype.at', () => {
+    const at = Object.getOwnPropertyDescriptor(Array.prototype, 'at');
+    delete Array.prototype.at;
+    try {
+      trace.note('no at here'); trace.note('no at here');
+      const r = trace.read();
+      assert.match(r[r.length - 1], /  no at here  ×2$/, 'one line, two of them');
+    } finally { Object.defineProperty(Array.prototype, 'at', at); }
+  });
+
   test('what an event says: names, flags and numbers; anything else only its size', () => {
     assert.equal(trace.args(['Аня', true, 3, ['Аня', 'Богдан'], { secret: 'ab' }, null]), 'Аня true 3 [Аня, Богдан] 15 B null');
     assert.equal(trace.size({ s: 'їж' }), '12 B', 'bytes of its JSON (UTF-8)');

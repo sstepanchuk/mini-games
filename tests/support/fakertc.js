@@ -7,7 +7,11 @@
 // A message takes dcMs (5 ms); the ordered channel keeps its order, the unordered one ('fast') loses what the
 // network's loss says. Both ends drop everything while either tab's network or direct links are off (fakenet.js:
 // up, direct: a network switch, before the links fail); kill() closes this tab's links (the phone's OS dropped them),
-// and the other end sees them close.
+// and the other end sees them close, after what was sent before (as on a real link). The links keep real time: their
+// timers are the real ones, taken when this module loads (tab.js throttle holds back only the page's).
+
+// (the real timers, before a tab can hold the page's back)
+const { setTimeout } = globalThis;
 
 /**
  * Install RTCPeerConnection on this worker's global.
@@ -74,7 +78,7 @@ export function install({ bus, pid, live, loss = () => 0, dcMs = 5 }) {
         if (this.connectionState !== 'new') return;
         for (const l of this.labels) { const dc = this.createDataChannel(l, { ordered: l !== 'fast' }); if (this.ondatachannel) this.ondatachannel({ channel: dc }); }
         this.open();
-      } else if (m.close) this.end('closed');
+      } else if (m.close) later(() => this.end('closed'));   // (after what came before it: dcMs, in order)
       else if (live()) {
         const dc = this.channels.get(m.label);
         if (dc && dc.readyState === 'connecting') dc.early.push(m.s);   // sent the moment the other end opened: it waits for ours

@@ -8,11 +8,19 @@
 // the dev server's game page (its frame loads it by address, so it inherits nothing) gets the same policy as a header.
 // The browser side (what the policy refuses and lets through, the frame's camera and microphone) is
 // tests/e2e/trust.e2e.cjs.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// the tools on a scratch copy with no games/ (IHROTEKA_ROOT, before they load: repo.js reads it once): the dev server
+// serves only the probe, whatever games/ a developer has
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ihroteka-trust-'));
+fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ homepage: 'https://example.github.io/lib/' }));   // (gamePage's links)
+process.env.IHROTEKA_ROOT = root;
+after(() => fs.rmSync(root, { recursive: true, force: true }));
 globalThis.window ??= {};                              // config.js reads window.__timeScale and window.__pid as it loads
 const { MQTT_LIB } = await import('../library/net/config.js');
 const { page, gamePage } = await import('../tools/build.js');

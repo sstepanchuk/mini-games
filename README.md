@@ -50,12 +50,12 @@ library/   everything that runs in the browser
   game-api.js  window.ihroteka, injected into every game
 tools/     cli.js (commands) · repo.js (keys, sealed files) · build.js (bundling, site, checks) · dev.js (local server)
            · devnet.js (the dev server's fake network) · migrate.js (keyring format steps) · perf.js (a performance
-           report) · png.js (covers) · template/ (a new game: cli new)
+           report) · png.js (covers) · prompt.js (questions at the terminal) · template/ (a new game: cli new)
 tests/     unit tests (npm test); api-surface.json: the Game API, pinned; e2e/: browser scenarios (prod/: the
            assembled site; fixtures/probe: an open game for them)
 docs/      ROADMAP.md: the plan and the owner's decisions (in Ukrainian)
 vault/     what the repository keeps: keyring.json, and per game game.json, its cover,
-           game.bin (the built game, encrypted) and source.bin (its sources, encrypted)
+           game.bin (the built game, encrypted) and source.bin (its sources but the public cover beside it, encrypted)
 games/     plaintext game sources (local only, git-ignored)
 site/      the site, assembled from library/ and vault/ (git-ignored; CI assembles it on every push)
 ```
@@ -63,13 +63,14 @@ site/      the site, assembled from library/ and vault/ (git-ignored; CI assembl
 ## Usage
 
 ```sh
-npm install
-npm run unlock              # decrypt game sources into games/
+npm install                 # Node 22 or newer (as CI)
+npm run unlock              # decrypt game sources into games/; after git pull, it updates them and keeps your edits
 npm run dev                 # the library with your plaintext games at localhost:8000
 npm run dev -- --devnet     #   the same, and tabs play together without internet (?devnet in the address does it too)
 npm run new -- <id>         # a new game in games/<id>, from tools/template (see "Adding a game")
 npm run build               # run each game's own tests, bundle and encrypt the games into vault/, then assemble site/
-                            #   (a game whose tests fail is not sealed; -- --no-tests skips them)
+                            #   (a game whose tests fail is not sealed; -- --no-tests skips them; a vault/<id> that
+                            #   changed since your last unlock or build is not sealed over: npm run unlock, or -- --force)
 npm run site                # assemble site/ from library/ and vault/ (no password)
 npm run dev -- site         # serve the assembled site/ at localhost:8001 (its offline copy stays off :8000)
 npm run check               # validate vault/ (no password)
@@ -90,18 +91,29 @@ assembles the site again. CI also runs the browser scenarios, in Chromium and in
 (`.github/workflows/e2e.yml`) that does not hold up the deploy: with no password there, the dev server serves an open
 probe game (`npm run dev -- --probe`) and the production path runs without opening a sealed game.
 
+**Building together.** `games/` is each person's own; `vault/` is shared through git. After `git pull`, `npm run
+unlock` brings `games/` up to date with what someone else built and keeps your own edits (it names them, and leaves a
+game you both changed as it is: `npm run unlock -- --force` takes the vault's; the same edit on both sides is no
+conflict). Each `games/<id>/.vault-base` (local,
+never sealed) records which version that folder was last unlocked or built from, so `npm run build` refuses to seal a
+`games/<id>` that is behind `vault/<id>` over it; `npm run build -- --force` seals yours anyway. A folder from before
+`.vault-base` is recorded by the next build while it matches the vault; one that differs is refused until you take a
+side (`npm run unlock -- --force`, or `npm run build -- --force`).
+
 **devnet.** Playing together needs the public brokers, so with no internet the dev server can fake them: `npm run dev
 -- --devnet` (every library page), or `?devnet` in the address (that browser from then on, until `?devnet=0`). The
 fake brokers (`tools/devnet.js`) link the tabs of one browser; direct links stay real WebRTC. A «devnet» tag in the
 corner says it is on. Only the dev server puts it into a page: the assembled site never has it (`tests/devnet.test.js`).
 
 The dev server (games mode) registers no service worker, and answers `/sw.js` with one that removes itself: an
-offline copy left on the same address by `dev -- site` cannot hide your edits. A port can be given (`npm run dev
--- 8002`, `npm run dev -- site 8003`). `--lan` serves to your network over plain http, where browsers turn off the
-camera (no QR scanning; a code can be typed) and Web Crypto: a page without it plays nearby only, and «Грати разом»
-says why (no internet room: it could neither find the room's topic nor seal its traffic). To try a real
-phone, forward the port instead and open `http://localhost:8000/` on it: localhost counts as secure. Android: `adb
-reverse tcp:8000 tcp:8000` (or chrome://inspect → Port forwarding).
+offline copy left on the same address by `dev -- site` cannot hide your edits. Every link it prints has one origin,
+`http://localhost:<port>/` (a page's storage, its sign-in and offline copy, is per origin). A `game.json` that does not
+read leaves only that game off the shelf (the console says why; its own page, `/<id>/`, answers with the reason). A
+port can be given (`npm run dev -- 8002`, `npm run dev -- site 8003`). `--lan` serves to your network over plain
+http, where browsers turn off the camera (no QR scanning; a code can be typed) and Web Crypto: a page without it plays
+nearby only, and «Грати разом» says why (no internet room: it could neither find the room's topic nor seal its
+traffic). To try a real phone, forward the port instead and open `http://localhost:8000/` on it: localhost counts as
+secure. Android: `adb reverse tcp:8000 tcp:8000` (or chrome://inspect → Port forwarding).
 
 ## Adding a game
 
@@ -142,15 +154,19 @@ From nothing to two players on screen, then on the shelf:
 ```
 games/<id>/          <id> becomes the URL: /<id>/
   game.json          as in 7
-  index.html         <script type="module"> and <link rel="stylesheet"> are bundled inline
+  index.html         <script type="module">, <style> and <link rel="stylesheet"> are bundled inline
   preview.png        1200×630, used on the shelf and in link previews
   test/*.test.js     the game's own tests (node:test), sealed with it
 ```
 
-The build inlines everything into one page: start with `<!doctype html>`, keep assets next to `index.html` (relative
-links to anything that is not a style, module script or media file fail the build, and so does a `<script src>` from
-elsewhere: the site's policy refuses it, see Trust), and let modules import what they use: a string in the code that
-names a file next to the game (`'img/hero.png'`) is not there on the site, and the build warns about it.
+The build inlines everything into one page: start with `<!doctype html>`, keep assets next to `index.html`, and let
+modules import what they use. Module scripts (from a file or inline) and styles (`<style>` and `<link
+rel="stylesheet">`) are bundled; a relative URL in the page's own markup (`src`, `href`, `xlink:href`, `poster`,
+`background`, `data`, a `style="…url(…)"`) becomes a `data:` URL when it names a media file next to the page, and fails the build
+otherwise (and so do a `srcset` of local files, use `src`, and a `<script src>` from elsewhere: the site's policy
+refuses it, see Trust). What is inside a script or a style is code, not markup: a string in it that names a file next
+to the game (`'img/hero.png'`) is not there on the site, and the build warns about it. The build also names a cover
+that is not 1200×630, or is still the placeholder of `npm run new`.
 
 ## Game API
 
@@ -643,7 +659,12 @@ they need.
 ## Releases
 
 Each fix deploys on its own, with its test. A commit known to be good is tagged at the end of each phase (`git tag
-phase-N`, `git push origin phase-N`). Reports start with the site's version, `Ігротека <commit> <build day>` (`dev` on
-the dev server): `room.diag()` (and «Скопіювати звіт» over a game that broke: the same report), and `site` in
-`__ihroteka.state()`; the trace that ends a report is also `__ihroteka.trace()`. Rollback: `git revert` (back to a tag: `git revert
---no-commit phase-N..HEAD && git commit`) and push; devices take it when idle, as under **Deploy** above.
+phase-N`); `phase-0` and `phase-1a` exist only locally so far (pushing tags waits for the owner). The mixed-version
+tests (`tests/app/release.test.js`, `tests/net/version.test.js`: an earlier library against this one) take that
+library from `main`'s history (the one before the library's last change; a library edited and not committed yet
+plays against `HEAD`'s, the one it replaces), so they need no tag; CI fetches the whole history for them and fails
+if its history is shallow (locally, a shallow clone skips them and says why). Reports start with the site's version, `Ігротека <commit>
+<build day>` (`dev` on the dev server): `room.diag()` (and «Скопіювати звіт» over a game that broke: the same report),
+and `site` in `__ihroteka.state()`; the trace that ends a report is also `__ihroteka.trace()`. Rollback: `git revert`
+(back to a tag: `git revert --no-commit phase-N..HEAD && git commit`) and push; devices take it when idle, as under
+**Deploy** above.

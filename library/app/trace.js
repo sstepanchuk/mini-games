@@ -8,7 +8,7 @@ const lines = [];
 const UTF8 = new TextEncoder();
 
 export function note(text, key = text) {
-  const last = lines.at(-1), at = Date.now();
+  const last = lines[lines.length - 1], at = Date.now();   // (no .at(): Safari 15.4, as waiting.js)
   if (last && last.key === key) { last.text = text; last.at = at; last.n++; return; }
   lines.push({ at, text, key, n: 1 });
   if (lines.length > MAX) lines.shift();

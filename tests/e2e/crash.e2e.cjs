@@ -7,9 +7,9 @@
 // starts) is no broken game: no note, a line in the trace; nor is a promise left rejected because the browser refused
 // (NotAllowedError: a sound played before any tap). One left rejected with an error of the game's own is. Needs the dev
 // server with the plaintext games (npm run unlock): it opens Two Dragons; or with the probe (npm run dev -- --probe,
-// E2E_GAME=probe).
+// E2E_GAME=probe). First, a guard: a page's console.error is counted as an error (support/scenario.cjs watch).
 'use strict';
-const { U, w, launch, scenario, check, until, GAME } = require('./support/scenario.cjs');
+const { U, w, launch, watch, errs, scenario, check, step, until, GAME } = require('./support/scenario.cjs');
 const { fakeNet } = require('./support/fakenet.cjs');
 
 const SECRET = 'Таємниця-7';
@@ -24,6 +24,18 @@ const traced = (p, re) => p.evaluate(src => window.__ihroteka.trace().some(l => 
 
 scenario('crash: a game that breaks as it starts', async () => {
   const ctx = await (await launch()).newContext();
+  step('the guard: a watched page\'s console.error fails a scenario');
+  const guard = watch(await ctx.newPage(), 'guard');
+  await guard.addInitScript(fakeNet('bbbbbbbbbbbb'));
+  await guard.goto(U);
+  const e0 = errs.length;
+  await guard.evaluate(() => console.error(new TypeError('probe')));
+  await until(() => errs.length > e0, 3000, 50);
+  check(/console\.error TypeError: probe/.test(errs[e0] || ''), 'counted as an error on the page', errs.slice(e0));
+  errs.splice(e0, 1);                                     // (expected: the guard's own)
+  await guard.close();
+
+  step('a game that throws as it starts');
   const p = await ctx.newPage(), thrown = [];
   p.on('pageerror', e => thrown.push(e.message));        // (expected here: the scenario checks them itself)
   // what the game's page gets ahead of its own code: a script that throws, one whose ResizeObserver loops a while as

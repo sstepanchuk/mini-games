@@ -34,7 +34,9 @@ export const ICE = [
 // AUTH_WAIT < HOLD): a quiet player pauses the game first; the room's host moves on no later than a round's runner;
 // a place goes long after both. window.__timeScale (tests only: set before the library loads) scales them all,
 // and only them: the pulse and the watchdog's 200 ms do not scale, so below about 0.3 a linked player goes weak
-// between two pulses (measured idle, two tabs: at 0.1 the host paused 7 times in 8 s; at 0.3 never).
+// between two pulses (measured idle, two tabs: at 0.1 the host paused 7 times in 8 s; at 0.3 never). With a scale,
+// window.__timing (tests only) may set any of them outright, ms (a test that needs one long and the others short);
+// the order is checked after it.
 const BASE = {
   WEAK: 1500,                                          // a player silent this long is weak: the game pauses (link.js)
   SLEEP: 1300,                                         // a watchdog tick this much later than due: our own tab was asleep (link.js)
@@ -45,8 +47,10 @@ const BASE = {
   VERSION: 25000                                       // another library version not heard this long is forgotten (room.js otherVersion:
                                                        //   longer than two of a host's announcements with guests, 10 s apart; outside the order)
 };
-const SCALE = Number.isFinite(window.__timeScale) && window.__timeScale > 0 ? window.__timeScale : 1;
-export const TIMING = Object.freeze(Object.fromEntries(Object.entries(BASE).map(([k, v]) => [k, v * SCALE])));
+export const SCALE = Number.isFinite(window.__timeScale) && window.__timeScale > 0 ? window.__timeScale : 1;
+const SET = SCALE !== 1 && window.__timing && typeof window.__timing === 'object' ? window.__timing : {};
+const ms = v => typeof v === 'number' && Number.isFinite(v) && v > 0;
+export const TIMING = Object.freeze(Object.fromEntries(Object.entries(BASE).map(([k, v]) => [k, ms(SET[k]) ? SET[k] : v * SCALE])));
 if (!(TIMING.WEAK < TIMING.GRACE && TIMING.GRACE < TIMING.HOST_WAIT && TIMING.HOST_WAIT <= TIMING.AUTH_WAIT && TIMING.AUTH_WAIT < TIMING.HOLD)) {
   throw new Error('net: TIMING must keep WEAK < GRACE < HOST_WAIT <= AUTH_WAIT < HOLD');
 }

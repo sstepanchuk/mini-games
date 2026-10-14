@@ -29,8 +29,12 @@ npm run e2e -- --prod             # … and the production path (tests/e2e/prod)
 ```
 
 Each scenario prints its checks (`✓`, `✗`, and `· todo` for a known bug that does not fail it yet), then `PASS` or
-`FAIL`, and exits non-zero on a failed check, an uncaught error on any page, or a timeout; one that cannot run here
-(no site, no fake camera in WebKit) says `SKIP` and exits with 77. `run.cjs` exits non-zero if any scenario failed.
+`FAIL`, and exits non-zero on a failed check, a timeout, or an error on any page it watches (every page `openPage`
+opens): an uncaught one, or the page's code calling `console.error`, as the library does with a failure it catches
+(the browser's own messages, a 404 or a refused script, do not count, nor does `console.warn`; `crash` checks the rule
+itself first). One that cannot run here (no site, no fake camera in WebKit) says `SKIP` and exits with 77. `run.cjs`
+exits non-zero if any scenario failed; Ctrl+C (or any SIGINT, SIGTERM, SIGHUP) stops the scenarios it runs, and a
+scenario so stopped still removes what it made (a scratch copy, its dev server).
 
 Needs Playwright (a devDependency: `npm install`, then `npx playwright install chromium`; or a global one).
 `nearby3` opens the first game on the shelf, and `version`, `card`, `crash` and `trust` open Two Dragons (or the game
@@ -78,14 +82,20 @@ In `prod/` (`npm run e2e -- --prod`, against `E2E_SITE_URL`):
   call) and the traffic counts `__tx` (per path and message type; a sealed broker packet by what it carries) and `__wire`
   (per path); `__open(s)`: what a packet this page sent to the brokers carries. See the file's header.
 - `support/scenario.cjs`: `scenario(title, fn)`, `check(cond, what, detail)`, `todo(…)`, `skip(why)`, `until(fn, ms)`,
-  `launch()` (browsers closed at the end; the engine `E2E_BROWSER`), `E2E_URL`, `E2E_SITE_URL`, `E2E_GAME`;
-  `E2E_PERF=<file>` makes any scenario write what its pages counted (long tasks, what went out per path while
-  playing together) for `npm run perf` (tools/perf.js).
+  `launch()` (browsers closed at the end; the engine `E2E_BROWSER`), `watch(page, label)` (its errors fail the
+  scenario: `errs`; `forgive(from, re)` lets expected ones go), `exitOnSignals(before)` (a signal exits through the
+  process's `exit` handlers), `E2E_URL`, `E2E_SITE_URL`, `E2E_GAME`; `E2E_PERF=<file>` makes any scenario write what
+  its pages counted (long tasks, what went out per path while playing together) for `npm run perf` (tools/perf.js).
+- `support/runner.cjs`: the queue (`-j`), the server check and the summary of `run.cjs`, and a whole runner for a
+  game's own `test/e2e/run.cjs` (`runScenarios({ dir, sets, title, defaultSet })`; the games' runners still keep their
+  own until they are rebuilt); an item asked twice runs twice, each with its own result.
 - `support/pages.cjs`: the library page: `openPage` (`net: false`: no fake network, the page's own: devnet),
   `enterName`, `createLink`, `frameOf`, `libState` (the library's `__ihroteka.state()`), `short`, and nearby
   `phone()` / `pair()`.
 - `support/newgame.cjs`: `newGame(id, args, { devnet })`: `cli new` in a scratch copy of the repository and a dev
-  server of its own on a free port (`newgame`, `newgame3`, `template`).
+  server of its own on a free port (`newgame`, `newgame3`, `template`, `screens`; `G.log`: what that server said),
+  both gone when the scenario ends, by a signal too; `templateFrame(p, sel)` and `templateView(f)`: the template's
+  frame, and what a player sees in it.
 - `fixtures/probe`: the open probe game (`npm run dev -- --probe` serves it as `probe`): it shows the room as a game sees
   it and keeps what it heard in `window.__probe`.
 - `support/net.cjs`: net-level pages: `library/net` bundled with esbuild as `window.NET` on the library's origin,

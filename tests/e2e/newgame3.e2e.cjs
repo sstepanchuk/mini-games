@@ -13,20 +13,12 @@
 'use strict';
 const { launch, scenario, check, step, until, w } = require('./support/scenario.cjs');
 const { openPage, createLink, libState, short, waitShown } = require('./support/pages.cjs');
-const { newGame, SCREENS, sampled } = require('./support/newgame.cjs');
-
-// what a player sees in the game's frame
-const view = f => f.evaluate(() => {
-  const $ = id => document.getElementById(id);
-  return { lobby: !$('lobby').hidden, text: $('lobby-text').textContent, play: !$('play').hidden, total: +$('total').textContent, say: $('say').textContent,
-    seats: [...$('seats').children].map(li => li.textContent), steps: [...$('steps').children].map(b => !b.disabled), again: !$('again').hidden };
-}).catch(() => null);
-const frame = async p => { const e = await p.waitForSelector('iframe.frame', { timeout: 15000 }); const f = await e.contentFrame(); await f.waitForSelector('#lobby', { timeout: 15000 }); return f; };
+const { newGame, SCREENS, sampled, templateFrame: frame, templateView: view } = require('./support/newgame.cjs');
 
 scenario('newgame3: the template for three, in devnet tabs: only the runner\'s state counts; a player who leaves mid-round ends it; frozen seats', async () => {
   const G = await newGame('demo3', ['--players', '2-3', '--title', 'Демо три'], { devnet: true }), { port, url: U2 } = G;
   if (!check(G.made, 'cli new demo3 --players 2-3', G.out)) return;
-  if (!check(G.up, 'its dev server, with --devnet, at ' + U2)) return;
+  if (!check(G.up, 'its dev server, with --devnet, at ' + U2, G.log)) return;
 
   const ctx = await (await launch()).newContext({ viewport: { width: 800, height: 640 } });
   await ctx.addInitScript(SCREENS);

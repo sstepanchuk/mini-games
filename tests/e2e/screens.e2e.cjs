@@ -16,9 +16,9 @@
 'use strict';
 const { launch, scenario, check, step, until, w } = require('./support/scenario.cjs');
 const { openPage, createLink, libState, short, waitShown, clickWait } = require('./support/pages.cjs');
-const { newGame, SCREENS, sampled } = require('./support/newgame.cjs');   // (SCREENS: never two messages, sampled every 100 ms)
+const { newGame, SCREENS, sampled, templateFrame } = require('./support/newgame.cjs');   // (SCREENS: never two messages, sampled every 100 ms)
 
-const frameOf = async p => { const e = await p.waitForSelector('iframe.frame', { timeout: 15000 }); const f = await e.contentFrame(); await f.waitForSelector('main', { timeout: 15000 }); return f; };
+const frameOf = p => templateFrame(p, 'main');           // (main: #lobby is hidden mid-round)
 // what the live region of the library page says, and how often it changed since watchSay
 const watchSay = p => p.evaluate(() => {
   window.__said = 0;
@@ -31,7 +31,7 @@ const home = async p => (await frameOf(p)).evaluate(() => window.ihroteka.home()
 scenario('screens: the waiting screens in a game (<ihroteka-wait>): one message, wherever the player looks', async () => {
   const G = await newGame('demo5', ['--title', 'Демо 5']), { url: U2 } = G;
   if (!check(G.made, 'cli new demo5', G.out)) return;
-  if (!check(G.up, 'its dev server at ' + U2)) return;
+  if (!check(G.up, 'its dev server at ' + U2, G.log)) return;
 
   const ctx = await (await launch()).newContext({ viewport: { width: 360, height: 640 } });   // (one context: one fake network)
   await ctx.addInitScript(SCREENS);

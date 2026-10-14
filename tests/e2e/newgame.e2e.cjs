@@ -11,20 +11,12 @@
 'use strict';
 const { launch, scenario, check, step, until } = require('./support/scenario.cjs');
 const { openPage, createLink, enterName, libState, short, waitShown } = require('./support/pages.cjs');
-const { newGame, SCREENS, sampled } = require('./support/newgame.cjs');
-
-// what a player sees in the game's frame
-const view = f => f.evaluate(() => {
-  const $ = id => document.getElementById(id);
-  return { lobby: !$('lobby').hidden, text: $('lobby-text').textContent, play: !$('play').hidden, total: +$('total').textContent, say: $('say').textContent,
-    steps: [...$('steps').children].map(b => !b.disabled), again: !$('again').hidden };
-}).catch(() => null);
-const frame = async p => { const e = await p.waitForSelector('iframe.frame', { timeout: 15000 }); const f = await e.contentFrame(); await f.waitForSelector('#lobby', { timeout: 15000 }); return f; };
+const { newGame, SCREENS, sampled, templateFrame: frame, templateView: view } = require('./support/newgame.cjs');
 
 scenario('newgame: cli new, then two devnet tabs play it without internet', async () => {
   const G = await newGame('demo2', ['--title', 'Демо два'], { devnet: true }), { port, url: U2 } = G;
   if (!check(G.made, 'cli new demo2', G.out)) return;
-  if (!check(G.up, 'its dev server, with --devnet, at ' + U2)) return;
+  if (!check(G.up, 'its dev server, with --devnet, at ' + U2, G.log)) return;
 
   const ctx = await (await launch()).newContext({ viewport: { width: 900, height: 700 } });
   const away = [];

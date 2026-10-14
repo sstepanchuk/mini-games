@@ -27,7 +27,6 @@
    написів не малює (README, «Waiting screens»). Свій напис про паузу чи очікування, якщо додаси, ховай, поки бібліотека
    щось каже (крім версії): document.querySelector('ihroteka-wait[showing]:not([showing=version])'); коли сказане
    змінюється, екран шле подію 'showing'. */
-/* global document, window */
 import { newRound, move, newer, valid, TARGET, STEPS } from './rules.js';
 
 const lib = window.ihroteka, round = lib ? lib.round : null, room = round ? lib.room : null;

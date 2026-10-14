@@ -17,7 +17,7 @@ const enc = new TextEncoder(), dec = new TextDecoder();
 
 export const random = n => globalThis.crypto.getRandomValues(new Uint8Array(n));
 export const b64 = u8 => btoa(Array.from(new Uint8Array(u8), b => String.fromCharCode(b)).join(''));
-const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+export const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 export const text = u8 => dec.decode(u8);
 // a game is sealed gzipped (a third of the size: ciphertext cannot be compressed later); older ones are plain
 export const gameText = u8 => u8[0] === 0x1f && u8[1] === 0x8b

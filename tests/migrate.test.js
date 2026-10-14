@@ -13,8 +13,7 @@ import { v3to4 } from '../tools/migrate.js';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TOOL = path.join(REPO, 'tools', 'migrate.js'), CLI = path.join(REPO, 'tools', 'cli.js');
 const PW = { alice: 'alice made up 1', bob: 'bob made up 2' }, ITER = 1000;
-const { subtle } = globalThis.crypto, enc = new TextEncoder();
-const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const { subtle } = globalThis.crypto, enc = new TextEncoder(), { unb64 } = vault;
 const roots = [];
 let v3 = '', raw = null, sealed = null;
 
@@ -102,6 +101,10 @@ test('--dry-run checks everything and writes nothing', () => {
   assert.match(r.out, /nothing written/);
   assert.doesNotMatch(r.out, /Password of/);
   assert.equal(keyring(root), v3);
+  // one per line, as a file from Windows has them too
+  const crlf = run(root, ['--dry-run'], { VAULT_PASSWORDS: PW.bob + '\r\n' + PW.alice + '\r\n' });
+  assert.ok(crlf.ok, crlf.out);
+  assert.doesNotMatch(crlf.out, /Password of/);
 });
 
 test('a missing or wrong password: nothing is written', () => {

@@ -1,8 +1,12 @@
 // A game made by `cli new` in a scratch copy of the repository (IHROTEKA_ROOT: no keyring, no password), served by a
 // dev server of its own on a free port: for the scenarios that try the template (newgame, newgame3, template, screens).
-// The scratch copy and the server go when the scenario's process exits.
+// The scratch copy and the server go when the scenario's process exits, a signal too (SIGINT, SIGTERM, SIGHUP:
+// scenario.cjs exitOnSignals).
 //   const G = await newGame('demo2', ['--title', 'Демо два'], { devnet: true })
-//   G.made: cli new worked (G.out: what it said); G.up: its server answers at G.url (port G.port)
+//   G.made: cli new worked (G.out: what it said); G.up: its server answers at G.url (port G.port); G.log: what the
+//   server said (its stdout and stderr: the detail of a failed check(G.up, …))
+// The template's page in a library page p: templateFrame(p, sel) waits for its frame and sel visible in it (#lobby,
+// or main: #lobby is hidden mid-round); templateView(f) is what a player sees there (null: the frame is gone).
 // The template puts the library's waiting screen under its title (<ihroteka-wait>, README "Waiting screens"), where it
 // is always seen: whom it waits for shows there, never in the library's card over it. SCREENS, an init script for the
 // context (ctx.addInitScript(SCREENS)), counts in every library page, every 100 ms, which showed rows: the card, the
@@ -13,7 +17,7 @@ const os = require('node:os');
 const net = require('node:net');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
-const { until } = require('./scenario.cjs');
+const { until, exitOnSignals } = require('./scenario.cjs');
 
 const CLI = path.join(__dirname, '..', '..', '..', 'tools', 'cli.js');
 const freePort = () => new Promise(res => { const s = net.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => res(port)); }); });
@@ -23,16 +27,22 @@ async function newGame(id, args = [], { devnet = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ihroteka-' + id + '-'));
   let server = null;
   process.on('exit', () => { if (server) server.kill(); fs.rmSync(root, { recursive: true, force: true }); });
+  exitOnSignals();
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ homepage: 'https://example.github.io/lib/' }));
   const env = { ...process.env, IHROTEKA_ROOT: root };
   delete env.VAULT_PASSWORD;
   const r = spawnSync(process.execPath, [CLI, 'new', id, ...args], { env, encoding: 'utf8' });
-  const G = { made: r.status === 0 && r.stdout.includes('games/' + id), out: r.stdout + r.stderr, up: false, url: null, port: null };
+  const log = [];
+  const G = { made: r.status === 0 && r.stdout.includes('games/' + id), out: r.stdout + r.stderr, up: false, url: null, port: null, get log() { return Buffer.concat(log).toString(); } };
   if (!G.made) return G;
   G.port = await freePort();
   G.url = 'http://127.0.0.1:' + G.port + '/';
   server = spawn(process.execPath, [CLI, 'dev', String(G.port), ...(devnet ? ['--devnet'] : [])], { env, stdio: ['ignore', 'pipe', 'pipe'] });
-  G.up = !!await until(() => fetch(G.url, { signal: AbortSignal.timeout(1000) }).then(x => x.ok, () => false), 15000);
+  let ended = false;
+  server.stdout.on('data', d => log.push(d));
+  server.stderr.on('data', d => log.push(d));
+  server.on('exit', (code, signal) => { ended = true; log.push(Buffer.from('(the dev server exited: ' + (signal || code) + ')\n')); });
+  G.up = await until(() => ended ? 'ended' : fetch(G.url, { signal: AbortSignal.timeout(1000) }).then(x => x.ok, () => false), 15000) === true;
   return G;
 }
 
@@ -55,4 +65,19 @@ function SCREENS() {
 // → { n (samples), card, screen, both, many (how many samples showed each) }, or null (a page closed, or none taken)
 const sampled = p => p.isClosed() ? Promise.resolve(null) : p.evaluate(() => window.__screens || null).catch(() => null);
 
-module.exports = { newGame, SCREENS, sampled };
+// the template's frame in the library page p, once sel shows in it
+async function templateFrame(p, sel = '#lobby') {
+  const e = await p.waitForSelector('iframe.frame', { timeout: 15000 });
+  const f = await e.contentFrame();
+  await f.waitForSelector(sel, { timeout: 15000 });
+  return f;
+}
+// what a player sees in the template's frame f: its lobby (and what it says), a round (the total, the seats, whose
+// turn: say; which buttons work), «Ще раз»; null when the frame is gone
+const templateView = f => f.evaluate(() => {
+  const $ = id => document.getElementById(id);
+  return { lobby: !$('lobby').hidden, text: $('lobby-text').textContent, play: !$('play').hidden, total: +$('total').textContent, say: $('say').textContent,
+    seats: [...$('seats').children].map(li => li.textContent), steps: [...$('steps').children].map(b => !b.disabled), again: !$('again').hidden };
+}).catch(() => null);
+
+module.exports = { newGame, SCREENS, sampled, templateFrame, templateView };

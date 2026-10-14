@@ -3,8 +3,10 @@
 // <ihroteka-wait>, under its title); `remove-game` asks for --yes and keeps the plaintext sources aside; game.json
 // "api" is checked against the library's version; the build warns about a string in a game's code that looks like a
 // file next to it (on the site the game is one page), and refuses a script from elsewhere (the site's policy would:
-// README, Trust); the library API it puts first in a game's page defines the game's waiting screens (<ihroteka-wait>)
-// only inside the library.
+// README, Trust); it reads only the page's own markup for links (what is inside a script or a style is code), and
+// leaves no relative URL there that the site would not have; the library API it puts first in a game's page defines
+// the game's waiting screens (<ihroteka-wait>) only inside the library. A game whose own tests never finish is not
+// sealed, and one whose tests leave a timer open is; the placeholder cover of `cli new` is noticed (coverWarnings).
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -15,7 +17,9 @@ import { spawnSync } from 'node:child_process';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ihroteka-tools-'));
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 process.env.IHROTEKA_ROOT = root;                      // (before the tools load: repo.js reads it once)
-const { readManifest, bundleGame, testGame, apiVersion, assetStrings, withLibraryApi } = await import('../tools/build.js');
+const { readManifest, bundleGame, testGame, apiVersion, assetStrings, withLibraryApi, coverWarnings } = await import('../tools/build.js');
+const { png } = await import('../tools/png.js');
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');   // 1×1
 const CLI = path.join(import.meta.dirname, '..', 'tools', 'cli.js');
 const ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^VAULT_PASSWORDS?$/.test(k)));
 const cli = (...args) => { const r = spawnSync(process.execPath, [CLI, ...args], { env: { ...ENV, IHROTEKA_ROOT: root }, encoding: 'utf8' }); return { ok: r.status === 0, out: r.stdout + r.stderr }; };
@@ -29,8 +33,8 @@ test('cli new: a game from the template, valid for the build, its own tests pass
   assert.match(r.out, /--devnet/);
   const g = readManifest('demo2');
   assert.deepEqual([g.title, g.players, g.wire, g.api], ['Демо <два>', '2-4', 1, apiVersion()]);
-  const png = fs.readFileSync(file('games/demo2', g.image));
-  assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [1200, 630], 'a 1200×630 cover');
+  const made = fs.readFileSync(file('games/demo2', g.image));
+  assert.deepEqual([made.readUInt32BE(16), made.readUInt32BE(20)], [1200, 630], 'a 1200×630 cover');
   const page = fs.readFileSync(file('games/demo2/index.html'), 'utf8');
   assert.match(page, /<title>Демо &lt;два&gt;<\/title>/);
   assert.match(page, /<h1>[^<]*<\/h1>\s*(<!--[\s\S]*?-->\s*)?<ihroteka-wait><\/ihroteka-wait>/, 'the library\'s waiting screen, empty, under its title (README "Waiting screens")');
@@ -38,6 +42,21 @@ test('cli new: a game from the template, valid for the build, its own tests pass
   const warned = [], html = await bundleGame('demo2', g, { warn: m => warned.push(m) });
   assert.ok(/^<!doctype html>/i.test(html) && !/src="main\.js"/.test(html) && html.includes('window.ihroteka'), 'one page, the API first');
   assert.deepEqual(warned, [], 'nothing it names is missing on the site');
+  // its cover is the placeholder: the build says so (cli build prints it), by its pixels, whatever its theme says now
+  const placeholder = ['games/demo2/preview.png is still the placeholder from cli new: replace it with a picture of the game (README, Adding a game, 8)'];
+  assert.deepEqual(coverWarnings('demo2', g), placeholder);
+  const at = file('games/demo2/game.json'), cov = file('games/demo2', g.image), json = fs.readFileSync(at);
+  try {
+    fs.writeFileSync(at, JSON.stringify({ ...g, theme: '#123456' }));
+    assert.deepEqual(coverWarnings('demo2', readManifest('demo2')), placeholder, 'a theme added later');
+    fs.writeFileSync(at, json);
+    fs.writeFileSync(cov, PNG);
+    assert.deepEqual(coverWarnings('demo2', g), ['games/demo2/preview.png is 1×1: the shelf and link previews expect 1200×630']);
+    fs.writeFileSync(cov, 'GIF89a');
+    assert.deepEqual(coverWarnings('demo2', g), ['games/demo2/preview.png is not a PNG']);
+    fs.writeFileSync(cov, png(1200, 630, () => [1, 2, 3]));
+    assert.deepEqual(coverWarnings('demo2', g), [], 'a picture of the game');
+  } finally { fs.writeFileSync(at, json); fs.writeFileSync(cov, made); }
 });
 
 // (owner, decision 6 (c): README "Waiting screens"; the element is defined in the game's own window, before its page
@@ -155,4 +174,88 @@ test('the build refuses a script from elsewhere: the site\'s policy would refuse
     }
   } finally { fs.writeFileSync(at, was); }
   await bundleGame('demo2', readManifest('demo2'));      // (as it was: bundled)
+});
+
+// (only the page's own markup is read for links: a script or a style holds code, and a string or a template in it
+// that looks like a tag is not one)
+test('the build reads only the page\'s own markup for links: what is inside its scripts and styles is code', async () => {
+  const main = file('games/demo2/main.js'), at = file('games/demo2/index.html'), was = fs.readFileSync(main, 'utf8'), page = fs.readFileSync(at, 'utf8');
+  const inline = '<script>const pic = u => `<img src="${u}" alt="">`; console.log(pic);</script>';
+  try {
+    fs.writeFileSync(main, was + '\nexport const pic = u => `<img src="${u}" alt="">`;\nconst rules = \'<a href="rules.html">правила</a>\', shot = \'<img src="preview.png" alt="">\';\n' +
+      'document.body.insertAdjacentHTML(\'beforeend\', pic(location.hash) + rules + shot);\n');
+    fs.writeFileSync(at, page.replace('</head>', () => inline + '\n</head>'));
+    const warned = [], html = await bundleGame('demo2', readManifest('demo2'), { warn: m => warned.push(m) });
+    const js = html.match(/<script type="module">([\s\S]*?)<\/script>/)?.[1] ?? '';
+    assert.ok(js.includes('<img src="${') && js.includes('<a href="rules.html">правила</a>') && js.includes('<img src="preview.png" alt="">'), 'the template and both strings, as they were');
+    assert.ok(!js.includes('data:image'), 'nothing put into the code');
+    assert.ok(html.includes(inline), 'the inline script, as it was');
+    assert.deepEqual(warned.map(m => m.match(/names "([^"]+)"/)?.[1]), ['preview.png'], warned.join('\n'));
+    // the same in the page's own markup: a link to a page is refused, a picture inlined
+    fs.writeFileSync(main, was);
+    fs.writeFileSync(at, page.replace('</main>', () => '<a href="rules.html">правила</a>\n</main>'));
+    await assert.rejects(bundleGame('demo2', readManifest('demo2')), /"rules\.html" would not exist on the site/);
+    fs.writeFileSync(at, page.replace('</main>', () => '<img src="preview.png" alt="">\n</main>'));
+    assert.match(await bundleGame('demo2', readManifest('demo2')), /<img src="data:image\/png;base64,[^"]+" alt="">/);
+  } finally { fs.writeFileSync(main, was); fs.writeFileSync(at, page); }
+});
+
+// (the site serves only index.html, game.bin and the cover under /<id>/: anything else a relative URL names would 404)
+test('the build leaves no relative URL the site would not have', async () => {
+  const at = file('games/demo2/index.html'), page = fs.readFileSync(at, 'utf8'), extra = [file('games/demo2/hero.png'), file('games/demo2/helper.js')];
+  fs.copyFileSync(file('games/demo2/preview.png'), extra[0]);
+  fs.writeFileSync(extra[1], 'export const winner = 42;\n');
+  const build = async (...tags) => {
+    fs.writeFileSync(at, page.replace('</main>', () => tags.join('\n') + '\n</main>'));
+    const warned = [];
+    return { html: await bundleGame('demo2', readManifest('demo2'), { warn: m => warned.push(m) }), warned };
+  };
+  try {
+    const { html, warned } = await build(
+      '<script type="module">import { winner } from \'./helper.js\'; document.documentElement.dataset.ran = winner; new Audio(\'sfx/hit.mp3\');</script>',
+      '<style>#bg { background: url(hero.png) } #f { filter: url(#blur) }</style><div id="bg"></div>',
+      '<div style="background:url(\'hero.png\')"></div>',
+      '<img src=hero.png alt="">',
+      '<video poster="hero.png"></video>',
+      '<svg><image xlink:href="hero.png"/></svg>',
+      '<!-- <img src="gone.png"> -->');
+    assert.ok(!html.includes('helper.js') && /<script type="module">[^<]*dataset\.ran=42/.test(html), 'the inline module bundled, still a module');
+    assert.ok(!html.includes('hero.png'), 'every hero.png inlined');
+    assert.match(html, /<style>#bg\{background:url\(data:image\/png;base64,[^)]+\)\}#f\{filter:url\(#blur\)\}<\/style>/);
+    assert.match(html, /<div style="background:url\(data:image\/png;base64,[^)]+\)"><\/div>/);
+    assert.match(html, /<img src="data:image\/png;base64,[^"]+" alt="">/);
+    assert.match(html, /<video poster="data:image\/png;base64,[^"]+"><\/video>/);
+    assert.match(html, /<image xlink:href="data:image\/png;base64,[^"]+"\/>/);
+    assert.ok(html.includes('<!-- <img src="gone.png"> -->'), 'a comment, as it was');
+    assert.equal(warned.length, 1, warned.join('\n'));
+    assert.match(warned[0], /an inline module of games\/demo2\/index\.html names "sfx\/hit\.mp3"/);
+    for (const [tag, why] of [['<style>body { background: url(nothere.png) }</style>', /games\/demo2\/index\.html.*"nothere\.png"/],
+      ['<img srcset="hero.png 2x" alt="">', /srcset: "hero\.png" would not exist on the site/],
+      ['<div style="background: url(&quot;nothere.png&quot;)"></div>', /style: "nothere\.png" would not exist on the site/],
+      ['<iframe src=helper.js></iframe>', /src: "helper\.js" would not exist on the site/],
+      ['<script src="helper.js"></script>', /<script src="helper\.js"> must be type="module"/]])
+      await assert.rejects(build(tag), why, tag);
+  } finally { fs.writeFileSync(at, page); for (const f of extra) fs.rmSync(f); }
+});
+
+// (a game's own tests are its only gate before it is sealed: one that never finishes must not hang the build; a timer
+// a test leaves open must not either, and that game is fine)
+test('testGame: a game whose tests never finish is refused with that message; a passing game that leaves a timer open passes', () => {
+  const game = (id, code) => {
+    fs.mkdirSync(file('games', id, 'test'), { recursive: true });
+    fs.writeFileSync(file('games', id, 'test/a.test.js'), 'const { test } = require(\'node:test\');\n' + code + '\n');
+  };
+  game('stuck', 'test(\'never finishes\', async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });');
+  game('leaky', 'setInterval(() => {}, 1000);\ntest(\'passes\', () => {});');
+  const left = () => spawnSync('ps', ['-eo', 'args'], { encoding: 'utf8' }).stdout.split('\n').filter(l => l.includes(file('games')));
+  try {
+    let t0 = Date.now();
+    assert.throws(() => testGame('stuck', { timeout: 2000 }), e => /^games\/stuck: its tests did not finish in 2 s \(an open timer or server, a promise that never settles\?\), so it is not sealed \(npm run test:games; to build anyway: npm run build -- --no-tests\)\n[\s\S]*stuck\/test\/a\.test\.js[\s\S]*test timed out after 2000ms/.test(e.message));
+    assert.ok(Date.now() - t0 < 30000, 'within seconds: ' + (Date.now() - t0) + ' ms');
+    assert.deepEqual(left(), [], 'no process left');
+    t0 = Date.now();
+    assert.equal(testGame('leaky'), 1);
+    assert.ok(Date.now() - t0 < 30000, 'quickly: ' + (Date.now() - t0) + ' ms');
+    assert.deepEqual(left(), [], 'no process left');
+  } finally { for (const id of ['stuck', 'leaky']) fs.rmSync(file('games', id), { recursive: true, force: true }); }
 });

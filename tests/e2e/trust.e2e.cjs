@@ -17,7 +17,7 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
-const { U, w, launch, watch, errs, scenario, check, step, until, CHROMIUM = true, GAME: ID = 'dragons' } = require('./support/scenario.cjs');
+const { U, w, launch, watch, errs, forgive: letGo, scenario, check, step, until, CHROMIUM = true, GAME: ID = 'dragons' } = require('./support/scenario.cjs');
 const { fakeNet } = require('./support/fakenet.cjs');
 
 const CONFIG = fs.readFileSync(path.join(__dirname, '../../library/net/config.js'), 'utf8');
@@ -94,7 +94,7 @@ const ran = wk => wk.said === 'ran' || (!CHROMIUM && /^failed: ReferenceError/.t
 
 // WebKit reports as the page's own errors what the test caused there on purpose (the worker the harness broke, the
 // camera refused to the probe): from errs[from] on, those are let go
-const forgive = (from, re) => { if (!CHROMIUM) for (let i = errs.length - 1; i >= from; i--) if (re.test(errs[i])) errs.splice(i, 1); };
+const forgive = (from, re) => { if (!CHROMIUM) letGo(from, re); };
 
 // the open game's frame: its allow attribute, and whether it may use the camera and the microphone (the browser's own
 // answer: Chromium says it through document.featurePolicy, and getUserMedia answers, with Chromium's fake devices: 'on')

@@ -10,7 +10,7 @@ import path from 'node:path';
 import http from 'node:http';
 import * as esbuild from 'esbuild';
 import { fileURLToPath } from 'node:url';
-import { P, MIME, rel, exists, problem, gameIds } from './repo.js';
+import { P, MIME, rel, exists, problem, gameIds, Problem } from './repo.js';
 import { readManifest, shelfEntry, withLibraryApi, page } from './build.js';
 import { devnetFor, devnetScript } from './devnet.js';
 
@@ -40,7 +40,15 @@ const gameHtml = (id, dir) => withLibraryApi(fs.readFileSync(path.join(dir, 'ind
 // instead, so that what the site would refuse (a script from elsewhere, eval) fails here too.
 export const csp = () => fs.readFileSync(path.join(P.app, 'page.html'), 'utf8').match(/<meta http-equiv="Content-Security-Policy" content="([^"]*)">/)[1];
 function shelfHtml(game, dirs, devnet) {
-  const games = Object.entries(dirs).map(([id, dir]) => shelfEntry(id, readManifest(id, dir)));
+  if (game) readManifest(game, dirs[game]);             // a game's own page says why its game.json does not read (500)
+  // on the shelf, a game.json that does not read takes only its own game off it
+  const games = Object.entries(dirs).flatMap(([id, dir]) => {
+    try { return [shelfEntry(id, readManifest(id, dir))]; } catch (e) {
+      if (!(e instanceof Problem)) throw e;
+      console.error('✗ ' + e.message + ' (left off the shelf)');
+      return [];
+    }
+  });
   const html = page({ title: 'Ігротека (dev)', description: '', shareTitle: '', shareDescription: '', imageUrl: '', imageAlt: '', emoji: '🛠', theme: '#e4e2f0',
     base: '/', bootArgs: JSON.stringify({ game, dev: { games } }) });
   return devnet ? html.replace('</head>', () => devnetScript() + '\n</head>') : html;   // (before the library's code runs)
@@ -90,17 +98,18 @@ export function devServer(what = 'games', { devnet = false, probe = false } = {}
   });
 }
 
-// port: given on the command line, or by mode (cli.js passes its own '8000' when none was typed)
+// port: as typed on the command line (cli.js passes none when none was typed), or by mode
 export function serve(what = 'games', port, host = '127.0.0.1', opt = {}) {
   const games = what !== 'site';
-  const typed = process.argv.slice(2).some(a => /^\d+$/.test(a));
-  if (!port || (!games && port === '8000' && !typed)) port = games ? '8000' : '8001';
+  port ||= games ? '8000' : '8001';
   devServer(what, opt).on('error', e => {
     console.error('✗ ' + (e.code === 'EADDRINUSE' ? 'Port ' + port + ' is busy: npm run dev -- <another port>' : e.message));
     process.exit(1);
   }).listen(+port, host, () => {
-    console.log('http://' + (host === '0.0.0.0' ? 'localhost' : host) + ':' + port + '/' + (host === '127.0.0.1' ? '' : '   (reachable from your network)'));
-    if (games) for (const id of Object.keys(gameDirs(opt.probe))) console.log('  ' + id + ': http://localhost:' + port + '/' + id + '/');
+    // one origin for every link: a page's storage (its sign-in, its offline copy) is per origin
+    const at = 'http://localhost:' + port + '/';
+    console.log(at + (host === '127.0.0.1' ? '' : '   (reachable from your network)'));
+    if (games) for (const id of Object.keys(gameDirs(opt.probe))) console.log('  ' + id + ': ' + at + id + '/');
     if (games) console.log(opt.devnet ? '  devnet: a fake network between the tabs of one browser (tools/devnet.js)' : '  two tabs playing together without internet: add ?devnet to the address (or npm run dev -- --devnet)');
   });
 }

@@ -5,19 +5,29 @@
 // (seal.js here); a stranger (spy({ stranger: true })) knows no code, sees the packets as they are and can send any
 // of them again. Each world belongs to one test and is torn down when that test ends; an error inside any of its
 // tabs (an exception from a timer or a listener, console.error) then fails that test, as a page error fails a
-// browser scenario.
+// browser scenario, also one inside a tab that went before (close, reload, kill: it is asked as it goes).
 //
-//   const W = world(t, { scale, rtc })     scale: window.__timeScale of every tab (config.js TIMING); rtc: fake direct
-//                                          links (fakertc.js) besides the brokers
-//   const A = await W.tab('aaaa1111')      a tab; its session starts with this pid (sessions decide some elections)
+//   const W = world(t, { scale, timing, rtc })
+//                                          scale: window.__timeScale of every tab (config.js TIMING); timing: any of
+//                                          TIMING set outright, ms (window.__timing: only with a scale, so a test can
+//                                          have one long and the rest short); rtc: fake direct links (fakertc.js)
+//                                          besides the brokers
+//   const A = await W.tab('aaaa1111')      a tab; its session starts with this pid (sessions decide some elections);
+//                                          W.tab(pid, net, { strip, reloadAnswer, initial, … }): a browser without
+//                                          what strip names ('Array.prototype.at' …), see tab.js
 //   await A.join('room01', 'Аня')          a net-level room (library/net joinRoom); A.lib(code, name, seats, wires): the
 //                                          library's room (together.js), and A.open(game), A.game(), A.gsend(m) → true |
 //                                          false, A.snapshot(s), A.share(k, v) …;
 //                                          A.near(name): a nearby one (rtc), paired with A.pair('offer' | 'answer' | 'finish', code);
 //                                          A.libNear(name): the library's nearby room (together.js startNearby), paired so too
 //   await A.state(), A.events(), A.got(), A.net({ up: false }), A.send(m, opts, then), A.release(n), A.lag(n), A.leave(), A.kill(),
-//   A.listeners(), A.timers() …; const A2 = await A.reload(): the page reloads in the same tab (its sessionStorage kept),
-//                                          in no room until A2.lib(…), as a page that comes back from its room's link
+//   A.listeners(), A.timers() …; A.open(id, { wire }): a game whose copy here speaks this wire;
+//   A.pagehide({ persisted, lost, quiet }), A.pageshow({ after, quiet }): into the back-forward cache and back (quiet: no
+//                                          'offline' / 'online' with them, as browsers do; netState().said counts them); A.throttle({ every }):
+//                                          its timers held back as a hidden tab's (tab.js, the top)
+//   const A2 = await A.reload()            the page reloads in the same tab (its sessionStorage kept), in no room until
+//                                          A2.lib(…), as a page that comes back from its room's link; at its game, if
+//                                          it was in one (/<id>/?room=: the shell shows it before the room is back)
 //   await until(async () => …, ms)         poll a condition (truthy → it; deadline → false)
 //   const S = W.spy()                      S.seen: [{ topic, url, m, raw, sealed }] (m: opened if the spy knows the room);
 //                                          S.publish(topic, m, session, { plain }): sealed (if known) to every broker;
@@ -74,9 +84,18 @@ export async function room(W, code, names, o = {}) {
 // a sealed topic's room: the topic itself, or its mailboxes' (seal.js: 'ihroteka/s/' + 32 hex, then '/d/from/to')
 const roomOf = topic => topic.startsWith('ihroteka/s/') ? topic.slice(0, 43) : topic;
 
-export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
+export function world(t, { scale = 1, timing = null, brokerMs = 25, rtc = false } = {}) {
   const bus = 'tabs-' + process.pid + '-' + (++worlds);
   const tabs = [], spies = [];
+  // What went wrong inside a tab, its errors so far: ['pid: error', …] (as: how it is named); one that does not answer
+  // in 10 s (stuck in a loop, or frozen past the test's end) is one, so a hung tab fails its test instead of hanging the
+  // run. A tab that goes (close, reload, kill) leaves its errors in gone first.
+  const gone = [];
+  const ask = (T, as = T.pid) => new Promise(res => {
+    const k = setTimeout(() => res([as + ': no answer in 10 s (a loop that never ends?)']), 10000);
+    T.errors().then(e => e.map(x => as + ': ' + x), () => []).then(e => { clearTimeout(k); res(e); });
+  });
+  const going = async T => { gone.push(...await ask(T, T.pid + ' (before it went)')); };
   let urls = null;
   // the rooms the tabs joined: sealed topic → key; and each sender's highest number on the bus (a spy that speaks as
   // that sender takes one above it: the replay window, seal.js, takes no number twice nor one far below the highest)
@@ -95,21 +114,25 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
     bus,
     /** a new tab; net: fakenet switches to start with; library: another library/ folder to run (an older version);
      *  dev: the page is the dev server's (together.js warns in its console); insecure: no Web Crypto (plain http);
-     *  kept: its sessionStorage to start with, [[key, value], …] (reload) */
-    async tab(pid, net = {}, { library, dev, insecure, kept } = {}) {
-      const w = new Worker(TAB, { workerData: { pid, bus, scale, brokerMs, rtc, net, library, dev, insecure, kept } });
+     *  kept: its sessionStorage to start with, [[key, value], …] (reload); initial: the game its address names (reload);
+     *  strip: what this browser does not have ('Array.prototype.at', 'structuredClone' …); reloadAnswer: what the
+     *  shell's reload says ('reload': once the offline copy is in place, reloadDone; 'storage', 'failed', 'timeout',
+     *  'same': at once). A tab whose library does not load (its timing refused) → rejects */
+    async tab(pid, net = {}, { library, dev, insecure, kept, initial, strip, reloadAnswer } = {}) {
+      const w = new Worker(TAB, { workerData: { pid, bus, scale, timing, brokerMs, rtc, net, library, dev, insecure, kept, initial, strip, reloadAnswer } });
       const waits = new Map();
       let n = 0, dead = null;
       const ready = new Promise((res, rej) => {
         w.on('message', m => {
           if (m.ready) { urls = urls || m.urls; res(m); return; }
+          if (m.failed) { rej(new Error('tab ' + pid + ': the library did not load: ' + m.failed)); w.terminate(); return; }
           const p = waits.get(m.id);
           if (!p) return;
           waits.delete(m.id);
           if (m.ok) p.res(m.value); else p.rej(new Error(m.error));
         });
         w.on('error', e => { dead = e; rej(e); for (const p of waits.values()) p.rej(e); });
-        w.on('exit', () => { dead = dead || new Error('tab ' + pid + ' is gone'); for (const p of waits.values()) p.rej(dead); waits.clear(); });
+        w.on('exit', () => { dead = dead || new Error('tab ' + pid + ' is gone'); rej(dead); for (const p of waits.values()) p.rej(dead); waits.clear(); });
       });
       const call = (cmd, args) => dead ? Promise.reject(dead) : new Promise((res, rej) => { const id = ++n; waits.set(id, { res, rej }); w.postMessage({ id, cmd, args }); });
       const { session } = await ready;
@@ -134,7 +157,7 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
         net: o => call('net', o),
         errors: () => call('errors'),
         takeErrors: () => call('takeErrors'),              // its errors (console.error and .warn too) so far, then forgotten
-        open: id => call('open', { id }),
+        open: (id, o = {}) => call('open', { id, ...o }),    // o: { wire } (the wire this copy of the game speaks)
         game: () => call('game'),
         gsend: (m, opts) => call('gsend', { m, opts }),
         snapshot: s => call('gsnapshot', { s }),
@@ -144,6 +167,11 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
         info: (code, game) => { know(game || 'test', code); return call('info', { code, game }); },
         killDc: () => call('killDc'),
         hide: on => call('hide', { on }),                  // the page hidden (a locked phone) or shown again
+        // the page goes into the back-forward cache ({ persisted: true }; lost: its goodbye lost, its sockets already
+        // dead), and back from it after ms ({ after }): tab.js; throttle({ every }): its timers held back as a hidden tab's
+        pagehide: o => call('pagehide', o),
+        pageshow: o => call('pageshow', o),
+        throttle: o => call('throttle', o),
         siteData: on => call('siteData', { on }),          // the browser blocks the page's site data (false) or allows it
         reloadDone: () => call('reloadDone'),              // the shell's reload, its offline copy in place: 'reload' | 'stay' | null
         stored: k => call('stored', { k }),                // sessionStorage[k] (JSON), as the next page would find it
@@ -152,15 +180,23 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
         timers: () => call('timers'),                      // the page's intervals that run now, by period: { '200': 1, … }
         kick: () => call('kick'),
         clock: by => call('clock', { by }),                // the device's clock set back (by < 0, ms) or on
-        // the tab is killed (a crash, a phone that dies): nothing more goes out
-        kill: () => w.terminate(),
+        // the tab is killed (a crash, a phone that dies): nothing more goes out (what went wrong inside it is kept)
+        kill: async () => { await going(T); await w.terminate(); },
         // the tab closes (pagehide: it says bye, its place is kept), then it is gone ({ hidden: true }: a tab in sight, hidden
         // first in the same go); onHide(list, at): what the page sends as it goes ([{ m, opts }], before the room's goodbye;
         // at 'hidden': as it is hidden)
-        close: async o => { await call('pagehide', o); await w.terminate(); },
+        close: async o => { await call('pagehide', o); await going(T); await w.terminate(); },
         // the page reloads: it goes as close does (o), and the next page in this tab (→ its tab: the same pid, a new
-        // session) starts with what this one kept in sessionStorage (its pagehide's too), in no room until it joins one (lib)
-        reload: async o => { await call('pagehide', o); const kept = await call('sessionAll'); await w.terminate(); return W.tab(pid, net, { library, dev, insecure, kept }); },
+        // session, the same browser) starts with what this one kept in sessionStorage (its pagehide's too), at the game
+        // it was in (the address it reloads at), in no room until it joins one (lib)
+        reload: async o => {
+          const initial = await call('view');
+          await call('pagehide', o);
+          const kept = await call('sessionAll');
+          await going(T);
+          await w.terminate();
+          return W.tab(pid, net, { library, dev, insecure, kept, initial, strip, reloadAnswer });
+        },
         onHide: (list, at) => call('onHide', { list, at })
       };
       tabs.push(T);
@@ -196,14 +232,10 @@ export function world(t, { scale = 1, brokerMs = 25, rtc = false } = {}) {
       spies.push(S);
       return S;
     },
-    // → what went wrong inside the tabs that are still there: ['pid: error', …]; a tab that does not answer in 10 s
-    // (stuck in a loop, or frozen past the test's end) is one, so a hung tab fails its test instead of hanging the run
+    // → what went wrong inside the world's tabs, those that went (close, reload, kill: 'pid (before it went): error') and
+    // those still there: ['pid: error', …] (see ask)
     async errors() {
-      const ask = T => new Promise(res => {
-        const k = setTimeout(() => res([T.pid + ': no answer in 10 s (a loop that never ends?)']), 10000);
-        T.errors().then(e => e.map(x => T.pid + ': ' + x), () => []).then(e => { clearTimeout(k); res(e); });
-      });
-      return (await Promise.all(tabs.map(ask))).flat();
+      return [...gone, ...(await Promise.all(tabs.map(T => ask(T)))).flat()];
     },
     async close() {
       for (const S of spies) S.close();
