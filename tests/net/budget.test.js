@@ -1,11 +1,12 @@
 // The relay budget (library/net/link.js; phase 2, H2; after the audit, phase 2: by bytes), in worker tabs over fake
 // brokers only (tests/support): through the brokers, fast messages that are not 'latest' start a publish to a player at
-// most every 33 ms (about 30 a second); what comes meanwhile waits and goes in that one publish, all of it (nothing is
-// dropped for the budget). 'latest' streams keep their own pace. Reliable messages go together at the end of the task
-// that sent them, in as few publishes as RELAY_BYTES allows (16 000 bytes of UTF-8 JSON each; one bigger message goes
-// alone), and take whatever waits along; so does anything else that goes, in order. What waits for an acknowledgement
-// goes again together, at most 32 KB a tick, and to a player we no longer hear only one now and then; heard again, they
-// get everything they missed at once. The room says 'budget' once; on the dev server the library's console says it once too.
+// most every 33 ms (about 30 a second); what comes meanwhile waits and goes then, all of it (nothing is dropped for the
+// budget), split only where one publish would pass RELAY_BYTES. 'latest' streams keep their own pace. Reliable messages
+// go together at the end of the task that sent them, in as few publishes as RELAY_BYTES allows (16 000 bytes of UTF-8
+// JSON each; one bigger message goes alone), and take whatever waits along; so does anything else that goes, in order.
+// What waits for an acknowledgement goes again together, at most 32 KB a tick, and to a player we no longer hear only
+// one now and then; heard again, they get everything they missed at once. The room says 'budget' once; on the dev
+// server the library's console says it once too.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { room, sleep, until, world } from '../support/world.js';
@@ -24,6 +25,7 @@ const numbers = async (tab, t) => (await tab.call('log')).got.filter(([, m]) => 
 // the numbers q of those publishes (since index i of what the spy saw), in order
 const numbersOf = (S, topic, a, b, t, i = 0) => [...new Set(S.seen.slice(i).filter(x => x.topic === mailbox(topic, a.session, b.session) && x.m.d.some(m => m.t === t)).map(x => x.m.q))].sort((x, y) => x - y);
 const upTo = n => Array.from({ length: n }, (_, k) => k + 1);
+const RELAY_BYTES = 16000;                             // (link.js)
 
 describe('the relay budget (phase 2, H2)', { concurrency: 3 }, () => {
   test('fast messages: about 30 publishes a second at most; the rest go together, none lost', T, async t => {
@@ -40,9 +42,14 @@ describe('the relay budget (phase 2, H2)', { concurrency: 3 }, () => {
     let n = 0;
     while (Date.now() - t0 < 1000) await A.send({ t: 'y', n: n++ }, { fast: true });
     assert.ok(await until(async () => (await numbers(B, 'y')).length === n, 3000), 'all ' + n + ' arrive: ' + (await numbers(B, 'y')).length);
-    const p = publishes(S, topic, A, B, 'y', true).length, along = publishes(S, topic, A, B, 'y').length - p;
+    const own = publishes(S, topic, A, B, 'y', true), p = own.length, along = publishes(S, topic, A, B, 'y').length - p;
+    const size = d => d.reduce((s, m) => s + Buffer.byteLength(JSON.stringify(m)) + 1, 0);
+    const total = own.reduce((s, d) => s + size(d), 0), most = Math.max(0, ...own.map(size));
     assert.ok(n > 100, 'many sent: ' + n);
-    assert.ok(p <= 32, n + ' messages in ' + p + ' publishes of their own (≤ 32 in a second), ' + along + ' more along with the link\'s own');
+    // at most 32 starts in that second; a start whose messages pass RELAY_BYTES goes as several publishes (a broker drops
+    // one over its limit whole): a fast machine sends enough for that (CI: 33 366 in a second, ~22 KB every 33 ms)
+    assert.ok(most <= RELAY_BYTES + 64, 'no publish over RELAY_BYTES: ' + most);
+    assert.ok(p <= 32 + Math.ceil(total / (RELAY_BYTES - 64)), n + ' messages (' + total + ' bytes) in ' + p + ' publishes of their own (≤ 32 starts in a second, split by RELAY_BYTES), ' + along + ' more along with the link\'s own');
     assert.deepEqual((await A.events()).filter(e => e[1] === 'budget').length, 1, 'the room said budget, once');
   });
 

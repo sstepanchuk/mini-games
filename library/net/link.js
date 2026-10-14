@@ -17,7 +17,8 @@
 // again is that JSON read back, which a later change to the caller's object cannot touch.
 // The relay budget (the public brokers throttle or ban whoever floods them): through the brokers, each 'latest' stream
 // goes at most every RELAY_EVERY ms, and the other fast messages start a publish at most every FAST_EVERY ms per
-// player (about 30 a second): what comes meanwhile waits and goes in that one publish (the room says 'budget', once).
+// player (about 30 a second): what comes meanwhile waits and goes then, split only by RELAY_BYTES (the room says
+// 'budget', once).
 // Reliable messages go together at the end of the task that sent them (soon), in as few publishes as RELAY_BYTES allows
 // (bytes of UTF-8, not characters; one bigger message goes alone); the link's own (acknowledgements, pings) go at once.
 // Whatever goes takes everything waiting along, in order. What is not acknowledged goes again together, at most
