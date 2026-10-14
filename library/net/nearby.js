@@ -13,6 +13,7 @@
 // or they reached each other and the host said no (status 'failed' at once, on both):
 //   'name'   the other device's player has the host's name (one name, one place)
 //   'full'   a new player, and the room is full (the host can pair while a place is held, for its player)
+// A browser without WebRTC cannot pair at all: offer() and answer() throw Error('nortc'), pair.reason 'nortc'.
 // room.pair.vpn: one of the devices runs a VPN (a likely reason for 'blocked').
 // room.pair.report() describes the last pairing, for bug reports; room.pair.cancel() drops a pairing under way.
 // The pairing screens (QR codes, camera) are the library's: app/invite.js.
@@ -21,7 +22,8 @@
 // itself: there is nothing to find each other through. The player is then away, as over the internet: their place
 // (and the round) waits for them as long as places are kept, and pairing again — the same name, from the same tab or
 // another device — puts them back where they were; the host's page back from a reload too (the first guest that pairs
-// with it again brings back the room's places). Only a player who leaves for good (a final bye) or whose place
+// with it again brings back the room's places; a guest pairs again once its link to the host is broken or silent, as
+// a crashed page's channels may stay open a while). Only a player who leaves for good (a final bye) or whose place
 // nobody waits for any more («Не чекати», HOLD) loses it (room.js, the places invariant). A name already in the room:
 // the host's own is refused at once (the pairing fails, pair.reason 'name'); a guest's takes that place over, even
 // from a device whose link still works (that device is told: role 'out', as over the internet).
@@ -34,10 +36,11 @@
 //                              them by name; a guest learns its host). pv: the library's wire version (config.js PROTO);
 //                              from another version the link does not count: the pairing ends (status 'version',
 //                              room.versionMismatch: their number), and ours goes back first if it had not gone yet, so
-//                              they learn it too. no: 'name' | 'full', the host's answer: the pairing ends (status
-//                              'failed', pair.reason); the link closes a moment later. m: a guest pairing again in its
-//                              room, the places it knows (as in _r): a host back from a reload, with nobody else yet,
-//                              that m names under an older session takes them as its room's (adopt)
+//                              they learn it too (before 'version' is said here: whoever hears it may leave at once).
+//                              no: 'name' | 'full', the host's answer: the pairing ends (status 'failed', pair.reason);
+//                              the link closes a moment later. m: a guest pairing again in its room, the places it knows
+//                              (as in _r): a host back from a reload, with nobody else yet, that m names under an older
+//                              session takes them as its room's (adopt)
 //   p      both, fast          {ts, a, rt?, g?} pulse and ping, 5 a second. a: their reliable ones we have; rt: our
 //                              ping; g: the game's pulse fields
 //   q      both, fast          {ts} the ping's answer
@@ -96,12 +99,15 @@ export function joinNearby({ game, name, max }) {
   // place left: the pairing ends (see the top).
   function onHello(Q, m) {
     if (Q.linked || Q.no || N.closed || typeof m.id !== 'string' || !SENDER.test(m.id) || m.id === me) return;
-    if (otherVersion(N, m)) {
+    if (pvOf(m) !== PROTO) {
       if (pvOf(m) === null) return;                    // (a pv that is no version: ignored, as any broken hello)
+      // ours goes first and the pairing is over before anyone hears 'version': whoever hears it may leave the room at
+      // once (the library's dialog does), and the other phone must still learn it
       if (!Q.said) say(Q);
       if (Q === P) { stop(N, 'failTimer'); note('another library version: ' + m.pv); P = null; }
       Q.no = 'version';
       setTimeout(() => unlink(Q), REFUSED_MS);         // (our _h on its way first)
+      otherVersion(N, m);
       return;
     }
     if (typeof m.n !== 'string' || !NAME.test(m.n)) return;
@@ -158,14 +164,18 @@ export function joinNearby({ game, name, max }) {
     get pending() { return !!P; } };
   // a new pairing: its own peer, its own report
   const begin = role => {
+    t0 = performance.now(); log = [navigator.userAgent]; tried = '';   // (first: a refusal below says nothing of the last one)
+    Object.assign(pair, { local: 0, remote: 0, vpn: false, reason: '' });
     if (P) { unlink(P); P = null; }
     // full: as many players here as the room holds (a place held for someone away may be theirs, pairing again)
     if (role === 'host' && N.members.filter(m => !m.a).length >= N.max) throw new Error('full');
-    // a guest pairs again only when its link to the host broke; a guest never starts pairing others
-    if (role === 'guest' && (N.role === 'host' || linkedPeers(N).some(dcLive))) throw new Error('kind');
+    // a guest pairs again only when its link to the host broke or went silent (weak: a browser keeps a dead link's
+    // channels open until ICE gives up, ~15 s in Chromium, and the host's new page must not wait for that; the new
+    // link replaces the old one at both ends, onHello); a guest never starts pairing others
+    if (role === 'guest' && (N.role === 'host' || linkedPeers(N).some(Q => dcLive(Q) && !Q.weak))) throw new Error('kind');
     if (role === 'host' && N.role === 'guest') throw new Error('kind');
-    t0 = performance.now(); log = [navigator.userAgent]; tried = '';
-    Object.assign(pair, { local: 0, remote: 0, vpn: false, reason: '' });
+    // a browser without WebRTC cannot pair at all (nothing is left pending)
+    if (typeof RTCPeerConnection !== 'function') { pair.reason = 'nortc'; throw new Error('nortc'); }
     P = newPeer(N, 'pairing.' + Math.random().toString(36).slice(2, 8));
     const Q = P, pc = new RTCPeerConnection({ iceServers: [] });   // nothing to reach: only this network's own addresses
     Q.pc = pc;
@@ -228,7 +238,7 @@ export function joinNearby({ game, name, max }) {
       await pc.setRemoteDescription({ type: 'offer', sdp });
       await pc.setLocalDescription(await pc.createAnswer());
       const ans = await ours(pc, ANSWER);
-      connecting(Q, 90000);                            // the host still has to scan our code
+      connecting(Q, TIMING.PAIR_WAIT);                 // the host still has to scan our code
       return ans;
     },
     // the pairing under way is dropped (the players already linked stay)

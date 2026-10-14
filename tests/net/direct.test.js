@@ -56,6 +56,31 @@ describe('the direct link', { concurrency: 3 }, () => {
     assert.match(threw || '', /^TypeError: .*(circular|cycl)/i, 'the call throws');
   });
 
+  // (audit, net-core-03: once on the brokers, the guest judged the dead link by the slower threshold, counted the same
+  // silence as heard, and flipped direct ↔ brokers several times per cut, room.lag() with it)
+  test('a streaming room whose direct link dies changes the guest\'s path once, and lag never goes back to the direct figure during the cut', T, async t => {
+    const W = world(t, { rtc: true, brokerMs: 40 });
+    const [A, B] = await room(W, 'dir5', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await until(async () => (await A.game())?.linked && (await B.game())?.linked, 5000), 'both in the game');
+    assert.ok(await direct(A, B), await shows([A, B]));
+    await B.call('gstream', { on: true });                 // as Two Dragons: the guest gets the host's state every frame
+    await sleep(1500);
+    const lagD = await B.lag();
+    for (let cut = 1; cut <= 2; cut++) {
+      await A.net({ direct: false });                      // silent both ways (a network switch, before the link fails)
+      const seen = [], end = Date.now() + 2500;
+      while (Date.now() < end) { const s = await B.state(); seen.push([s.direct, await B.lag()]); await sleep(15); }
+      const path = seen.map(x => x[0]).filter((d, i, a) => !i || d !== a[i - 1]);
+      assert.deepEqual(path, [true, false], 'cut ' + cut + ': one change of path, to the brokers: ' + path.join(' → '));
+      const after = seen.slice(seen.findIndex(x => !x[0]));
+      assert.ok(after.every(([, l]) => l > lagD + 10), 'cut ' + cut + ': lag stays the brokers\' (direct: ' + lagD + '): ' + [...new Set(after.map(x => x[1]))].join(', '));
+      await A.net({ direct: true });
+      assert.ok(await direct(A, B), 'direct again: ' + await shows([A, B]));
+      await sleep(1500);
+    }
+  });
+
   // (phase 1a, A2: r: 1 in any fast message used to make the link doubt the direct path)
   test('a game\'s fast message with r: 1 does not make the link doubt the direct path (only a pulse says so)', T, async t => {
     const W = world(t, { rtc: true });

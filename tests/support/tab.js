@@ -293,7 +293,8 @@ const cmds = {
   },
   release: ({ n }) => { need().release(n); },
   lag: ({ n }) => need().lag(n),                          // room.lag: to one player (n), or the slowest
-  leave: ({ final = true } = {}) => { if (T) T.leave(); else need().leave(final); },   // (the library always leaves for good)
+  // (the library always leaves for good); send: reliable messages said just before, in the same task
+  leave: ({ final = true, send = [] } = {}) => { for (const m of send) need().send(m); if (T) T.leave(); else need().leave(final); },
   kick: () => { need().kick(); },
   // the page closes: it says goodbye (pagehide), and is gone: nothing more goes out or comes in. hidden: a page still in
   // sight is hidden first, in the same go (a closed tab: visibilitychange, then pagehide; nothing else runs between them);

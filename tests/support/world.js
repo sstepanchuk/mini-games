@@ -20,7 +20,7 @@
 //                                          false, A.snapshot(s), A.share(k, v) …;
 //                                          A.near(name): a nearby one (rtc), paired with A.pair('offer' | 'answer' | 'finish', code);
 //                                          A.libNear(name): the library's nearby room (together.js startNearby), paired so too
-//   await A.state(), A.events(), A.got(), A.net({ up: false }), A.send(m, opts, then), A.release(n), A.lag(n), A.leave(), A.kill(),
+//   await A.state(), A.events(), A.got(), A.net({ up: false }), A.send(m, opts, then), A.release(n), A.lag(n), A.leave(final, send), A.kill(),
 //   A.listeners(), A.timers() …; A.open(id, { wire }): a game whose copy here speaks this wire;
 //   A.pagehide({ persisted, lost, quiet }), A.pageshow({ after, quiet }): into the back-forward cache and back (quiet: no
 //                                          'offline' / 'online' with them, as browsers do; netState().said counts them); A.throttle({ every }):
@@ -153,7 +153,7 @@ export function world(t, { scale = 1, timing = null, brokerMs = 25, rtc = false 
         sendAll: (list, opts) => call('send', { list, opts }),
         release: n => call('release', { n }),
         lag: n => call('lag', { n }),                      // room.lag(n): one-way delay, ms (n: a name, or the slowest)
-        leave: final => call('leave', { final }),
+        leave: (final, send) => call('leave', { final, send }),   // send: reliable messages said just before, in the same task
         net: o => call('net', o),
         errors: () => call('errors'),
         takeErrors: () => call('takeErrors'),              // its errors (console.error and .warn too) so far, then forgotten

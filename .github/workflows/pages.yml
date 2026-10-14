@@ -20,7 +20,8 @@ jobs:
   check:
     name: Check
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # (npm test alone takes about 3.5 minutes: three files at a time, mostly waiting on timers)
+    timeout-minutes: 10
     steps:
       # the whole history: the mixed-version tests take the previous release from it (tests/support/release.js)
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5

@@ -8,16 +8,21 @@
 // every pulse: "I have everything up to here"); until then it is sent again, by whatever path works, with growing
 // pauses. So nothing is lost to a dead direct link, brokers that are reconnecting, or a phone that was offline for
 // a minute. The receiver runs them exactly once and in order: a message that overtook a missing one waits for it.
-// That holds for one link: when a link starts over (a new one with the same player, or more than OUTBOX_MAX not
-// acknowledged: the mode's restart), what was not acknowledged is gone, and the room says 'relinked' so that the
-// game sends the full picture again.
+// That holds for one link: when a link starts over (a new one with the same player, or more than OUTBOX_MAX waiting
+// with none acknowledged for STALL ms: the mode's restart), what was not acknowledged is gone, and the room says
+// 'relinked' so that the game sends the full picture again. (A burst of more than OUTBOX_MAX on a link that keeps
+// acknowledging is fine: it only bounds memory, at ten times that.)
 // A reliable message becomes JSON once, before it gets its number (wire): one that cannot (a cycle, a BigInt)
 // throws a TypeError at the call and takes no number, so nothing after it waits for it; and what is kept and sent
 // again is that JSON read back, which a later change to the caller's object cannot touch.
 // The relay budget (the public brokers throttle or ban whoever floods them): through the brokers, each 'latest' stream
 // goes at most every RELAY_EVERY ms, and the other fast messages start a publish at most every FAST_EVERY ms per
 // player (about 30 a second): what comes meanwhile waits and goes in that one publish (the room says 'budget', once).
-// Whatever else goes out takes everything waiting along. Reliable messages and the link's own go at once.
+// Reliable messages go together at the end of the task that sent them (soon), in as few publishes as RELAY_BYTES allows
+// (bytes of UTF-8, not characters; one bigger message goes alone); the link's own (acknowledgements, pings) go at once.
+// Whatever goes takes everything waiting along, in order. What is not acknowledged goes again together, at most
+// RESEND_BYTES a tick; to a player we no longer hear, only the oldest now and then, and everything at once when they
+// are back.
 import { BROKERS, TIMING } from './config.js';
 import { bestBrokers, brokerDiag, kickBrokers, pubData, tendBrokers } from './brokers.js';
 import { closeRtc, dcFresh, dcHear, dcLive, dcQuiet, probeLink, startRtc } from './rtc.js';
@@ -25,15 +30,19 @@ import { awaySince, holdOver, hostPeer, linkedPeers, stop, weakChanged } from '.
 
 const RELAY_EVERY = 33;                                // a "latest" stream goes through the brokers at most this often, ms
 const FAST_EVERY = 33;                                 // other fast messages start a publish to one player at most this often, ms
+const RELAY_BYTES = 16000;                             // a publish through the brokers carries at most this much JSON (one bigger message: alone)
 const ACK_DELAY = 25;                                  // reliable messages that came: say so this soon (with the next ones)
-const OUTBOX_MAX = 5000;                               // reliable messages not yet acknowledged: more, and the link starts over
+const OUTBOX_MAX = 5000;                               // reliable messages not yet acknowledged: more, none acknowledged for STALL, and the link starts over
+const STALL = 3000;                                    // more than OUTBOX_MAX waiting and none of ours acknowledged this long, ms
 const HOLD_MAX = 4096;                                 // messages that overtook a missing one, waiting for it
-const RESEND_PER_TICK = 64;
+const RESEND_BYTES = 32768;                            // what goes again: at most this much of its JSON per tick (the oldest first)
 const ALIVE_EVERY = 50;                                // while a game is played: a quiet direct link is asked about this often, ms (tendAlive)
+const TE = new TextEncoder();
+const bytes = m => TE.encode(JSON.stringify(m)).length;   // a message's JSON in UTF-8 (a Cyrillic letter: 2 bytes)
 
 // a new link with this player (or the same person in a new tab): measurements and numbering start over
 export function resetPaths(P) {
-  P.tx = 0; P.outbox = []; P.rxNext = 1; P.rxHold = new Map(); P.byeX = 0;
+  P.tx = 0; P.outbox = []; P.ackAt = 0; P.resendAt = -1e9; P.overfull = false; P.rxNext = 1; P.rxHold = new Map(); P.byeX = 0;
   P.pts = -1; P.suspect = -1e9;
   P.rD = P.rR = null; P.sD = []; P.sR = []; P.qD = P.qR = -1; P.slowDirect = false; P.peerRtt = null; P.aliveAt = 0;
 }
@@ -47,8 +56,11 @@ export function send(P, m, { fast = false, latest = false } = {}) {
   if (N.closed || !P.linked || (!N.relay && !P.pc)) return;   // (nearby, a link whose direct link closed carries nothing more: pairing again makes a new one)
   if (!fast) {
     m = wire(m);                                       // (throws before it takes a number)
+    if (P.overfull) return;                            // (the link starts over: nothing new is kept for it; 'relinked' brings it all)
     m._x = ++P.tx;                                     // (a copy of its own: the same message may go to several players)
-    P.outbox.push({ m, at: performance.now(), n: 1 });   // (more than OUTBOX_MAX: the link starts over, see watchPeer)
+    const now = performance.now();
+    if (!P.outbox.length) P.ackAt = now;               // (we wait for an acknowledgement from now on)
+    P.outbox.push({ m, at: now, n: 1, b: bytes(m) + 1 });   // (more than OUTBOX_MAX not acknowledged: see watchPeer)
   }
   transmit(P, m, fast, fast && latest ? (latest === true ? '' : String(latest)) : null);
 }
@@ -70,7 +82,7 @@ function transmit(P, m, fast, stream) {
     if (dcFresh(P)) return;                            // the direct link is alive: that is enough
   }
   // through the brokers (no direct path, it went quiet, or it is slower), within the relay budget (see the top)
-  if (!fast) { P.q.push(m); flushRelay(P); return; }
+  if (!fast) { P.q.push(m); soon(P); return; }        // (at the end of this task, with whatever else goes to them in it)
   const now = performance.now();
   let wait;
   if (stream === null) {
@@ -92,34 +104,61 @@ function acked(P, a) {
   if (!Number.isInteger(a) || a > P.tx) return;
   let i = 0;
   while (i < P.outbox.length && P.outbox[i].m._x <= a) i++;
-  if (i) P.outbox.splice(0, i);
+  if (i) { P.outbox.splice(0, i); P.ackAt = performance.now(); }
 }
 // Reliable messages not acknowledged in time go again: after twice the round trip (at least 300 ms), then with
-// longer and longer pauses (up to 4×), the oldest first, a few dozen per tick.
+// longer and longer pauses (up to 4×), the oldest first, at most RESEND_BYTES a tick, together (through the brokers: in
+// as few publishes as RELAY_BYTES allows). To a player we no longer hear (weak), only the oldest that is due, once in
+// 4 such pauses (they most likely cannot hear us either); heard again, everything they miss goes at once (setWeak).
+// Nothing to a link that starts over (overfull).
 function resend(P, now) {
-  if (!P.outbox.length) return;
+  if (!P.outbox.length || P.overfull) return;
   const rtt = curRtt(P), rto = Math.max(300, (rtt == null ? 300 : rtt) * 2 + 100);
-  let k = 0;
+  if (P.weak && now - P.resendAt < 4 * rto) return;
+  const q0 = P.q.length;
+  let b = 0;
   for (const e of P.outbox) {
     if (now - e.at < rto * Math.min(e.n, 4)) continue;
     e.at = now; e.n++;
     transmit(P, e.m, false, null);
-    if (++k >= RESEND_PER_TICK) break;
+    if (P.weak) { P.resendAt = now; break; }           // (a probe: the oldest alone)
+    b += e.b;
+    if (b >= RESEND_BYTES) break;
   }
+  if (P.q.length > q0) flushRelay(P);                  // (this tick's, together)
 }
 function sendDirect(P, m) { if (dcLive(P)) { try { P.dcF.send(JSON.stringify(m)); } catch (e) {} } }
 function sendRelay(P, m) { if (P.linked && P.N.relay) { P.q.push(m); flushRelay(P); } }
+// Reliable messages through the brokers go at the end of the task that sent them, together: a burst, or a tick's
+// resends, is a few publishes (each publish is sealed in the room's one chain, brokers.js: one per message flooded the
+// brokers and kept a hello or a pulse behind thousands of them). Whatever ends the link or the page in the same task
+// flushes first (room.js unlink, leave, pagehide).
+function soon(P) {
+  if (P.qSoon) return;
+  P.qSoon = true;
+  queueMicrotask(() => { if (P.qSoon) flushRelay(P); });   // (a flush meanwhile took them: qSoon is off)
+}
+// Everything waiting for the brokers goes now, in order, in publishes of at most RELAY_BYTES (measured only when more
+// than one waits; one bigger message goes alone): a broker drops a packet over its limit whole.
 export function flushRelay(P) {
-  clearTimeout(P.qTimer); P.qTimer = null;
+  clearTimeout(P.qTimer); P.qTimer = null; P.qSoon = false;
   if (P.qLatest.size) {                                // the newest of each stream rides along
     for (const m of P.qLatest.values()) P.q.push(m);
     P.qLatest.clear(); P.relayAt = performance.now();
   }
   if (P.qFast) { P.qFast = 0; P.fastAt = performance.now(); }
   if (!P.q.length || !P.N.relay) return;
-  const d = P.q; P.q = [];
-  if (!P.N.closed) pubData(P.N, P, { t: 'd', to: P.id, d, k: P.k });   // k: the link's attempt (internet.js drops another one's)
+  const all = P.q; P.q = [];
+  if (P.N.closed) return;
+  let d = [], size = 0;
+  for (const m of all) {
+    const b = all.length > 1 ? bytes(m) + 1 : 0;
+    if (d.length && size + b > RELAY_BYTES) { relay(P, d); d = []; size = 0; }
+    d.push(m); size += b;
+  }
+  relay(P, d);
 }
+const relay = (P, d) => pubData(P.N, P, { t: 'd', to: P.id, d, k: P.k });   // k: the link's attempt (internet.js drops another one's)
 
 /* ---------- receiving ---------- */
 export function deliver(P, m, viaRelay) {
@@ -127,6 +166,8 @@ export function deliver(P, m, viaRelay) {
   if (N.closed || !P.linked || !m || typeof m !== 'object' || typeof m.t !== 'string') return;
   const now = performance.now();
   P.lastSeen = now;
+  if (now - N.heardAt > N.stall) N.stall = now - N.heardAt;   // the longest the page heard nothing since the last tick (watch)
+  N.heardAt = now;
   const x = m._x;
   if (x === undefined) { signals(P, m, viaRelay, now); return; }   // fast: pulses, ping answers, the game's own
   if (!Number.isInteger(x) || x < P.rxNext) return;   // a copy that came by the other path, or a resend we already have
@@ -249,10 +290,13 @@ export function diag(N) {
 // mobile) breaks both the direct link and the broker connections. So: a short silence pauses the game and
 // waits; brokers reconnect on their own; the direct link is rebuilt. Only a really long silence ends a link.
 export function watch(N) {
-  const now = performance.now(), gap = now - N.lastWatch, slept = gap > N.watchMs + TIMING.SLEEP;
-  N.lastWatch = now;
+  const now = performance.now(), gap = now - N.lastWatch;
+  // A tick this late while the page heard someone at least every SLEEP meanwhile (N.stall) is no sleep: only our timers
+  // were held back (a hidden tab the browser wakes once a minute, its sockets alive), the page itself ran and heard them.
+  const ran = Math.max(N.stall, now - N.heardAt) <= TIMING.SLEEP, slept = gap > N.watchMs + TIMING.SLEEP && !ran;
+  N.lastWatch = now; N.heardAt = now; N.stall = 0;
   if (N.closed) return;
-  // Our own tab was asleep (phone locked, timers throttled): the silence was ours, not theirs.
+  // Our own tab was asleep (phone locked, tab frozen): the silence was ours, not theirs.
   // Give the connections a few seconds to come back before judging the others. Away for longer than anyone
   // waits for the room's host: the others may have moved on, so the mode finds our way back (longSleep; true: it
   // started over).
@@ -282,7 +326,9 @@ function watchPeer(P, now) {
     if (dc) sendDirect(P, p);
     if (!dc || P.via !== 'p2p' || !dcFresh(P) || dcQuiet(P) || P.pN % 6 === 0) sendRelay(P, p);   // through the brokers when the game goes that way, the direct link is quiet, and now and then to measure
   }
-  if (P.outbox.length > OUTBOX_MAX) N.restart(P);     // they have not heard us for ages: the link starts over (the mode's)
+  // they have not heard us for ages (or the link is overfull: the mode's restart said so): the link starts over (the
+  // mode's; each tick until it has). Ten times OUTBOX_MAX waiting starts it over anyway (memory), acknowledged or not.
+  if (P.overfull || (P.outbox.length > OUTBOX_MAX && now - P.ackAt > STALL) || P.outbox.length > OUTBOX_MAX * 10) N.restart(P);
   if (N.closed || !P.linked) return;
   resend(P, now);
   if (now < N.graceUntil) return;
@@ -305,13 +351,15 @@ export function setWeak(P, v) {
   if (P.weak === v) return;
   P.weak = v; P.weakAt = v ? P.lastSeen : 0;           // (silent since the last thing they sent)
   if (v) kick(P.N);                                    // silence: check our broker connections at once
+  else for (const e of P.outbox) e.at = -1e9;          // heard again: everything they miss goes at the next tick (resend)
   P.N.refresh(P);
   weakChanged(P.N);
 }
 
-// network changed, page came back, or silence: check the brokers now; a guest also retries the direct link soon
-export function kick(N) {
-  if (N.closed || !N.relay || !kickBrokers(N)) return;
+// network changed, page came back, or silence: check the brokers now; a guest also retries the direct link soon.
+// force: whatever was checked a moment ago (the browser is online again, or its network type changed: brokers.js)
+export function kick(N, force = false) {
+  if (N.closed || !N.relay || !kickBrokers(N, force)) return;
   const H = N.role === 'guest' && hostPeer(N);
   if (H && H.linked) H.rtcNext = Math.min(H.rtcNext, performance.now() + 1500);
 }

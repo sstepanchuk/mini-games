@@ -20,7 +20,7 @@ export const dcLive = P => !!(P.dcF && P.dcC && P.dcF.readyState === 'open' && P
 export function dcHear(P) {
   if (!dcLive(P)) return false;
   const quiet = performance.now() - P.dcSeen;
-  if (quiet < (P.via === 'p2p' && P.N.streaming() ? 350 : 1300)) return true;
+  if (quiet < (P.N.streaming() ? 350 : 1300)) return true;   // (on the brokers too: else the same silence counts as heard there)
   return P.aliveAt <= P.dcSeen && quiet < 3000;
 }
 // a moment of silence on the direct link: worth asking through the brokers whether they are still there

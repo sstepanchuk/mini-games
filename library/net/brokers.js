@@ -1,7 +1,8 @@
 // MQTT transport: one connection per public broker, all at once. Liveness checks, backoff, sealing and opening every
 // packet (seal.js), and dropping copies of a message that arrived through several brokers, or again. What messages mean
 // is up to internet.js, which receives them through its mode hooks (room.js): N.onConnected(client), N.onMessage(msg,
-// client), N.onDown() (a working broker dropped) and N.onLegacy(msg) (the door, below).
+// client), N.onDown() (a working broker dropped), N.deafBack(gap) (no broker brought anything for longer than HOST_WAIT,
+// and one does again: we were cut off, see heard) and N.onLegacy(msg) (the door, below).
 //
 // Sealed (phase 5, J2). A message becomes JSON at the call (what the caller changes later does not travel), gets its
 // number q at once (so the numbers keep the order of the calls), and is sealed in one chain per room (N.out), in that
@@ -24,11 +25,20 @@
 // - each broker connects on its own; a failed one is retried later and later (up to two minutes);
 // - a connection that is still being set up is never restarted (browsers report minor network changes
 //   often, and restarting on each of them used to break joining a room);
-// - while no broker works at all, retries are frequent: the problem is probably our own network.
-import { BROKERS, MQTT_LIB, me, SENDER } from './config.js';
+// - while no broker works at all, retries are frequent: the problem is probably our own network. When the last one
+//   that worked drops, those waiting for a retry try again at once (they may have failed while another worked, and
+//   wait up to two minutes);
+// - a connection that brought nothing back since two echo tests ago (a 'k' every 5 s: tendBrokers) is started over (a
+//   socket that looks open and carries nothing). By those tests, not by the clock: a hidden tab's timers may wake once
+//   a minute, and its healthy connections must not go at each wake; after a sleep, kickBrokers checks with an echo
+//   of its own;
+// - kickBrokers checks them all at once (a network change, the page shown, a player gone quiet), at most every 3 s,
+//   but always when the browser says it is online again or its network type changed (force).
+import { BROKERS, MQTT_LIB, me, SENDER, TIMING } from './config.js';
 import { fresh, mark, newWindow, open, seal, sealNow, spare, SPARE } from './seal.js';
 
 const SENDERS = 64;                                    // how many senders the replay windows remember (the last heard)
+const K_EVERY = 5000;                                  // an echo test ('k') this often (tendBrokers; not scaled)
 const LEGACY_ALL = 'ihroteka/+';                       // every room's topic of a library before PROTO 2 (the door)
 const TE = new TextEncoder(), TD = new TextDecoder();
 const rnd = n => Array.from({ length: n }, () => (Math.random() * 36 | 0).toString(36)).join('');
@@ -130,15 +140,33 @@ function openBroker(N, i) {
       if (N.closed || N.clients[i] !== c) return;
       if (err) { retryBroker(N, i); return; }
       c._ok = true; c._rx = performance.now();
+      heard(N, c._rx);
       st.state = 'ok'; st.fails = 0;
       c.subscribe(LEGACY_ALL, { qos: 0 }, () => {});   // the door (see the top): a broker that refuses it is fine
       N.onConnected(c);
       pubOn(N, { t: 'k' });                            // measure at once how fast this broker is
     });
   });
-  c.on('message', (t, p) => { if (!N.closed && N.clients[i] === c) { c._rx = performance.now(); onRaw(N, t, p, c); } });
-  c.on('close', () => { const was = c._ok; c._ok = false; if (!N.closed && N.clients[i] === c) retryBroker(N, i); if (was) N.onDown(); });
+  c.on('message', (t, p) => { if (!N.closed && N.clients[i] === c) { c._rx = performance.now(); heard(N, c._rx); onRaw(N, t, p, c); } });
+  c.on('close', () => {
+    const was = c._ok;
+    c._ok = false;
+    if (!N.closed && N.clients[i] === c) retryBroker(N, i);
+    if (!was) return;
+    // the last one that worked: the others try again now (not this one: it retries on its own timer)
+    if (!N.closed && !N.clients.some(x => x && x._ok)) retryWaiting(N, i);
+    N.onDown();
+  });
   c.on('error', () => {});
+}
+
+// A broker brought something (a message, or a subscription that took). Nothing from any of them for longer than
+// HOST_WAIT, and than two echo tests (a quiet but healthy broker echoes our 'k' that often), means we were cut off:
+// the mode hears it (deafBack) before what came now is acted on (internet.js: a host gives way to whoever took over).
+function heard(N, now) {
+  const gap = N.rxAt ? now - N.rxAt : 0;
+  N.rxAt = now;
+  if (gap > Math.max(TIMING.HOST_WAIT, 2 * K_EVERY)) N.deafBack(gap);
 }
 
 // the broker did not answer or the connection dropped: close it and try again after a growing pause
@@ -163,15 +191,19 @@ function rebuildBroker(N, i) {
   openBroker(N, i);
 }
 
-// check every broker now, without waiting for timeouts → false if it was checked a moment ago
-export function kickBrokers(N) {
+// the brokers waiting for a retry (all but except): retry now
+function retryWaiting(N, except = -1) {
+  N.br.forEach((st, i) => { if (i !== except && st.state === 'wait') { st.fails = Math.min(st.fails, 1); rebuildBroker(N, i); } });
+}
+
+// check every broker now, without waiting for timeouts → false if it was checked a moment ago (unless force: the
+// network is back, whatever was checked before)
+export function kickBrokers(N, force = false) {
   const t0 = performance.now();
-  if (t0 - N.kickAt < 3000) return false;
+  if (!force && t0 - N.kickAt < 3000) return false;
   N.kickAt = t0;
-  N.br.forEach((st, i) => {
-    if (st.state === 'wait') { st.fails = Math.min(st.fails, 1); rebuildBroker(N, i); }   // waiting for a retry: retry now
-    else if (st.state === 'connecting' && t0 - st.since > 5000) rebuildBroker(N, i);      // stuck while connecting
-  });
+  retryWaiting(N);
+  N.br.forEach((st, i) => { if (st.state === 'connecting' && t0 - st.since > 5000) rebuildBroker(N, i); });   // stuck while connecting
   pubOn(N, { t: 'k' });                                // a live broker echoes this back at once
   setTimeout(() => {
     if (N.closed) return;
@@ -180,14 +212,16 @@ export function kickBrokers(N) {
   return true;
 }
 
-// periodic upkeep (from the watchdog): echo test, forget old broker scores, restart stuck connections
+// periodic upkeep (from the watchdog): echo test, forget old broker scores, restart stuck connections (see the top: a
+// connection that echoed us before and brought nothing since the echo test before the last one)
 export function tendBrokers(N, now) {
   if (now - N.winAt > 2000) { N.winAt = now; for (const P of N.peers.values()) for (let i = 0; i < P.win.length; i++) P.win[i] = (P.win[i] || 0) * .5; }
-  if (now - N.kAt > 5000) {
-    N.kAt = now;
+  if (now - N.kAt > K_EVERY) {
+    const before = N.kPrev;
+    N.kPrev = N.kAt; N.kAt = now;
     for (const [q, at] of N.kq) if (now - at > 10000) N.kq.delete(q);
+    N.clients.forEach((c, i) => { if (c && c._ok && c._echo && c._rx < before) rebuildBroker(N, i); });
     pubOn(N, { t: 'k' });
-    N.clients.forEach((c, i) => { if (c && c._ok && c._echo && now - c._rx > 12000) rebuildBroker(N, i); });
     N.br.forEach((st, i) => { if (st.state === 'connecting' && now - st.since > 10000) retryBroker(N, i); });
   }
 }
@@ -267,13 +301,12 @@ export function pubData(N, P, obj) {
   post(N, mailbox(N, me, P.id), obj, () => dataBrokers(N, P, all), [P.id, obj.k, obj.d]);
 }
 function dataBrokers(N, P, all) {
-  const cl = N.clients, live = [];
-  for (let i = 0; i < cl.length; i++) if (cl[i] && cl[i]._ok) live.push(i);
-  if (all) return live;
+  const cl = N.clients, ok = live(N);
+  if (all) return ok;
   const to = [];
-  if (performance.now() - P.peerBestAt < 6000) for (const i of P.peerBest) if (live.includes(i)) to.push(i);
-  live.sort((a, b) => (cl[a]._lat == null ? 1e9 : cl[a]._lat) - (cl[b]._lat == null ? 1e9 : cl[b]._lat));
-  for (const i of live) { if (to.length >= 2) break; if (!to.includes(i)) to.push(i); }
+  if (performance.now() - P.peerBestAt < 6000) for (const i of P.peerBest) if (ok.includes(i)) to.push(i);
+  ok.sort((a, b) => (cl[a]._lat == null ? 1e9 : cl[a]._lat) - (cl[b]._lat == null ? 1e9 : cl[b]._lat));
+  for (const i of ok) { if (to.length >= 2) break; if (!to.includes(i)) to.push(i); }
   return to;
 }
 

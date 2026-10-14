@@ -5,7 +5,8 @@
 //
 // Binary layout, then base32 (A–Z, 2–7: QR alphanumeric mode, the densest one for this):
 //   [version|kind] [game tag ×3] [ufrag] [pwd] [fingerprint ×32] [mid] [n] n × ([type] [address] [port ×2])
-//   strings are [length][ASCII]; type 4 = IPv4 (4 bytes), 6 = IPv6 (16 bytes), 16 = mDNS name <uuid>.local (16 bytes)
+//   strings are [length][ASCII]; type 4 = IPv4 (4 bytes), 6 = IPv6 (16 bytes), 16 = mDNS name <uuid>.local (16 bytes);
+//   another type, or anything after the last address, is not a code ('bad')
 const VERSION = 1, MAX_CANDIDATES = 6;
 export const OFFER = 0, ANSWER = 1;
 
@@ -72,12 +73,14 @@ export function decode(code, game) {
   const fp = Array.from(take(32), x => x.toString(16).padStart(2, '0').toUpperCase()).join(':');
   const mid = str(), n = byte(), cands = [];
   for (let k = 0; k < n; k++) {
-    const type = byte(), bytes = take(type === 4 ? 4 : 16), port = byte() << 8 | byte();
+    const type = byte();
+    if (type !== 4 && type !== 6 && type !== 16) throw new Error('bad');
+    const bytes = take(type === 4 ? 4 : 16), port = byte() << 8 | byte();
     const addr = type === 4 ? bytes.join('.') : type === 6 ? ipv6Text(bytes) : uuidText(bytes) + '.local';
     // standard host priority, decreasing in the order the other side ranked them
     cands.push('a=candidate:' + (k + 1) + ' 1 udp ' + (2122260223 - k * 256) + ' ' + addr + ' ' + port + ' typ host generation 0');
   }
-  if (!/^[\x21-\x7e]{4,256}$/.test(ufrag + pwd) || !/^[\w-]{1,32}$/.test(mid)) throw new Error('bad');
+  if (i !== b.length || !/^[\x21-\x7e]{4,256}$/.test(ufrag + pwd) || !/^[\w-]{1,32}$/.test(mid)) throw new Error('bad');
   const sdp = ['v=0', 'o=- ' + Date.now() + ' 2 IN IP4 127.0.0.1', 's=-', 't=0 0', 'a=group:BUNDLE ' + mid, 'a=msid-semantic: WMS',
     'm=application 9 UDP/DTLS/SCTP webrtc-datachannel', 'c=IN IP4 0.0.0.0', ...cands, 'a=end-of-candidates',
     'a=ice-ufrag:' + ufrag, 'a=ice-pwd:' + pwd, 'a=ice-options:trickle', 'a=fingerprint:sha-256 ' + fp,

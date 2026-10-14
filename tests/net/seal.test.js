@@ -8,7 +8,8 @@
 // was hidden just before: still being sealed), then its goodbye (its last words, sealed at once); a page back in its room
 // with its clock set back is heard (its numbers never go back), and one back in its room takes nothing again that it heard
 // before (its host's 'moved', recorded); at the door, a page of an older library (plain, on its
-// own topic) hears our version and nothing else, and only once it spoke (one from before the version number: nothing).
+// own topic) hears our version and nothing else, and only once it spoke (one from before the version number: nothing); and
+// once PROTO goes past 2, a guard fails until the door is gone.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
@@ -17,7 +18,7 @@ import { room, settled, show, shows, sleep, until, world } from '../support/worl
 
 globalThis.window ??= globalThis;                        // (config.js reads window: a session, the timing scale)
 const { fresh, ITER, mark, newWindow, open, roomKeys, seal, sealNow, spare, SPARE, WINDOW } = await import('../../library/net/seal.js');
-const { CODE_LENGTH, newRoomCode, validRoomCode } = await import('../../library/net/config.js');
+const { CODE_LENGTH, newRoomCode, PROTO, validRoomCode } = await import('../../library/net/config.js');
 
 const T = { timeout: 40000 };
 const mailbox = (topic, from, to) => topic + '/d/' + from + '/' + to;   // (brokers.js mailbox)
@@ -168,7 +169,9 @@ describe('sealed rooms, in worker tabs (phase 5, J2)', { concurrency: 3 }, () =>
     for (const x of rec) S.send(x.topic, x.raw);
     await sleep(600);
     assert.equal(await fs(), 5, 'at once: not again');
-    await B.sendAll(Array.from({ length: WINDOW + 100 }, (_, n) => ({ t: 'r', n })));   // (each reliable one: a publish of its own)
+    // (one call each: each a publish of its own, so Богдан's numbers move past WINDOW; one call would send them together,
+    // in a few publishes, link.js)
+    for (const m of Array.from({ length: WINDOW + 100 }, (_, n) => ({ t: 'r', n }))) await B.send(m);
     assert.ok(await until(async () => (await A.got()).filter(g => g.startsWith('Богдан:r')).length === WINDOW + 100, 20000), 'all of them arrive');
     for (const x of rec) S.send(x.topic, x.raw);
     await sleep(600);
@@ -279,6 +282,18 @@ describe('sealed rooms, in worker tabs (phase 5, J2)', { concurrency: 3 }, () =>
     await sleep(1500);
     const s = await B.state();
     assert.deepEqual([s.role, s.linked], ['guest', true], 'still in: ' + show(s));
+  });
+
+  // (after the audit, phase 2: the door is for pages of PROTO 1 only; a guard, so the next bump does not leave it behind)
+  test('the door is for PROTO 1: once PROTO goes past 2, it goes', () => {
+    if (PROTO > 2) {
+      assert.fail('PROTO is ' + PROTO + ': remove the PROTO 1 door. brokers.js: LEGACY_ALL, rnd, N.door, pubLegacy, legacy, and the topic check ' +
+        'in onRaw; internet.js: door and the onLegacy hook; room.js: the onLegacy hook and the legacy and door fields of the Room typedef ' +
+        '(and newRoom); seal.js: legacy (roomKeys); tests/support/seal.js and tests/support/tab.js: legacy; tests/net/seal.test.js: \'the ' +
+        'door\' (and K.legacy in the first test); tests/net/version.test.js: the assertions on the previous release at the door. And decide ' +
+        'whether pages of PROTO 2 need a door of their own (they meet nobody of PROTO ' + PROTO + ' on the sealed topic: without one, a ' +
+        'PROTO 2 page never hears that it should update).');
+    }
   });
 
   // (the previous release itself, at the door: tests/net/version.test.js; this one needs no release tag)

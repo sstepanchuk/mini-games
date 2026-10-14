@@ -44,8 +44,10 @@ const BASE = {
   HOST_WAIT: 10000,                                    // the room's host away this long: the first player here takes over (internet.js)
   AUTH_WAIT: 10000,                                    // a round's runner away this long: the first player here runs it on (app/together.js)
   HOLD: 180000,                                        // a player who dropped out keeps their place this long; a link silent this long is gone
-  VERSION: 25000                                       // another library version not heard this long is forgotten (room.js otherVersion:
+  VERSION: 25000,                                      // another library version not heard this long is forgotten (room.js otherVersion:
                                                        //   longer than two of a host's announcements with guests, 10 s apart; outside the order)
+  PAIR_WAIT: 90000                                     // nearby, a guest that showed its code waits this long for the link (nearby.js;
+                                                       //   the host still has to scan it; outside the order)
 };
 export const SCALE = Number.isFinite(window.__timeScale) && window.__timeScale > 0 ? window.__timeScale : 1;
 const SET = SCALE !== 1 && window.__timing && typeof window.__timing === 'object' ? window.__timing : {};

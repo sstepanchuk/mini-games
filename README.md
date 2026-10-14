@@ -299,9 +299,16 @@ is visible), and the game does nothing for it: one gone silent moves to the brok
 game does not say `streaming`, below).
 The public brokers ban whoever floods them, so the room keeps a **relay budget**: through the brokers, each `latest`
 stream goes about 30 times a second at most, and the other fast messages start at most 30 publishes a second per
-player (more wait and go together, none dropped; on the dev server the console says so, once). Reliable messages go
-at once, and whatever waits rides along. A game that streams state sends it with `latest`: through the brokers, Two
-Dragons sends ≈ 30 states a second (the runner) and ≈ 8 aims (the other player) that way.
+player (more wait and go together, none dropped; on the dev server the console says so, once). Reliable messages
+through the brokers go together at the end of the task that sent them (a burst of 2000 is a few publishes), with
+whatever else waits for that player, in order, in publishes of at most ~16 KB of JSON (bytes of UTF-8; one bigger
+message goes alone: a broker drops a packet over its limit whole); the link's own (acknowledgements, pings) go at once.
+What is not acknowledged goes again together, at most 32 KB a tick; to a player we no longer hear, only a probe now and
+then (the oldest one), and everything they missed as soon as they are heard again. More than 5000 waiting with none
+acknowledged for 3 s (they cannot be hearing us), or 50 000 waiting at all, starts the link over (`relinked`: the full
+picture again); a host keeps no new reliable message for that link until it has. A game that streams state sends it
+with `latest`: through the brokers, Two Dragons sends ≈ 30 states a second (the runner) and ≈ 8 aims (the other
+player) that way.
 
 **Policies and hints** (what a real-time game may set or call; a turn-based one needs none):
 - `room.streaming = () => bool`: while it says true, a direct link quiet for 0.35 s (instead of 1.3 s) is doubted:
@@ -575,11 +582,18 @@ the room's host has it only for the host: their word for anyone else could not r
 dropping out too: of a player's own acts, only leaving the room gives the place up. One who comes back after their
 place went counts as opening the game until their page says which game it has open: the game waits for them, then
 hears `relinked`. Over the internet, if the room's host is gone for 10 s, the first player still here takes over and
-the others follow; when the old host comes back, it joins as a guest. Nearby (no internet), the host pairs with each
-guest in turn; the guests hear each other through it, and no one else can take the host's part: the room waits for
-the host's phone («Не чекати» for it ends the room on the phone where it is pressed). A phone whose page reloads pairs
-again («З’єднатися знову») and is back in its place; the host's phone too: each guest pairs with it again, and the
-room goes on.
+the others follow; when the old host comes back, it joins as a guest, and so does a player who was offline and held
+the room alone meanwhile (in a room of two, the side that was offline comes back as a guest). The room checks its
+brokers at once when the browser says it is online again or its network type changed, even if it checked them a moment
+before. A page Safari restores from its back-forward cache (its sockets closed, its goodbye said) is in its internet
+room again at once: a guest says hello again, a host joins whoever took the room over meanwhile (or goes on, if nobody
+did). A hidden tab whose timers the browser holds back (a tick a minute) still notices a player who went silent, as
+long as it hears someone else: that shows the page itself ran. Nearby (no internet), the host pairs with each guest in
+turn; the guests hear each other through it, and no one else can take the host's part: the room waits for the host's
+phone («Не чекати» for it ends the room on the phone where it is pressed). A phone whose page reloads pairs again
+(«З’єднатися знову») and is back in its place; the host's phone too, also one whose page crashed (a guest pairs again
+as soon as its old link is broken or silent, though the browser may keep its channels open a while): each guest pairs
+with it again, and the room goes on.
 
 ## Trust
 

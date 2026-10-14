@@ -2,15 +2,16 @@
 // call and that never says the same status twice in a row, the list of statuses (STATUSES) with a text for each in the
 // dialog (app/invite.js STATUS), no 'role' event, and a library (app/) that writes nothing onto the net room it does
 // not own (no r.kind, no r.lastStatus). A page without Web Crypto (plain http) has no internet room: 'unavailable',
-// and nothing of it reaches the brokers (phase 3, L4). Read from the source, run in Node, and in worker tabs
-// (tests/support).
+// and nothing of it reaches the brokers (phase 3, L4). A room alone whose one working broker drops says 'no-signal' and
+// tries the others again at once, and a short blip ends as soon as the browser is online. Read from the source, run
+// in Node, and in worker tabs (tests/support).
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as espree from 'espree';
-import { room, sleep, until, world } from '../support/world.js';
+import { room, settled, shows, sleep, until, world } from '../support/world.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = f => fs.readFileSync(path.join(REPO, f), 'utf8');
@@ -118,5 +119,37 @@ describe('the room\'s status (phase 2, G2)', () => {
     assert.equal(s.lib.kind, 'internet');
     const props = await L.call('roomProps');
     assert.ok(!('lastStatus' in props) && props.kind === 'get', 'nothing written onto the net room: ' + JSON.stringify(props));
+  });
+
+  // (net-edge-02: the brokers that failed meanwhile waited for their own retry, which grows to two minutes while another
+  // works: the room said «Немає інтернету» that long, and nobody found it)
+  test('alone, the one broker that worked drops as another comes back: those that kept failing meanwhile try again at once, and a newcomer there finds the room', { timeout: 60000 }, async t => {
+    const W = world(t);
+    const A = await W.tab('p1tab', { brokers: [true, false, false, false] });
+    await A.join('stat3', 'Аня');
+    assert.ok(await until(async () => (await A.state()).status === 'waiting', 5000));
+    await sleep(20000);                                      // the others keep failing while EMQX works: each tries later and later (brokers.js retryBroker)
+    const n = (await A.events()).length;
+    await A.net({ brokers: [false, true, false, false] });   // EMQX goes, HiveMQ is back; no 'online' (the device never went offline)
+    const statuses = async () => (await A.events()).slice(n).filter(e => e[1] === 'status').map(e => e[2]);
+    assert.ok(await until(async () => (await statuses()).join() === 'no-signal,waiting', 2000, 50), 'waiting again through HiveMQ within 2 s: ' + await statuses());
+    const B = await W.tab('p2tab', { brokers: [false, true, false, false] });
+    await B.join('stat3', 'Богдан');
+    assert.ok(await until(settled([A, B]), 5000), await shows([A, B]));
+  });
+
+  // (and what that must not cost: a check of every broker when the last one drops would take the 3 s limit that 'online'
+  // needs a moment later)
+  test('a blip: no-signal, then online within a second: waiting again within 0.5 s', { timeout: 30000 }, async t => {
+    const W = world(t);
+    const A = await W.tab('p1tab');
+    await A.join('stat4', 'Аня');
+    assert.ok(await until(async () => (await A.state()).status === 'waiting', 5000));
+    await sleep(3500);                                       // (past any check of the start)
+    await A.net({ up: false });
+    assert.ok(await until(async () => (await A.state()).status === 'no-signal', 3000));
+    await sleep(1000);
+    await A.net({ up: true });
+    assert.ok(await until(async () => (await A.state()).status === 'waiting', 500, 20), 'waiting again within 0.5 s of online');
   });
 });

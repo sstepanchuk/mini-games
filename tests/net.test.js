@@ -42,3 +42,18 @@ test('codes of other games and garbage are refused', () => {
   assert.throws(() => decode(code, 'other'), /game/);
   for (const bad of ['', 'HELLO', code.slice(0, 30), code.replace(/A/g, '1')]) assert.throws(() => decode(bad, 'ihroteka'));
 });
+
+// (audit, net-edge-09: an unknown address type decoded to a bogus .local address, and the player waited for a timeout
+// instead of hearing at once that the code is wrong)
+test('a code with an address of an unknown type, or with bytes after its last address, is refused as bad', () => {
+  const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const bytes = s => { const o = []; let bits = 0, v = 0; for (const c of s) { v = (v << 5 | B32.indexOf(c)) & 0xfff; bits += 5; if (bits >= 8) { o.push(v >>> (bits - 8) & 255); bits -= 8; } } return o; };
+  const text = b => { let out = '', bits = 0, v = 0; for (const x of b) { v = v << 8 | x; bits += 8; while (bits >= 5) { out += B32[v >>> (bits - 5) & 31]; bits -= 5; } } return bits ? out + B32[v << (5 - bits) & 31] : out; };
+  const b = bytes(encode(sdp(['a=candidate:1 1 udp 1 192.168.0.7 4000 typ host']), OFFER, 'ihroteka'));
+  const at = b.length - 7;                                                    // the last address: [type 4] [4 bytes] [port ×2]
+  assert.equal(b[at], 4);
+  assert.equal(decode(text(b), 'ihroteka').candidates, 1);
+  // type 9, with 16 bytes of address and a port (so it is not merely short)
+  assert.throws(() => decode(text([...b.slice(0, at), 9, ...Array(16).fill(1), 0x0f, 0xa0]), 'ihroteka'), /^Error: bad$/);
+  assert.throws(() => decode(text([...b, 0, 0]), 'ihroteka'), /^Error: bad$/);
+});

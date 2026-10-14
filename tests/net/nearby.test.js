@@ -5,6 +5,7 @@
 // a sleep longer than places are kept sees the others away at once.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { OFFER, encode } from '../../library/net/code.js';
 import { settled, show, shows, sleep, states, until, world } from '../support/world.js';
 
 const T = { timeout: 40000 };
@@ -66,7 +67,7 @@ describe('nearby rooms: places, names', { concurrency: 3 }, () => {
     assert.deepEqual([s.role, s.linked, s.weak, s.players], ['guest', true, true, ['Ганна', 'Гліб']], 'kept, waiting for the host: ' + show(s));
     const H2 = await W.tab('p3tab');
     await H2.near('Ганна');
-    await pairUp(H2, G);                                   // (a guest pairs again only while its link to the host is broken)
+    await pairUp(H2, G);                                   // (a guest pairs again only while its link to the host is broken or silent)
     const all = await until(settled([H2, G]), 8000);
     assert.ok(all, await shows([H2, G]));
     assert.deepEqual(all.map(x => [x.role, x.players.join()]), [['host', 'Ганна,Гліб'], ['guest', 'Ганна,Гліб']]);
@@ -74,6 +75,39 @@ describe('nearby rooms: places, names', { concurrency: 3 }, () => {
     assert.ok(ev.includes('relinked Ганна true') && !ev.some(e => /^(peer-gone|leave|role|status peer-left)/.test(e)), 'the same room, the host back: ' + ev);
     // (the new link counts before the room says who is back: what the game sends them then gets there)
     assert.ok(ev.indexOf('status ready') >= 0 && ev.indexOf('status ready') < ev.indexOf('relinked Ганна true'), 'linked first: ' + ev);
+  });
+
+  // (audit, net-edge-03: a guest paired again only once its dead link's channels closed, which a browser does when ICE
+  // gives up, ~15 s after a crash in Chromium; until then its answer to the host's new page was refused, 'kind')
+  test('the host\'s tab is killed (no bye; its channels stay open on the guest): its new page pairs again', T, async t => {
+    const W = world(t, { rtc: true });
+    const [H, G] = await phones(W, ['Ганна', 'Гліб']);
+    const n = (await G.events()).length;
+    await H.kill();
+    assert.ok(await until(async () => (await G.state()).away.includes('Ганна'), 5000), show(await G.state()));
+    const H2 = await W.tab('p3tab');
+    await H2.near('Ганна');
+    await pairUp(H2, G);
+    const all = await until(settled([H2, G]), 8000);
+    assert.ok(all, await shows([H2, G]));
+    assert.deepEqual(all.map(x => [x.role, x.players.join()]), [['host', 'Ганна,Гліб'], ['guest', 'Ганна,Гліб']]);
+    const ev = await since(G, n);
+    assert.ok(ev.includes('relinked Ганна true') && !ev.some(e => /^(peer-gone|leave|role|status peer-left)/.test(e)), 'the same room, the host back: ' + ev);
+  });
+
+  // a guest that hears its host never pairs with anyone else (it does not start pairing; only the host adds players)
+  test('a guest whose link to the host works is refused another host\'s code (\'kind\'), also right after a blip it recovered from', T, async t => {
+    const W = world(t, { rtc: true });
+    const [H, G] = await phones(W, ['Ганна', 'Гліб']);
+    const X = await W.tab('p3tab');
+    await X.near('Ксеня');
+    await assert.rejects(G.pair('answer', await X.pair('offer')), /Error: kind\b/, 'a live link');
+    await G.net({ direct: false });                        // a blip: silent both ways, then back by itself
+    assert.ok(await until(async () => (await G.state()).away.includes('Ганна'), 5000), show(await G.state()));
+    await G.net({ direct: true });
+    assert.ok(await until(settled([H, G]), 5000), 'the old link is back: ' + await shows([H, G]));
+    await assert.rejects(G.pair('answer', await H.pair('offer')), /Error: kind\b/, 'the link back after a blip');
+    assert.ok(await until(settled([H, G]), 1000), 'the room as it was: ' + await shows([H, G]));
   });
 
   // (phase 1b review: the host's new page knew only itself, so the first guest paired again heard everyone else leave,
@@ -192,5 +226,22 @@ describe('nearby rooms: a long sleep', () => {
     const weak = (await G.events()).slice(n).find(e => e[1] === 'weak' && e[2] === true);
     assert.ok(weak && weak[0] - woke < GRACE, 'at once, not after GRACE (' + GRACE + ' ms): ' + (weak && weak[0] - woke) + ' ms');
     assert.deepEqual([s.role, s.linked, s.players], ['guest', true, ['Ганна', 'Гліб']], 'its room waits (pairing again brings them together): ' + show(s));
+  });
+});
+
+// (audit, net-edge-05: a browser without WebRTC used to throw a TypeError, leave a pairing pending and give no reason)
+describe('nearby rooms: no WebRTC', () => {
+  test('no WebRTC: offer() and answer(code) refuse with nortc, pair.reason is nortc, nothing pending', T, async t => {
+    const W = world(t);                                    // (no rtc: these tabs have no RTCPeerConnection)
+    const H = await W.tab('p1tab'), G = await W.tab('p2tab');
+    await H.near('Ганна'); await G.near('Гліб');
+    const fp = Array(32).fill('AB').join(':');             // a host's code, as a browser with WebRTC shows it
+    const offer = encode(['v=0', 'a=ice-ufrag:abcd', 'a=ice-pwd:abcdefghijklmnopqrstuv', 'a=fingerprint:sha-256 ' + fp, 'a=mid:0',
+      'a=candidate:1 1 udp 2122260223 192.168.0.7 50000 typ host'].join('\r\n'), OFFER, 'test');
+    for (const [X, step, code] of [[H, 'offer'], [G, 'answer', offer]]) {
+      await assert.rejects(X.pair(step, code), /Error: nortc\b/, step);
+      const s = await X.state();
+      assert.deepEqual([s.reason, s.pairing], ['nortc', false], step + ': why, and no pairing left: ' + show(s));
+    }
   });
 });

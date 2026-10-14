@@ -178,4 +178,45 @@ describe('library versions in one room', { concurrency: 3 }, () => {
       assert.ok(await until(async () => (await H.state()).linked, 8000), 'a phone of our version pairs after it: ' + await shows([H]));
     });
   }
+
+  // (audit, deploy-day-live-02: the library's dialog leaves the room the moment it hears 'version', in the same call,
+  // app/invite.js otherVersion; a host that heard it before it answered never said its own hello, and the other phone
+  // waited at «Чекаю на з’єднання…» for good. Not here: a host of the previous release that leaves so, which cannot
+  // answer either; what our phone says then waits for the owner)
+  for (const [which, oursHost] of [['next', true], ['previous', true], ['next', false]]) {
+    test('nearby: the host leaves the moment it hears another version (as the library\'s dialog does): the guest says version too (' +
+      (oursHost ? 'a guest of the ' + which + ' version' : 'a host of the ' + which + ' version') + ')', T, async t => {
+      const library = which === 'next' ? next : prev && prev.library;
+      if (!library) { t.skip('no previous release: ' + why); return; }
+      const W = world(t, { rtc: true });
+      const ours = await W.tab('p1tab'), theirs = await W.tab('p2tab', {}, { library });
+      const [H, G] = oursHost ? [ours, theirs] : [theirs, ours];
+      await H.near('Аня', { leaveOn: 'version' }); await G.near('Богдан');
+      await pairUp(H, G);
+      assert.ok(await until(async () => (await H.events()).some(e => e[1] === 'leaveOn'), 5000), 'the host hears it and leaves');
+      const s = await until(async () => { const x = await G.state(); return await lastStatus(G) === 'version' && !x.pairing && x; }, 5000);
+      assert.ok(s, 'the guest says \'version\', its pairing over: ' + (await lastStatus(G)) + ' ' + JSON.stringify(await G.state()));
+      await sleep(1500);
+      assert.deepEqual([await lastStatus(G), (await G.state()).linked], ['version', false], 'and stays so');
+    });
+  }
+
+  // (the same: the dialog of a host already linked ends only the pairing, room.pair.cancel)
+  test('nearby: a host already linked adds a phone of another version: that phone says version', T, async t => {
+    const W = world(t, { rtc: true });
+    const H = await W.tab('p1tab'), G = await W.tab('p2tab'), X = await W.tab('p3tab', {}, { library: next });
+    const { proto } = await H.info();
+    await H.near('Аня', { leaveOn: 'version' }); await G.near('Богдан'); await X.near('Сава');
+    await pairUp(H, G);
+    assert.ok(await until(settled([H, G]), 8000), await shows([H, G]));
+    await pairUp(H, X);
+    const x = await until(async () => { const s = await X.state(); return s.version === proto && !s.pairing && s; }, 5000);
+    assert.ok(x, 'the new phone learns our number, its pairing over: ' + JSON.stringify(await X.state()));
+    assert.ok((await H.events()).some(e => e[1] === 'leaveOn'), 'the host heard it (and ended the pairing)');
+    await sleep(1500);
+    assert.deepEqual([await lastStatus(X), (await X.state()).linked], ['version', false], 'the new phone says \'version\'');
+    const s = await until(settled([H, G]), 1000);
+    assert.ok(s, 'the room goes on: ' + await shows([H, G]));
+    assert.deepEqual(s[0].players, ['Аня', 'Богдан']);
+  });
 });

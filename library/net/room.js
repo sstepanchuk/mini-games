@@ -50,7 +50,7 @@
 // kind: null → 'host' or null → 'guest', and pairing again keeps it; any → 'out'.
 import { me, PROTO, pvOf, TIMING } from './config.js';
 import { closeRtc } from './rtc.js';
-import { deliver, diag, keepDirectAlive, kick, lag, refresh, resetPaths, send, stats, tendAlive, watch, wire } from './link.js';
+import { deliver, diag, flushRelay, keepDirectAlive, kick, lag, refresh, resetPaths, send, stats, tendAlive, watch, wire } from './link.js';
 
 // Messages of the link and the room itself: p (pulse), q (ping answer), ak (acknowledgement), bye; and _r (the
 // players), _h (nearby hello), _x (a guest asks the host to let a player's place go). room.send refuses them, with a
@@ -85,9 +85,11 @@ export const NAME = /^\S(?:.{0,22}\S)?$/u;             // a name: 1 to 24 charac
  * Required:
  *   peerGone(P)          link.js: P has been silent for N.lostAfter (HOLD). The link is over: unlink P (our host: move
  *                        on). Their place stays.
- *   restart(P)           link.js: so much of ours is unacknowledged (OUTBOX_MAX) that they cannot be hearing us. The link
+ *   restart(P)           link.js: more than OUTBOX_MAX of ours wait and none was acknowledged for STALL (or ten times
+ *                        that many wait, or the link is overfull: P.overfull), so they cannot be hearing us. The link
  *                        starts over instead of ending (internet: a new attempt, both sides resync; nearby: the direct
- *                        link closes, as when it fails). Nothing moves on: silence still decides that (HOST_WAIT, HOLD).
+ *                        link closes, as when it fails). Called each tick until it has. Nothing moves on: silence still
+ *                        decides that (HOST_WAIT, HOLD).
  *   byeFrom(P, final, moved)   link.js: a 'bye' from P on the link (at once, ahead of anything still missing;
  *                        internet.js also on the topic). final (menu: 1): the player left for good, their place goes
  *                        (dropMember); else only their tab closed (a reload, say): the place is kept (internet: unlink P;
@@ -104,6 +106,9 @@ export const NAME = /^\S(?:.{0,22}\S)?$/u;             // a name: 1 to 24 charac
  *                        took our place, nothing more is said), before the links close: the mode's goodbye (not when
  *                        out) and cleanup (its timers and listeners: always)
  *   bye()                the tab closes (pagehide; our place is kept): a goodbye by the mode's own path too
+ *   back()               the page is back from the back-forward cache after its pagehide said bye (internet: a guest
+ *                        says hello again at once, a host asks who holds the room)
+ *   deafBack(gap)        brokers.js: the brokers were silent longer than HOST_WAIT (gap ms) and are back
  *   onUnlink(P)          unlink(): the link with P is over, just before P leaves N.peers (internet: stop listening)
  *   probe(P, now)        each watchdog tick, for each linked P (internet: a guest asks a quiet host 'here')
  *   hubCheck(now)        each watchdog tick (internet: a guest whose host has been away HOST_WAIT moves on)
@@ -119,7 +124,8 @@ export const NAME = /^\S(?:.{0,22}\S)?$/u;             // a name: 1 to 24 charac
  * refresh(P), arrive(P, m, reliable), roomStats(), shut(final, out).
  */
 const REQUIRED = ['peerGone', 'restart', 'byeFrom'], BROKER_HOOKS = ['onConnected', 'onMessage', 'onDown'];
-const HOOKS = [...REQUIRED, ...BROKER_HOOKS, 'onLegacy', 'close', 'bye', 'onUnlink', 'probe', 'hubCheck', 'longSleep', 'releaseHost', 'onDirect', 'onHello'];
+const HOOKS = [...REQUIRED, ...BROKER_HOOKS, 'onLegacy', 'close', 'bye', 'back', 'deafBack', 'onUnlink', 'probe', 'hubCheck', 'longSleep', 'releaseHost',
+  'onDirect', 'onHello'];
 function modeHooks(mode, relay) {
   for (const k of Object.keys(mode)) if (!HOOKS.includes(k) || (mode[k] != null && typeof mode[k] !== 'function')) throw new Error('room: not a mode hook (or not a function): ' + k);
   for (const k of relay ? [...REQUIRED, ...BROKER_HOOKS] : REQUIRED) if (!mode[k]) throw new Error('room: the mode needs ' + k);
@@ -156,13 +162,17 @@ function modeHooks(mode, relay) {
  * @property {Map} kq                our echo tests on their way: number → when it went ('k')
  * @property {?object} spare         one packet's worth sealed at once, ready for the last words (seal.js spare)
  * @property {?Map} stash            while the page goes: session → [k, link messages], for the last words
+ * @property {boolean} hid           our pagehide said bye: a pageshow from the back-forward cache brings us back (N.back)
  * @property {object} door           { id, q }: the session (and its numbers) we answer an older library as, at the door
  * @property {Map} last              sender → its replay window (seal.js: a copy through another broker, or one sent again,
  *                                   is dropped); the page keeps them per room, for when it comes back (brokers.js windows)
  * @property {boolean} ready         a broker has connected: we looked for the room
  * @property {boolean} up            some broker works (as the status last said)
- * @property {number} kickAt         when the brokers were last checked at once (kickBrokers: at most every 3 s)
- * @property {number} kAt            when the last echo test went ('k', every 5 s)
+ * @property {number} kickAt         when the brokers were last checked at once (kickBrokers: at most every 3 s, but at once
+ *                                   when the browser is online again or its network type changed)
+ * @property {number} kAt            when the last echo test went ('k', every 5 s); kPrev: the one before it
+ * @property {number} kPrev
+ * @property {number} rxAt           when any broker last delivered anything (a message, or a subscription that took)
  * @property {number} winAt          when the brokers' scores were last halved (every 2 s)
  * @property {number} pubN           data messages sent (every 24th goes through every broker)
  * Role and players:
@@ -189,6 +199,9 @@ function modeHooks(mode, relay) {
  * @property {number} lastWatch      its last tick
  * @property {number} watchMs        its pace now: 200 ms while linked, 1000 not
  * @property {number} graceUntil     after our own sleep: nobody is judged before this
+ * @property {number} heardAt        when a linked player's message last came (link.js deliver), or the last tick
+ * @property {number} stall          the longest the page heard nothing since the last tick: a late tick with it short
+ *                                   was only our timers held back (a hidden tab), not a sleep
  * Timers (stop(N, ...) clears them):
  * @property {*} whoTimer            internet: nobody answered 'who', we hold the room
  * @property {*} annTimer            internet: the host says it is here
@@ -208,6 +221,8 @@ function modeHooks(mode, relay) {
  * @property {string} id             their session (nearby: 'pairing.…' until their _h says)
  * @property {string} name           their player's name, once known ('' until then)
  * @property {number} [k]            internet: the guest's hello attempt this link belongs to (each 'd' carries it)
+ * @property {number} [helloQ]       internet: the number q of the hello that set this link's attempt k (an older hello is
+ *                                   ignored)
  * @property {boolean} [again]       internet: a guest's link started over (restart): 'relinked' is due when the host answers
  * @property {boolean} [said]        nearby: our _h went out on this link
  * @property {number} [probeAt]      internet: when a guest last asked its quiet host 'here'
@@ -225,7 +240,8 @@ function modeHooks(mode, relay) {
  * Paths, numbering and ping (link.js; resetPaths starts the numbering and the measurements over):
  * @property {string} via            the path in use: 'p2p' (direct) or 'relay' (the brokers)
  * @property {number} viaAt          when it was last chosen
- * @property {Array} q               messages waiting to go through the brokers (one 'd' per flush)
+ * @property {Array} q               messages waiting to go through the brokers (a flush: as few 'd' as RELAY_BYTES allows)
+ * @property {boolean} qSoon         a flush is due at the end of this task (reliable messages through the brokers: soon)
  * @property {Map} qLatest           stream → the newest 'latest' message waiting for the brokers
  * @property {number} relayAt        when the 'latest' streams last went through the brokers
  * @property {number} qFast          fast messages (not 'latest') waiting in q; fastAt: when such ones last went (the relay budget)
@@ -237,7 +253,11 @@ function modeHooks(mode, relay) {
  * @property {number} pN             pulses sent (every 6th through the brokers too)
  * @property {number} nudged         when a quiet direct link was last checked through the brokers (keepDirectAlive)
  * @property {number} tx             the last reliable number we gave (_x)
- * @property {Array} outbox          reliable messages not acknowledged yet: { m, at: last sent, n: times sent }
+ * @property {Array} outbox          reliable messages not acknowledged yet: { m, at: last sent, n: times sent, b: bytes }
+ * @property {number} ackAt          when the outbox last moved: something of ours acknowledged, or the first one waiting
+ * @property {number} resendAt       while they are quiet: when the last probe went (one message sent again)
+ * @property {boolean} overfull      the link starts over (internet: the host's restart): no new reliable message is kept
+ *                                   for it and nothing goes again, until resetPaths
  * @property {number} rxNext         the next reliable number we expect from them
  * @property {Map} rxHold            number → a reliable message that overtook a missing one
  * @property {number} byeX           the number of the bye we already acted on
@@ -287,13 +307,13 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
     // brokers (brokers.js); seq starts from the clock, so numbers of a new connection never collide with what
     // the other players remember from our previous one (and, in this page, never below them: brokers.js seqHi)
     keys: null, keyMs: null, topic: '', legacy: '', clients: [], br: [], seq: Date.now(), out: Promise.resolve(), wait: new Set(), kq: new Map(), spare: null,
-    stash: null, door: null, last: new Map(), ready: false, up: false, kickAt: -1e9, kAt: 0, winAt: 0, pubN: 0,
+    stash: null, hid: false, door: null, last: new Map(), ready: false, up: false, kickAt: -1e9, kAt: 0, kPrev: 0, rxAt: 0, winAt: 0, pubN: 0,
     // our role, the host's session (when we are a guest), the links (session → peer), the players
     // ({ n: name, s: session, a: away since, 0 while here }, in the order they came; ours has s = me)
     role: null, host: null, peers: new Map(), members: [{ n: name, s: me, a: 0 }], sent: '', told: [], cutAt: 0, ever: false,
     linked: false, weak: false, statsDue: false, budgetSaid: false, strangers: new Map(), yieldUntil: 0, status: '', mismatch: null,
     // the watchdog (link.js)
-    lastWatch: 0, watchMs: 0, graceUntil: 0,
+    lastWatch: 0, watchMs: 0, graceUntil: 0, heardAt: 0, stall: 0,
     // timers
     whoTimer: null, annTimer: null, helloTimer: null, failTimer: null, fullTimer: null, watchTimer: null, versionTimer: null, aliveTimer: null
   };
@@ -343,8 +363,8 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
     // (this player goes on in another tab or device).
     leave(final = true) {
       if (N.closed) return;
-      for (const P of linkedPeers(N)) try { send(P, final ? { t: 'bye', menu: 1 } : { t: 'bye' }); } catch (e) {}
-      shut(final, false);
+      for (const P of linkedPeers(N)) try { send(P, final ? { t: 'bye', menu: 1 } : { t: 'bye' }); if (N.relay) flushRelay(P); } catch (e) {}
+      shut(final, false);                              // (the byes went first: shut closes the links, and what waits with them)
     }
   };
   // The room closes: we left (final: for good), or (out) another tab of this player took our place, and nothing more
@@ -359,7 +379,7 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
     N.peers.clear();
     removeEventListener('pagehide', onPageHide);
     document.removeEventListener('visibilitychange', onShow);
-    removeEventListener('pageshow', onShow);
+    removeEventListener('pageshow', onPageShow);
   };
   Object.assign(N, {
     emit: ev.emit,
@@ -372,18 +392,31 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
     shut
   }, hooks);
 
-  // closing the tab: say goodbye by every path we still can (our place is kept: maybe it was a reload)
+  // closing the tab: say goodbye by every path we still can (our place is kept: maybe it was a reload). What the links
+  // send through the brokers goes now, before the mode's goodbye, which takes it along (internet: the last words)
   const onPageHide = () => {
     if (N.closed) return;
-    for (const P of linkedPeers(N)) try { send(P, { t: 'bye' }); } catch (e) {}
+    N.hid = true;
+    for (const P of linkedPeers(N)) try { send(P, { t: 'bye' }); if (N.relay) flushRelay(P); } catch (e) {}
     try { N.bye(); } catch (e) {}
   };
   addEventListener('pagehide', onPageHide);
+  // Back from the back-forward cache (Safari: its sockets closed, the page frozen) after our pagehide said bye: the others
+  // let our links go, or moved on (the mode's back). That bye must not go again (what is not acknowledged goes again,
+  // link.js): it becomes nothing, keeping its number (arrive drops '_'; without it, everything after it would wait).
+  const onPageShow = e => {
+    if (e && e.persisted && N.hid && !N.closed) {
+      N.hid = false;
+      for (const P of N.peers.values()) for (const o of P.outbox) if (o.m.t === 'bye' && o.m.menu !== 1) o.m = { t: '_', _x: o.m._x };
+      try { N.back(); } catch (x) { console.error(x); }
+    }
+    onShow();
+  };
   // back on screen (a background tab may have been throttled to a timer a second, too little to count as sleep); and
   // out of sight: no watching the direct link closely (tendAlive)
   const onShow = () => { tendAlive(N); if (!document.hidden) kick(N); };
   document.addEventListener('visibilitychange', onShow);
-  addEventListener('pageshow', onShow);
+  addEventListener('pageshow', onPageShow);
   return { N, room };
 }
 
@@ -398,7 +431,8 @@ export function newPeer(N, id, name = '') {
     // brokers: whether we listen to their mailbox, which brokers bring their data first, which bring ours to them
     heard: false, win: [], peerBest: [], peerBestAt: -1e9,
     // paths, numbering and ping (link.js)
-    via: 'relay', viaAt: 0, q: [], qLatest: new Map(), relayAt: 0, qFast: 0, fastAt: 0, qTimer: null, qDue: 0, ackTimer: null, pingAt: 0, pN: 0, nudged: 0,
+    via: 'relay', viaAt: 0, q: [], qSoon: false, qLatest: new Map(), relayAt: 0, qFast: 0, fastAt: 0, qTimer: null, qDue: 0, ackTimer: null, pingAt: 0, pN: 0,
+    nudged: 0,
     // direct link (rtc.js)
     pc: null, dcF: null, dcC: null, dcSeen: 0, dcBorn: 0, iceQ: [], rtcK: null, rtcNext: 0, rtcTries: 0, rtcTimer: null,
     turn: null, cand: '', iceRtt: null, statsAt: 0, failing: false
@@ -413,9 +447,13 @@ export function renamePeer(N, P, id) {
   if (N.host === P.id) N.host = id;
   P.id = id;
 }
+// Its timers and its direct link close, and what waits for the brokers is dropped, not flushed: internet.js resync sets
+// the new attempt's k and then closes the peer, so what was queued for the old attempt (numbered by it) must go nowhere,
+// least of all under the new k. That order (P.k, then closePeer clearing P.q) is load-bearing. (A link that ends flushes
+// first: unlink.)
 export function closePeer(P) {
   stop(P, 'qTimer'); stop(P, 'ackTimer');
-  P.q = []; P.qLatest.clear(); P.qFast = 0;
+  P.q = []; P.qLatest.clear(); P.qFast = 0; P.qSoon = false;
   closeRtc(P);
 }
 
@@ -463,6 +501,7 @@ export function unlink(P, { quiet = false, linger = 0 } = {}) {
   const N = P.N;
   if (N.peers.get(P.id) !== P) return;
   const was = P.linked;
+  if (was && N.relay) flushRelay(P);                   // (what this task said to them goes first: a bye, say; link.js soon)
   P.linked = false;
   if (linger) { const { pc, dcF, dcC } = P; P.pc = P.dcF = P.dcC = null; closePeer(P); setTimeout(() => closePeer(Object.assign(P, { pc, dcF, dcC })), linger); }
   else closePeer(P);
