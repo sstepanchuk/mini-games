@@ -5,11 +5,13 @@
 // leaves the room mid-round: the round cannot go on without them (no seat of theirs moves again), so the template's
 // rule (round.policy.endWhenSeatGone) ends it for everyone ('gone', and the lobby says why); the two left start a new
 // one. The one who left comes back meanwhile: the seats of a round are frozen, so they wait for a seat, get one when
-// that round is over, and start a round of three. That they wait, and who plays now, the library's waiting screen
-// under the game's title says («Ти чекаєш на місце», «Грають зараз: …» in the round's seat order; <ihroteka-wait>,
+// that round is over, and start a round of three. That they wait, and who plays now, the library's waiting screen at
+// the end of the game's page says («Ти чекаєш на місце», «Грають зараз: …» in the round's seat order; <ihroteka-wait>,
 // README "Waiting screens"), and the game's own lobby nothing; whom a game waits for shows in that screen throughout,
-// never in the library's card (sampled every 100 ms on every page). Runs on its own server: E2E_URL is only checked to
-// be up, by run.cjs.
+// never in the library's card (sampled every 100 ms on every page). Then a round stands on the turn of a player whose
+// game is closed (the room to the shelf by «← Усі ігри» and back, his game slow to open): the others see «… зараз не в
+// грі», one of them ends it with «Вийти з раунду» (pressed twice), every lobby says who, and his game opens into the
+// lobby. Runs on its own server: E2E_URL is only checked to be up, by run.cjs.
 'use strict';
 const { launch, scenario, check, step, until, w } = require('./support/scenario.cjs');
 const { openPage, createLink, libState, short, waitShown } = require('./support/pages.cjs');
@@ -95,13 +97,44 @@ scenario('newgame3: the template for three, in devnet tabs: only the runner\'s s
   };
   for (const [who, next] of [[R, O], [O, R], [R, O], [O, R]]) check(await turn(who, next), who + ' +2', await views([R, O]));
   v = await turn(R, null);
-  check(v && v[R].say === 'Ти виграв!' && v[O].say === 'Виграв: ' + R + '!' && v[R].total === 10, R + ' +2 = 10: ' + R + ' wins', v || await views([R, O]));
-  const seated = await until(async () => { const x = await view(F[X]), g = (await libState(P[X])).game; return x && x.again && x.say === 'Виграв: ' + R + '!' && g.players.length === 3 && x; }, 10000);
+  check(v && v[R].say === 'Перемога твоя!' && v[O].say === 'Перемога: ' + R + '!' && v[R].total === 10, R + ' +2 = 10: ' + R + ' wins', v || await views([R, O]));
+  const seated = await until(async () => { const x = await view(F[X]), g = (await libState(P[X])).game; return x && x.again && x.say === 'Перемога: ' + R + '!' && g.players.length === 3 && x; }, 10000);
   check(seated, 'the round over: ' + X + ' sees how it ended, and has a seat (three play now), «Ще раз»', [seated || await view(F[X]), await short(P[X])]);
   check(await until(() => quiet([X]), 5000), X + '\'s screen: nothing to say any more', await waitShown(P[X]));
   await F[X].click('#again');
   const three = await until(async () => { const x = await views(); return Object.values(x).every(y => y && y.play && y.total === 0 && y.seats.length === 3) && x; }, 10000);
   check(three, X + ' presses «Ще раз»: a round of the three of them', three || await views());
+
+  step('on ' + X + '\'s turn his game is closed (the room to the shelf and back, his slow to open); ' + O + ' ends the round');
+  let sum = 0;                                              // (+1 by whoever's turn it is, until it is X's: he sits last now)
+  for (let x = await views(), who; (who = Object.keys(x).find(n => x[n] && x[n].say === 'Твій хід')) && who !== X && sum < 3;) {
+    await F[who].click('#steps button[data-n="1"]');
+    sum++;
+    x = await until(async () => { const y = await views(); return Object.values(y).every(z => z && z.total === sum) && y; }, 10000) || await views();
+  }
+  v = await until(async () => { const x = await views(); return sum > 0 && Object.values(x).every(y => y && y.total === sum) && x[X].say === 'Твій хід' && x; }, 10000);
+  check(v, sum + ' on every screen; ' + X + '\'s turn', v || await views());
+  let open = null;
+  const opened = new Promise(r => { open = r; });
+  await P[X].route('**/demo3/**', async r => { if (r.request().resourceType() === 'document') await opened; return r.continue().catch(() => {}); });
+  await F[R].click('#home');
+  check(await until(async () => (await Promise.all(Object.values(P).map(libState))).every(s => !s.game), 10000), '«← Усі ігри» in ' + R + '\'s game: the room on the shelf', [await short(P[R]), await short(P[X])]);
+  await P[R].click('a.game[href*="demo3"]');
+  for (const n of [R, O]) F[n] = await frame(P[n], 'main');
+  const closed = await until(async () => { const x = await views([R, O]), y = await Promise.all([R, O].map(n => waitShown(P[n])));
+    return [R, O].every(n => x[n] && x[n].play && x[n].total === sum) && y.every(z => z.where === 'screen' && z.text === X + ' зараз не в грі') && [x, y]; }, 10000);
+  check(closed, R + ' and ' + O + ' back in the round (' + sum + ', ' + X + '\'s turn), their screens: «' + X + ' зараз не в грі»', closed || [await views([R, O]), await waitShown(P[R]), await waitShown(P[O])]);
+  await F[O].click('#quit');
+  check((await view(F[O])).quit === 'Точно вийти?', O + ' presses «Вийти з раунду»: «Точно вийти?»', await view(F[O]));
+  await F[O].click('#quit');
+  const cut = await until(async () => { const x = await views([R, O]); return [R, O].every(n => x[n] && x[n].lobby) && x; }, 10000);
+  check(cut && cut[R].say === 'Раунд перервано. Вийти вирішує: ' + O + '.' && cut[O].say === 'Раунд перервано.', '… twice: the round is over, ' + R + '\'s lobby says who ended it, ' + O + '\'s «Раунд перервано.»', cut || await views([R, O]));
+  const ended = await until(async () => { const r = (await libState(P[R])).rounds.demo3; return r && !r.on && r; }, 5000);
+  check(ended && ended.reason === 'quit' && ended.by === O, 'the round\'s record: over, quit (' + O + ')', ended);
+  open();
+  F[X] = await frame(P[X], 'main');
+  const back = await until(async () => { const x = await view(F[X]); return x && x.lobby && x; }, 10000);
+  check(back && back.say === 'Раунд перервано. Вийти вирішує: ' + O + '.', X + '\'s game opens: the lobby, and who ended the round', back || await view(F[X]));
   for (const [page, s] of [[X + '\'s first page', gone], ...await Promise.all(Object.keys(P).map(async n => [n + '\'s page', await sampled(P[n])]))]) {
     check(s && s.n > 0 && !s.card && !s.both && !s.many, page + ': any wait only ever in the game\'s screen (never the card, never both, never two copies), ' + (s && s.n) + ' samples', s);
   }

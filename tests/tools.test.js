@@ -1,6 +1,7 @@
 // The game author's tools, on a scratch copy of the repository (IHROTEKA_ROOT; no keyring, no password needed):
-// `cli new` makes a game from tools/template that the build takes and whose own tests pass (its waiting screen,
-// <ihroteka-wait>, under its title); `remove-game` asks for --yes and keeps the plaintext sources aside; game.json
+// `cli new` makes a game from tools/template that the build takes and whose own tests pass («← Усі ігри», hidden,
+// before its title; its waiting screen, <ihroteka-wait>, at the end, under its buttons and its line; no gendered words
+// about players); `remove-game` asks for --yes and keeps the plaintext sources aside; game.json
 // "api" is checked against the library's version; the build warns about a string in a game's code that looks like a
 // file next to it (on the site the game is one page), and refuses a script from elsewhere (the site's policy would:
 // README, Trust); it reads only the page's own markup for links (what is inside a script or a style is code), and
@@ -37,7 +38,11 @@ test('cli new: a game from the template, valid for the build, its own tests pass
   assert.deepEqual([made.readUInt32BE(16), made.readUInt32BE(20)], [1200, 630], 'a 1200×630 cover');
   const page = fs.readFileSync(file('games/demo2/index.html'), 'utf8');
   assert.match(page, /<title>Демо &lt;два&gt;<\/title>/);
-  assert.match(page, /<h1>[^<]*<\/h1>\s*(<!--[\s\S]*?-->\s*)?<ihroteka-wait><\/ihroteka-wait>/, 'the library\'s waiting screen, empty, under its title (README "Waiting screens")');
+  assert.match(page, /<main>\s*<button class="home" id="home" type="button" hidden>← Усі ігри<\/button>\s*<h1>/, 'a way back to the shelf, hidden (the game shows it in the library), first, before its title');
+  assert.match(page, /<p id="say"[^>]*>[\s\S]*?<\/p>\s*(<!--[\s\S]*?-->\s*)?<ihroteka-wait><\/ihroteka-wait>\s*<\/main>/,
+    'the library\'s waiting screen, empty, at the end, under its buttons and its line: nothing above it moves when it shows (README "Waiting screens")');
+  const said = fs.readFileSync(file('games/demo2/main.js'), 'utf8').match(/'(?:[^'\\\n]|\\.)*'/g).join('\n');   // (what its page says: its strings)
+  assert.ok(said.includes('Перемога твоя!') && !/виграв|ти сам/i.test(said), 'no gendered words about players («Перемога твоя!», not «Ти виграв!» nor «Поки що ти сам»)');
   assert.ok(testGame('demo2') >= 1, 'its tests run, and pass');
   const warned = [], html = await bundleGame('demo2', g, { warn: m => warned.push(m) });
   assert.ok(/^<!doctype html>/i.test(html) && !/src="main\.js"/.test(html) && html.includes('window.ihroteka'), 'one page, the API first');

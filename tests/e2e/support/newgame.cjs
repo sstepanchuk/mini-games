@@ -18,10 +18,11 @@
 // The scratch copy and the server go when the scenario's process exits, a signal too.
 // The template's page in a library page p: templateFrame(p, sel) waits for its frame and sel visible in it (#lobby,
 // or main: #lobby is hidden mid-round); templateView(f) is what a player sees there (null: the frame is gone).
-// The template puts the library's waiting screen under its title (<ihroteka-wait>, README "Waiting screens"), where it
-// is always seen: whom it waits for shows there, never in the library's card over it. SCREENS, an init script for the
-// context (ctx.addInitScript(SCREENS)), counts in every library page, every 100 ms, which showed rows: the card, the
-// game's screen, both at once, two copies of it; sampled(p) reads the counts.
+// The template puts the library's waiting screen at the end of its page, under its buttons (<ihroteka-wait>, README
+// "Waiting screens"), where it is seen at these sizes: whom it waits for shows there, never in the library's card over
+// it (only on a short landscape phone, where that end is out of view, does the card say it). SCREENS, an init script
+// for the context (ctx.addInitScript(SCREENS)), counts in every library page, every 100 ms, which showed rows: the
+// card, the game's screen, both at once, two copies of it; sampled(p) reads the counts.
 'use strict';
 const fs = require('node:fs');
 const os = require('node:os');
@@ -120,11 +121,13 @@ async function templateFrame(p, sel = '#lobby') {
   return f;
 }
 // what a player sees in the template's frame f: its lobby (and what it says), a round (the total, the seats, whose
-// turn: say; which buttons work), «Ще раз»; null when the frame is gone
+// turn: say, the line a sighted player reads; which buttons work: not aria-disabled), «Ще раз», the text of «Вийти з
+// раунду» (null: hidden); null when the frame is gone
 const templateView = f => f.evaluate(() => {
   const $ = id => document.getElementById(id);
-  return { lobby: !$('lobby').hidden, text: $('lobby-text').textContent, play: !$('play').hidden, total: +$('total').textContent, say: $('say').textContent,
-    seats: [...$('seats').children].map(li => li.textContent), steps: [...$('steps').children].map(b => !b.disabled), again: !$('again').hidden };
+  return { lobby: !$('lobby').hidden, text: $('lobby-text').textContent, play: !$('play').hidden, total: +$('total').textContent, say: $('say-text').textContent,
+    seats: [...$('seats').children].map(li => li.textContent), steps: [...$('steps').children].map(b => b.getAttribute('aria-disabled') !== 'true'), again: !$('again').hidden,
+    quit: $('quit').hidden ? null : $('quit').textContent };
 }).catch(() => null);
 
 module.exports = { newGame, scratchLibrary, SCREENS, sampled, templateFrame, templateView };

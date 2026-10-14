@@ -164,9 +164,22 @@ From nothing to two players on screen, then on the shelf:
    sends), the others send their moves; it saves the round after each move (`round.save`) and ends it with
    `round.over`, goes on from the snapshot `run` brings, sends a new copy of a player everything on `rejoin`, and sets
    its one rule (`round.policy.endWhenSeatGone`: a player gone for good ends the round, as their turn would never
-   come). Buttons rather than a canvas where you can: they work with a keyboard and a screen reader. Where the page
-   should say whom it waits for, it has `<ihroteka-wait></ihroteka-wait>` (the template's is under its title, seen
-   in the lobby and in a round): the library fills it; draw no such message yourself (see "Waiting screens").
+   come). Buttons rather than a canvas where you can: they work with a keyboard and a screen reader; the template keeps
+   the keyboard's focus and tells a screen reader the move it did not see and the total (see "Accessibility"). It has
+   a way back and a way out: «← Усі ігри» (`ihroteka.home()`, shown only in the library: the library draws no way back
+   over a game, and the app installed on an iPhone has no Back; alone, a round on this device ends with it; together,
+   the room goes to the shelf and the round waits for the game to open again), «Вийти з раунду» (a second press within
+   2.5 s confirms, «Точно вийти?»: `round.quit()`, the end for everyone; on one device «Почати заново», at once), and
+   «Почати» (and «Ще раз») that can be pressed only while the copy that starts rounds (`round.runner`) is here (away
+   or still opening the game, the library would refuse the start; the template's runner may start while someone else
+   is away). Its words say nothing of a player's gender («Поки що тут лише ти: грайте по черзі на цьому пристрої або
+   запросіть друзів.», «Перемога твоя!», «Перемога: Аня!»), and a round cut short says why («Раунд перервано. Вийти
+   вирішує: Аня.»; «Раунд перервано: Богдан уже не в кімнаті.» only while Богдан is not in the room: back, or waiting
+   for a seat, it is «Раунд перервано.»). Where the page should say whom it waits for, it has
+   `<ihroteka-wait></ihroteka-wait>` (the template's is at the end of the page, under its buttons and its status line,
+   seen in the lobby and in a round, and the page stands at the top, not in the middle: when the screen comes or goes,
+   nothing above it moves; on a short landscape phone, where that end is out of view, the library's card over the game
+   says it instead): the library fills it; draw no such message yourself (see "Waiting screens").
 7. `game.json` (validated by the dev server and the build):
    - `title`, `tagline`, `description`, `image`; optional `shareTitle`, `shareDescription`, `imageAlt`, `emoji`,
      `theme`, `players` (`"2"` or `"2-4"`; 2 when not given);
@@ -444,7 +457,8 @@ for it (see Listening late); and while our copy should run a round but has no sn
 of it yet (its page reloaded: the others' copies are on their way), the game hears nothing of it, messages included,
 until `run` with the snapshot: never a fresh `run` for a round that was saved. So `round.active` true before `run` or
 `watch` means a round is coming back (after 1 s the screens say «Повертаю гру…», `restoring`): offer no start then
-(`start` is refused while a round is on).
+(`start` is refused while a round is on; Two Dragons' «Почати гру» cannot be pressed until the round is on screen or
+over, and one that ends `lost` says «Раунд загубився: збереженої гри не лишилось ні в кого.»).
 
 **One record, one writer.** A round is one record the whole room shares (`round:<game>`: its id, players, runner,
 whether it is on); only the copy that runs it writes it. A start or a quit from another player is a request to that
@@ -613,9 +627,14 @@ library: a game that gives the element a box (padding, a border, a background) a
 A real-time game, the way Two Dragons does it: a copy in each menu panel, in flow, and one over the field, below the
 menu's overlay (positioned where a banner would be): with the menu open, the field's copy is covered and the open
 panel's holds the rows; with it closed, the field's. Its pause banner shows only its own reasons, and only while the
-library says nothing (`libSays()`), redrawn on `showing`. A turn-based one, the way Хрестики-нулики does: one copy right
-under its status line; the status says nothing of waiting for a seat or for a closed game, and the page redraws on
-`showing` (which also puts the focus back where it belongs).
+library says nothing (`libSays()`), redrawn on `showing`; while the library says whom the round waits for, neither its
+hint about the controls nor a joystick waiting for a finger shows over the field (one comes under a finger), and a
+focus lost with a row goes to the open panel. A turn-based one, the way Хрестики-нулики does: one copy right under its
+status line, the page standing at the top (the board never moves when the screen comes or goes; on a short screen it
+is smaller while the screen speaks); the status says nothing of waiting for a seat or for a closed game, nor whose turn
+it is while the round stands still (the score still marks it); a player waiting for a seat sees who plays, with their
+marks and the series, and no board; and the page redraws on `showing` (which also puts the focus back where it
+belongs).
 
 **Accessibility.** The copies are plain text and buttons in the game's reading and Tab order; what is said is
 announced once, from the library page's live region (the game's own status lines go quiet, which announces nothing).
@@ -626,7 +645,16 @@ of the same row (unless a `showing` listener put it elsewhere). For a screen rea
 (its `aria-label`, the name in the nominative as in the row; the words on it stay). A screen that appears never takes the focus, and Esc does nothing to it
 (owner, decision 8). A game that moves the focus on `showing` does so only while `document.hasFocus()` (the page may
 be in another window, or a library dialog over it), and puts it back on the window's `focus` too; it listens on one
-copy that stays (the event fires on every copy).
+copy that stays (the event fires on every copy), or on the way down (`document.addEventListener('showing', fn, true)`:
+the event does not bubble), which hears a copy made later too.
+
+`cli new`'s template does all of it. Its buttons that cannot be pressed now are `aria-disabled`, not `disabled` (a
+focused one keeps its focus, and pressing it does nothing); it moves the focus only once the player has put it in the
+game, only while `document.hasFocus()`, after each redraw, on every `showing` and on the window's `focus`, and only
+when the focus is lost (on `<body>`, or on a button no longer shown), to what can be pressed now («Почати» or
+«Запросити друзів», the first step, «Ще раз»; never «Вийти з раунду»). Its status line is its live region: a screen
+reader hears the move it did not see, who added what and the total, before the line a sighted player reads
+(«Богдан: +2 — 7 з 10. Твій хід»; its own: «Ти: +1 — …»), and its steps are a group, «Додати».
 
 **On the dev server** the console says so, once: `ihroteka-wait: leave it empty: the library fills it` (something was
 put in a copy), and `ihroteka-wait: none of this game's waiting screens is seen (hidden, covered or out of view): the
@@ -666,8 +694,9 @@ library's card over the game says it instead`.
   says it again).
 - **Keep the game's tests with the game** (`games/<id>/test/`): they are sealed with its sources, so a private game
   keeps them private, and `npm run build` runs its `test/*.test.js` (node:test, no browser) first: a game whose tests
-  fail is not sealed. Both games do; their browser scenarios are in `test/e2e/` too, each with its `run.cjs` (`npm run
-  test:games:e2e` runs every game's; `-- tic-tac-toe pair`: one game's, some of them).
+  fail is not sealed. Both games do; their browser scenarios are in `test/e2e/` too, each with its `run.cjs` (its sets
+  of scenarios on the library's queue, `tests/e2e/support/runner.cjs` `runScenarios`; `npm run test:games:e2e` runs
+  every game's; `-- tic-tac-toe pair`: one game's, some of them).
 
 ### Under it: one room for the whole library
 

@@ -8,15 +8,16 @@
 // hidden: the card says the same at once (no new word for the screen reader); shown again: the screen within the
 // second's tick; covered by a layer of the game's: the card, uncovered: the screen (a focused «Не чекати» moves with
 // its row, there and back); only its «Не чекати» covered: the card, too; a second copy: the first keeps the
-// rows (no churn), gone: the second takes them. «Не чекати» pressed in the game's screen: his place goes, Віра plays,
-// nothing said, the game heard `showing`. A round on, the room to the shelf and back while Віра's game is slow to open:
+// rows (no churn), gone: the second takes them. «Не чекати» pressed from the keyboard in the game's screen: his place
+// goes, Віра plays, nothing said, the game heard `showing` and kept the focus on a button of its own (not lost with
+// the row). A round on, the room to the shelf and back while Віра's game is slow to open:
 // after the grace (not at once) «Віра зараз не в грі — чекаємо», nothing to press; her game open: nothing, the same
 // round. The game opened while Віра is away, its page slow to parse before its copy: nothing meanwhile (only the version
 // would be said there), the card never shown; then her row in the screen, and the game hears `showing` once, with the
 // rows in place. Runs on its own server: E2E_URL is only checked to be up, by run.cjs.
 'use strict';
 const { launch, scenario, check, step, until, w } = require('./support/scenario.cjs');
-const { openPage, createLink, libState, short, waitShown, clickWait } = require('./support/pages.cjs');
+const { openPage, createLink, libState, short, waitShown } = require('./support/pages.cjs');
 const { newGame, SCREENS, sampled, templateFrame } = require('./support/newgame.cjs');   // (SCREENS: never two messages, sampled every 100 ms)
 
 const frameOf = p => templateFrame(p, 'main');           // (main: #lobby is hidden mid-round)
@@ -142,14 +143,17 @@ scenario('screens: the waiting screens in a game (<ihroteka-wait>): one message,
   sa = await pa.evaluate(() => window.__ihroteka.screens());
   check(two.join() === 'true' && sa.copies === 1 && sa.holder === 0 && (await waitShown(pa)).where === 'screen', 'that one gone: the other holds them', [two, sa]);
 
-  step('Аня does not wait: «Не чекати» in the game\'s screen');
+  step('Аня does not wait: «Не чекати» in the game\'s screen, from the keyboard');
   await fa.evaluate(() => { window.__heard = 0; document.querySelector('ihroteka-wait').addEventListener('showing', () => window.__heard++); });
-  await clickWait(pa, 'Не чекати');
+  await fa.press('ihroteka-wait:not(:empty) >> text=Не чекати', 'Enter');   // (the focus on it, then Enter)
   const gone = async () => { const [x, y] = [await libState(pa), await libState(pv)]; return !x.players.includes('Богдан') && y.game && y.game.players.includes('Віра') && y.game.linked; };
   check(await until(gone, 10000), 'his place goes; Віра has the seat and plays', [await short(pa), await short(pv)]);
   const quiet = async () => { const x = [await waitShown(pa), await waitShown(pv)]; return x.every(y => y.where === null && y.showing === null) && x; };
   check(await until(quiet, 5000), 'nothing to say, on Аня’s page and Віра’s; no `showing`', [await waitShown(pa), await waitShown(pv)]);
   check(await fa.evaluate(() => window.__heard) >= 1, 'Аня’s game heard `showing`', await fa.evaluate(() => window.__heard));
+  const focus = () => fa.evaluate(() => { const a = document.activeElement; return { has: document.hasFocus(), tag: a && a.tagName, text: a && a.textContent, shown: !!a && a.getClientRects().length > 0 }; });
+  const held = await until(async () => { const x = await focus(); return x.has && x.tag === 'BUTTON' && x.shown && x; }, 3000, 50);
+  check(held, 'the focus stays in Аня’s game, on a button she can see (not lost with the row): ' + (held && held.text), held || await focus());
   const sb = await sampled(pb);
   check(sb.n > 0 && !sb.both && !sb.many, 'Богдан’s page: never two messages', sb);
   await pb.close();

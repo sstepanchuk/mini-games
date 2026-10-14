@@ -5,14 +5,18 @@
 // link, Богдан opens it in another tab, Аня opens the game and both follow; they play the template's round (on
 // ihroteka.round) to its end (turns, the other's buttons off, the same number on both screens, one winner). Midway the
 // tab of the copy that does not run the round reloads and gets it back; then the runner's: the round goes on from its
-// snapshot ('run' with it). Meanwhile the other one sees whom the round waits for in the library's waiting screen under
-// the game's title (<ihroteka-wait>, README "Waiting screens": «Чекаємо, поки повернеться …» or «… повертається в
-// гру»), and never in the library's card over
-// the game (sampled every 100 ms on both pages). Runs on its own server: E2E_URL is only checked to be up, by run.cjs.
+// snapshot ('run' with it). Meanwhile the other one sees whom the round waits for in the library's waiting screen at
+// the end of the game's page, under its buttons (<ihroteka-wait>, README "Waiting screens": «Чекаємо, поки
+// повернеться …» or «… повертається в гру»), and its +1/+2 stay where they were; never in the library's card over the
+// game (sampled every 100 ms on both pages). At the end «← Усі ігри» in the game takes both to the shelf. Runs on its
+// own server: E2E_URL is only checked to be up, by run.cjs.
 'use strict';
 const { launch, scenario, check, step, until } = require('./support/scenario.cjs');
 const { openPage, createLink, enterName, libState, short, waitShown } = require('./support/pages.cjs');
 const { newGame, SCREENS, sampled, templateFrame: frame, templateView: view } = require('./support/newgame.cjs');
+
+// where its +1/+2 are on the screen (px from the top of the frame), or null
+const stepsTop = f => f.evaluate(() => document.getElementById('steps').getBoundingClientRect().top).catch(() => null);
 
 scenario('newgame: cli new, then two devnet tabs play it without internet', async () => {
   const G = await newGame('demo2', ['--title', 'Демо два'], { devnet: true }), { port, url: U2 } = G;
@@ -73,10 +77,13 @@ scenario('newgame: cli new, then two devnet tabs play it without internet', asyn
     step(name + '\'s tab (' + what + ') reloads mid-round');
     const other = NAMES.find(n => n !== name), says = new RegExp('^(Чекаємо, поки повернеться ' + name + '… \\d+:\\d\\d( Не чекати)?|' + name + ' повертається в гру)$');
     await count(name);
+    const top = await stepsTop(F[other]);
     await P[name].reload();
     const waits = await until(async () => { const x = await waitShown(P[other]); return x.where === 'screen' && says.test(x.text) && x; }, 10000);
     check(waits && waits.say === waits.text.replace(/ \d+:\d\d( Не чекати)?$/, ''), other + '\'s game, meanwhile: whom it waits for («Чекаємо, поки повернеться ' + name + '…» or «' + name + ' повертається в гру») in its waiting screen (a screen reader hears it, not the time)',
       waits || await waitShown(P[other]));
+    const moved = await stepsTop(F[other]);
+    check(top !== null && moved !== null && Math.abs(moved - top) <= 1, '… and ' + other + '\'s +1/+2 stay where they were (' + top + ' → ' + moved + ' px from the top)', [top, moved]);
     await enterName(P[name], name);                         // (the room's link asks for the name again)
     // (its lobby, or the round already back from its snapshot: a page under load may never show the lobby first)
     F[name] = await frame(P[name], ':is(#lobby, #play):not([hidden])');
@@ -88,8 +95,8 @@ scenario('newgame: cli new, then two devnet tabs play it without internet', asyn
   await turn(2);
   if (total < 10) await turn(10 - total === 1 ? 1 : 2);
   v = await until(async () => { const x = await views(); return NAMES.every(n => x[n] && x[n].again) && x; }, 5000);
-  const won = v && NAMES.find(n => v[n].say === 'Ти виграв!');
-  check(won && NAMES.every(n => n === won || v[n].say === 'Виграв: ' + won + '!'), 'one winner at 10: «Ти виграв!» / «Виграв: ' + won + '!»', v);
+  const won = v && NAMES.find(n => v[n].say === 'Перемога твоя!');
+  check(won && NAMES.every(n => n === won || v[n].say === 'Перемога: ' + won + '!'), 'one winner at 10: «Перемога твоя!» / «Перемога: ' + won + '!»', v);
   check(v && NAMES.every(n => !v[n].steps.some(Boolean)), 'no more moves; «Ще раз» on both', v);
   check(away.every(u => /^https:\/\/fonts\.(googleapis|gstatic)\.com\//.test(u)), 'nothing but web fonts tried the internet (and got nothing)', away);
   for (const n of NAMES) {
@@ -97,4 +104,9 @@ scenario('newgame: cli new, then two devnet tabs play it without internet', asyn
     const s = tally[n];
     check(s.n > 0 && s.screen > 0 && !s.card && !s.both && !s.many, n + '\'s pages: whom the round waited for, only ever in the game\'s screen (never the card, never both, never two copies), ' + s.n + ' samples', s);
   }
+
+  step('«← Усі ігри» in Аня\'s game: the shelf, and Богдан follows');
+  await F.Аня.click('#home');
+  const shelf = async () => { const s = [await libState(A), await libState(B)]; return s.every(x => !x.game) && await A.isVisible('#shelf') && await B.isVisible('#shelf'); };
+  check(await until(shelf, 10000), 'both on the shelf', [await short(A), await short(B)]);
 }, { timeout: 180000 });

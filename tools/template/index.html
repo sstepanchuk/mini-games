@@ -9,10 +9,8 @@
 </head>
 <body>
 <main>
+  <button class="home" id="home" type="button" hidden>← Усі ігри</button>
   <h1>{{title}}</h1>
-  <!-- екран очікування бібліотеки (README, «Waiting screens»): на кого чекаємо й чому, місце, інша версія. Лиши його
-       порожнім: заповнює бібліотека. Тут, під назвою, його видно і в лобі, і в раунді -->
-  <ihroteka-wait></ihroteka-wait>
   <section id="lobby">
     <p id="lobby-text"></p>
     <button id="start" type="button">Почати</button>
@@ -21,10 +19,18 @@
   <section id="play" hidden>
     <p class="total"><b id="total">0</b> з <span id="target"></span></p>
     <ol id="seats" aria-label="Гравці"></ol>
-    <div id="steps" class="steps" aria-label="Додати"></div>
+    <div id="steps" class="steps" role="group" aria-label="Додати"></div>
     <button id="again" type="button" hidden>Ще раз</button>
+    <button class="ghost" id="quit" type="button" hidden>Вийти з раунду</button>
   </section>
-  <p id="say" role="status" aria-live="polite"></p>
+  <!-- рядок стану — він же живий регіон: читач екрана чує в ньому й хід, якого не бачить (#said, «Богдан: +2 — 7 з
+       10.»), а тоді те, що видно (#say-text, «Твій хід») -->
+  <p id="say" role="status" aria-live="polite"><span class="sr" id="said"></span><span id="say-text"></span></p>
+  <!-- екран очікування бібліотеки (README, «Waiting screens»): на кого чекаємо й чому, місце, інша версія. Лиши його
+       порожнім: заповнює бібліотека. Тут, у кінці, під кнопками, його видно і в лобі, і в раунді, а коли він
+       з'являється чи зникає, над ним нічого не зсувається (сторінка стоїть угорі); на низькому екрані, де його не
+       видно, те саме каже картка бібліотеки над грою -->
+  <ihroteka-wait></ihroteka-wait>
 </main>
 <script type="module" src="main.js"></script>
 </body>
