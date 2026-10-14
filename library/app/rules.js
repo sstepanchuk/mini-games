@@ -153,10 +153,13 @@ export function playersChange(seats, was, now, wasRunner) {
 
 const sameSet = (a, b) => a.length === b.length && a.every(p => b.includes(p));
 
-// A round's snapshot fits the players seated now: the same players as when it was taken (p; a set, not an order).
-// One from an older library says nothing of them (no p): it fits. (A round goes on only with its own players: after
-// one of them was replaced, the snapshot is someone else's round.)
-export const snapFits = (snap, seated) => !snap.p || sameSet(snap.p, seated);
+// A round's snapshot fits the players seated now: the same players as when it was taken (p; a set, not an order),
+// but for those who have left the room (players: everyone in it now) since. In a game for 3+ the round goes on without
+// a player who left for good (the game's own rule), and its snapshot names them until the runner takes the next one: a
+// runner who drops out before that leaves a round the others can still run on. One from an older library says nothing
+// of its players (no p): it fits. (A round goes on only with its own players: a newcomer in a gone player's seat, or a
+// player off their seat who is still in the room, makes it someone else's round.)
+export const snapFits = (snap, seated, players) => !snap.p || sameSet(snap.p.filter(p => players.includes(p)), seated);
 // The round is over for good when one of the players it was played with is gone from the room for good (left, «Не
 // чекати», or their place ran out): its snapshot becomes a tombstone, so it can never come back. A player who only
 // closed the game, or is away, is not gone: the round waits for them (owner, decision 3).

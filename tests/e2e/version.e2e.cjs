@@ -1,7 +1,8 @@
 // tags: @ci @webkit
 // version: friends whose copies of a game speak different wire numbers (owner, decision 9). Аня's page is told its
-// copy of the game (E2E_GAME: Two Dragons by default) is one wire newer than it is (its shelf rewritten on the way),
-// Богдан's is as it is: Богдан's page, the older, reloads itself
+// copy of the game (E2E_GAME: Two Dragons by default) is one wire newer than it is (her shelf and the game's own page
+// rewritten on the way: a copy speaks the wire of the code that runs, wireframe.e2e.cjs), Богдан's is as it is:
+// Богдан's page, the older, reloads itself
 // back into the room (no name asked), once only; both know it; in the game they are not seated together, and both
 // see «Онови сторінку — у друга інша версія» (the waiting message wherever it is: the card, or the game's
 // <ihroteka-wait>), with «Оновити» on the older page only. Needs the dev server with the plaintext games (npm run
@@ -16,7 +17,7 @@ const UPDATE = /Онови сторінку — у друга інша верс�
 scenario('version: a friend\'s copy of the game is newer', async () => {
   const ctx = await (await launch()).newContext();       // (one context: the fake network is shared by its pages)
   const pa = watch(await ctx.newPage(), 'Аня');
-  await pa.route('**/*', async route => {                // this page's shelf says the game is one wire newer
+  await pa.route('**/*', async route => {                // this page's shelf and its game's page say the game is one wire newer
     if (route.request().resourceType() !== 'document') return route.continue();
     const r = await route.fetch();
     // (one more than the game's own wire: no "wire" is 1)

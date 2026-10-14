@@ -104,6 +104,8 @@ body:has(> .shelf:not([hidden])){justify-content:flex-start}
   background:rgba(35,32,74,.45);overflow-y:auto;
 }
 .dialog{max-height:100%;overflow-y:auto;gap:12px}
+/* a long name (24 letters at 320 px) breaks rather than run off the dialog or the card over a game */
+.dialog,.waiting{overflow-wrap:anywhere}
 .dialog:focus{outline:none}
 .dialog h2{font:800 22px/1.15 var(--display)}
 .dialog .row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}

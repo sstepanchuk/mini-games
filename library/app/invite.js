@@ -10,9 +10,9 @@
    the game (together.js versionGap) is told everywhere it shows: «Онови сторінку — у друга інша версія».
    ===================================================================== */
 import { CODE_LENGTH, hasInternet, newRoomCode, preload, secure } from '../net/index.js';
-import { $, btn, copy, el, modal, para, safe, toast } from './dom.js';
+import { $, btn, copy, el, errLine, modal, para, safe, toast } from './dom.js';
 import { Camera, drawQr } from './qr.js';
-import { adopted, initScreens, paint, ready, show as showScreens } from './screens.js';
+import { adopted, carry, focused, initScreens, paint, ready, show as showScreens } from './screens.js';
 import { comeBack, currentRoom, elsewhere, lastInternetCode, lastName, leave, linked, onChange, release, startInternet, startNearby, updateNow, validName, versionGap,
   waitFacts } from './together.js';
 import { placeLines, sayOf, screen, UPDATE } from './waiting.js';
@@ -21,14 +21,18 @@ import { placeLines, sayOf, screen, UPDATE } from './waiting.js';
 const INSECURE = 'Через посилання можна грати лише на сторінці, відкритій через https: на цій адресі браузер вимикає шифрування.';
 
 let shell = null;                                        // { address() → this view's address, with the room }
-let dlg = null;                                          // the open dialog: { screen, show, close, camera, scan, online, insecure, adding, name }
+let dlg = null;                                          // the open dialog: { screen, show, close, box, camera, scan, online, insecure, adding, name, tg }
 
 export function initInvite(s) {
   shell = s;
   s.askName = askName;
   $('together').addEventListener('click', () => openDialog());
+  // the live region of the waiting rows: in #layer, which is never inert or hidden (a library dialog makes the stage
+  // inert, and nothing in it is heard then), there before it speaks
+  say = el('p', { className: 'sr', role: 'status' });
+  $('layer').append(say);
   initScreens(waitNote);                                 // (the game's screens ask for a pass: a copy came, the page parsed…)
-  waitNote();                                            // (the card, hidden: its live region is there before it speaks)
+  waitNote();                                            // (the card, hidden)
   setInterval(waitNote, 1000);
   onChange(what => {
     const room = currentRoom();
@@ -78,9 +82,11 @@ function goneElsewhere() {
 // row; for a game that never placed one, the card as it was: link and loading of whom we play with, and the version;
 // before the game's page has parsed, the version only: waiting.js placeLines). Never both.
 // The card is built once and stays (hidden while there is nothing to say): each second only the time changes. What a
-// screen reader hears is one live region beside it (.sr), wherever the rows show, which changes only when who or why
-// does; a row stays while its player, reason and buttons do, so a focused «Не чекати» keeps its focus.
-let card = null;                                         // { box, say, said }
+// screen reader hears is one live region (.sr, in #layer: heard with a dialog open too), wherever the rows show, which
+// changes only when who or why does; a row stays while its player, reason and buttons do, so a focused «Не чекати»
+// keeps its focus, and when the rows move between a copy of the game's and the card, the focus goes with them.
+let card = null;                                         // { box }
+let say = null, said = '';                               // the live region, and what it says
 const ACTS = { repair: () => repair(), release: name => notWaiting(name), update: () => updateNow() };
 // (once at a time: a game's 'showing' listener may change what is said, which asks for a pass again)
 let noting = false, again = false;
@@ -92,19 +98,20 @@ function waitNote() {
 function noteOnce() {
   const stage = $('stage');
   if (!card || !card.box.isConnected) {
-    card = { box: el('div', { id: 'waiting', className: 'waiting card', hidden: true }), say: el('p', { className: 'sr', role: 'status' }), said: '' };
-    stage.append(card.box, card.say);
+    card = { box: el('div', { id: 'waiting', className: 'waiting card', hidden: true }) };
+    stage.append(card.box);
   }
   const model = screen(stage.hidden ? null : waitFacts());
+  const was = focused();                                 // (a button of the rows with the focus: it follows its row)
   const held = showScreens(model, ACTS);                 // one of the game's screens holds the rows, or none does
   const rows = placeLines(model.rows, { ready: ready(), adopted: adopted(), held });
   const had = card.box.contains(document.activeElement);
   paint(card.box, rows, ACTS);
+  card.box.hidden = !rows.length;                        // (before any focus: a button in a hidden card takes none)
   // (a row that went held the focus: the player is back, whoever was about to press «Не чекати» goes on with the game)
-  if (had && !card.box.contains(document.activeElement)) safe(() => stage.querySelector('iframe')?.focus());
-  card.box.hidden = !rows.length;
-  const said = sayOf(held ? model.rows : rows);
-  if (said !== card.said) { card.said = said; card.say.textContent = said; }
+  if (!carry(was, card.box) && had && !card.box.contains(document.activeElement)) safe(() => stage.querySelector('iframe')?.focus());
+  const now = sayOf(held ? model.rows : rows);
+  if (now !== said) { said = now; say.textContent = now; }
 }
 // «Не чекати»: their place goes. Nearby, for the phone that holds the room (we are a guest there): there is no room
 // without it, so it ends here, saying why.
@@ -185,8 +192,8 @@ function check() {
 }
 const closeDialog = () => { if (dlg) dlg.close(); };
 
-// the room changed: only what shows its state is updated (not the whole screen: focus and selection stay);
-// once linked, the dialog says so and goes
+// the room changed: only what shows its state is updated (not the whole screen: focus and selection stay; «Ви
+// граєте разом» is painted in place on every change); once linked, the dialog says so and goes
 function refresh(what) {
   const room = currentRoom(), d = dlg;
   // together now (or one more, or back after pairing again): say so, and go
@@ -196,7 +203,7 @@ function refresh(what) {
     setTimeout(() => { if (dlg === d && d.screen === 'together') closeDialog(); }, 900);
     return;
   }
-  if (d.screen === 'together') { if (!linked()) closeDialog(); else if (what === 'join' || what === 'leave' || what === 'away') show('together'); else d.state.textContent = stateText(room); }
+  if (d.screen === 'together') { if (!linked()) closeDialog(); else paintTogether(); }
   else if (d.screen === 'link') { if (!room || room.kind !== 'internet') show('menu'); else if (what === 'status') d.state.textContent = statusText(room); }
   else if (room && room.kind === 'nearby' && room.status === 'failed' && what === 'status') failed(room.pair);
   else if (room && room.kind === 'nearby' && room.status === 'version' && what === 'status') otherVersion();
@@ -214,7 +221,9 @@ function addPlayer() {
 const viaLink = () => { const last = lastInternetCode(); startInternet(last && last.length >= CODE_LENGTH ? last : newRoomCode(), dlg.name); show('link'); };
 
 function show(screen) {
+  if (screen === 'together' && dlg.screen === 'together' && dlg.tg) return paintTogether();   // (built once: see paintTogether)
   dlg.screen = screen;
+  dlg.tg = null;
   const room = currentRoom(), close = btn('Закрити', closeDialog, 'btn ghost');
   if (screen === 'name') {
     const input = nameInput(), go = e => { e.preventDefault(); const n = input.value.trim(); if (!validName(n)) return input.focus(); dlg.name = n; check(); };
@@ -251,19 +260,42 @@ function show(screen) {
       option('📷', 'Сканувати код', 'Друг уже показує код', guestPairing),
       dlg.online ? btn('Назад', () => show('menu'), 'btn ghost') : close);
   } else if (screen === 'together') {
-    const n = room.players.length, space = n < room.max;
-    dlg.state = para(stateText(room), 'fine');
-    dlg.show(el('h2', { textContent: n > 2 ? 'Вас ' + n : 'Ви граєте разом' }),
-      el('ul', { className: 'players' }, ...room.players.map(p => el('li', { textContent: p + (p === room.me ? ' (ти)' : room.away(p) ? ' — відпав, місце чекає' : '') }))),
-      para(room.kind === 'nearby' ? 'Поруч, без інтернету.' : 'Через посилання.' + (room.stats().direct ? ' Пристрої з’єднані напряму.' : '')),
-      dlg.state,
-      ...(brokenNearby(room) ? [para('Зв’язок поруч перервався. Щоб продовжити, з’єднайтеся ще раз кодами.', 'fine'), btn('З’єднатися знову', repair)] : []),
-      ...(!space ? [para('Кімната повна: ' + room.max + ' гравців.', 'fine')]
-        : room.kind === 'internet' || room.role === 'host' ? [btn('Додати гравця', addPlayer, 'btn ghost')]
-        : [para('Ще когось поруч додає той, хто показував код першим.', 'fine')]),
-      btn('Від’єднатися', () => { leave(); closeDialog(); }),
-      close);
+    const T = dlg.tg = { h2: el('h2'), list: el('ul', { className: 'players' }), items: new Map(), how: para(''), state: para('', 'fine'),
+      broken: para('Зв’язок поруч перервався. Щоб продовжити, з’єднайтеся ще раз кодами.', 'fine'), repair: btn('З’єднатися знову', repair),
+      more: el('p'), kind: '' };
+    dlg.show(T.h2, T.list, T.how, T.state, T.broken, T.repair, T.more, btn('Від’єднатися', () => { leave(); closeDialog(); }), close);
+    paintTogether();
   }
+}
+// «Ви граєте разом», built once (show) and painted in place on every change of the room (who is here, who dropped out,
+// the ping, a direct link, a broken link nearby, room for more): a focused button keeps its focus. A focused node that
+// goes (hidden, or another kind of 'more') leaves the focus on the dialog itself.
+const put = (node, text) => { if (node.textContent !== text) node.textContent = text; };
+function paintTogether() {
+  const room = currentRoom(), T = dlg && dlg.tg;
+  if (!room || !T) return;
+  const box = dlg.box, a = document.activeElement, had = box.contains(a) && a !== box;
+  const n = room.players.length;
+  put(T.h2, n > 2 ? 'Вас ' + n : 'Ви граєте разом');
+  for (const [p, li] of T.items) if (!room.players.includes(p)) { li.remove(); T.items.delete(p); }
+  let at = T.list.firstChild;
+  for (const p of room.players) {
+    let li = T.items.get(p);
+    if (!li) T.items.set(p, li = el('li'));
+    if (li === at) at = at.nextSibling; else T.list.insertBefore(li, at);
+    put(li, p + (p === room.me ? ' (ти)' : room.away(p) ? ' — відпав, місце чекає' : ''));
+  }
+  put(T.how, room.kind === 'nearby' ? 'Поруч, без інтернету.' : 'Через посилання.' + (room.stats().direct ? ' Пристрої з’єднані напряму.' : ''));
+  put(T.state, stateText(room));
+  T.broken.hidden = T.repair.hidden = !brokenNearby(room);
+  const kind = n >= room.max ? 'full' : room.kind === 'internet' || room.role === 'host' ? 'add' : 'host';
+  if (kind !== T.kind) {
+    const node = kind === 'full' ? para('', 'fine') : kind === 'add' ? btn('Додати гравця', addPlayer, 'btn ghost') : para('Ще когось поруч додає той, хто показував код першим.', 'fine');
+    T.more.replaceWith(node);
+    Object.assign(T, { more: node, kind });
+  }
+  if (kind === 'full') put(T.more, 'Кімната повна: ' + room.max + ' гравців.');
+  if (had && (!a.isConnected || a.hidden || !box.contains(document.activeElement))) box.focus();
 }
 
 // why a direct link did not work (see net/nearby.js), and what to do
@@ -377,7 +409,7 @@ function scanCode(step, text, cam, accept, error = '') {
   const manual = btn('Ввести код вручну', () => { form.hidden = false; manual.remove(); input.focus(); }, 'btn ghost');
   d.show(el('h2', { textContent: step }), para(text),
     cam.stream ? cam.video : para('Камера недоступна: встав код, який друг скопіював зі свого екрана.', 'fine'),
-    para(error, 'err'), form, ...(cam.stream ? [manual] : []),
+    errLine(error), form, ...(cam.stream ? [manual] : []),
     btn('Скасувати', closeDialog, 'btn ghost'));
   (async () => {
     while (cam.stream && live()) {

@@ -6,7 +6,9 @@
 // it). The same holds for a page that leaves the room and comes back into it as the same player (nearby, a reloaded
 // page whose first pairing was given up: that room is left, the next pairing makes a new one). Another room or name
 // never takes it back, a round that is over or another round drops it, and a browser that keeps no site data (or a
-// broken entry) costs only the reload.
+// broken entry) costs only the reload. So with every end a copy writes (quit, over…): the tab keeps it until another
+// copy shows it back, so a page reloaded before then ends that round again when it sees it on. And a quit is said
+// again every 2 s while its runner is here (what the room's host was passing on is lost as a link starts over).
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { room, settled, sleep, until, world } from '../support/world.js';
@@ -85,7 +87,7 @@ describe('a quit outlives a reload', { concurrency: 3 }, () => {
     assert.deepEqual([r.id, r.reason, r.by, r.runner], [id, 'quit', 'Богдан', 'Богдан']);
     assert.ok(!(await B2.state()).lib.trace.some(l => /runs on here/.test(l)), 'ended, not run on first');
     assert.deepEqual(rlines(await B2.game()), [], 'his game hears nothing more of it');
-    assert.equal(await B2.stored(QUITS), null);
+    assert.ok(await until(async () => (await B2.stored(QUITS)) === null, 5000), 'Сава has the end: the tab keeps it no more');
     await A.net({ up: true });
     assert.ok(await heardR(A, 'end quit Богдан', 20000), 'back, Аня hears it: ' + rlines(await A.game()));
   });
@@ -142,7 +144,8 @@ describe('a quit outlives a reload', { concurrency: 3 }, () => {
       const id = await quitWhileAway(A, B);
       const b = await over(B, 15000);
       assert.deepEqual(b && [b.id, b.reason, b.by, b.runner], [id, 'quit', 'Богдан', 'Богдан'], 'it moved to his copy, which ended it: ' + JSON.stringify(await rec(B)));
-      assert.deepEqual(await B.stored(QUITS), { room: where(code, 'Богдан'), q: { g: id } }, 'nobody heard that end yet: the quit stays');
+      const k = await B.stored(QUITS);
+      assert.deepEqual(k && [k.room, k.q, k.e.g.id, k.e.g.reason, k.e.g.by], [where(code, 'Богдан'), undefined, id, 'quit', 'Богдан'], 'nobody has that end yet: the tab keeps it (the end, not the quit): ' + JSON.stringify(k));
       let X = B;
       if (reload) {
         X = await B.reload();
@@ -154,7 +157,7 @@ describe('a quit outlives a reload', { concurrency: 3 }, () => {
       assert.ok(r, 'over for Аня too: ' + JSON.stringify(await rec(A)) + ' ' + JSON.stringify(await rec(X)));
       assert.deepEqual([r.id, r.reason, r.by], [id, 'quit', 'Богдан']);
       assert.ok(await heardR(A, 'end quit Богдан', 3000), 'Аня\'s game hears it: ' + rlines(await A.game()));
-      assert.ok(await until(async () => (await X.stored(QUITS)) === null, 5000), 'Аня has the end: the tab keeps the quit no more');
+      assert.ok(await until(async () => (await X.stored(QUITS)) === null, 5000), 'Аня has the end: the tab keeps it no more');
       await sleep(500);
       const g = await X.game(), lines = g ? rlines(g) : [];
       if (reload) assert.deepEqual(lines, [], 'his new page heard nothing of that round');
@@ -162,6 +165,68 @@ describe('a quit outlives a reload', { concurrency: 3 }, () => {
       assert.equal((await rec(X)).on, false);
     });
   }
+
+  // (audit: an end our copy wrote with nobody to have it, lost with the page; the other copy, back, brought the round
+  // back on, and our new page ran it on or watched it: a quit undone, a round over going on, against decision 24)
+  for (const how of ['quit', 'over']) {
+    test('the runner ' + (how === 'quit' ? 'quits' : 'ends') + ' its round while the other is away, then its page reloads: over for both, with its reason and result (' + how + ')', T, async t => {
+      const W = world(t, { scale: 0.5 });
+      const code = how === 'quit' ? 'rq9' : 'rq10', result = how === 'over' ? { w: 'Аня' } : null;
+      const [A, B] = await room(W, code, ['Аня', 'Богдан'], { lib: {} });
+      await A.open('g');
+      assert.ok(await plays([A, B], 'Аня,Богдан'));
+      assert.equal(await A.call('rstart', {}), true);
+      assert.equal(await A.call('rsave', { s: { n: 1 } }), true);
+      assert.ok(await until(async () => (await saveOf(B))?.s?.n === 1, 3000));
+      const { id } = await rec(A);
+      await B.net({ up: false });
+      assert.ok(await until(async () => (await A.state()).away.includes('Богдан'), 5000), 'Аня sees Богдан away');
+      assert.equal(await A.call(how === 'quit' ? 'rquit' : 'rover', { result }), true);
+      const k = await A.stored(QUITS);
+      assert.deepEqual(k && [k.room, k.q, k.e.g.id, k.e.g.reason, k.e.g.by, k.e.g.result], [where(code, 'Аня'), undefined, id, how, 'Аня', result],
+        'nobody has that end yet: the tab keeps it: ' + JSON.stringify(k));
+      const A2 = await A.reload();                           // her page reloads before Богдан is back
+      await A2.lib(code, 'Аня');
+      await A2.open('g');
+      await sleep(500);
+      await B.net({ up: true });
+      const b = await heardR(B, 'end ' + how + ' Аня', 20000);
+      assert.ok(b, 'back, Богдан hears its end: ' + ((await B.game()) && rlines(await B.game())) + ' ' + JSON.stringify(await rec(B)));
+      assert.deepEqual(b.events.find(e => e[1] === 'round:end')[2], { id, by: 'Аня', reason: how, result }, 'with its reason and result');
+      const [rb, ra] = [await rec(B), await rec(A2)];
+      assert.deepEqual([rb.id, rb.on, ra.id, ra.on], [id, false, id, false], 'over for both: ' + JSON.stringify([rb, ra]));
+      assert.ok(await until(async () => (await A2.stored(QUITS)) === null, 5000), 'Богдан has the end: the tab keeps it no more');
+      await sleep(500);
+      const g = await A2.game();
+      assert.deepEqual(g ? rlines(g) : [], [], 'her new page heard nothing of that round');
+      assert.deepEqual([(await rec(B)).on, (await rec(A2)).on], [false, false]);
+    });
+  }
+
+  // (audit: the end reached her only after his page saw her here; the page reloaded in between lost it)
+  test('the round moves to his copy, which ends it; Аня back over a slow link, his page reloads about 1 s after she is here: over for Аня', { timeout: 60000 }, async t => {
+    const W = world(t, { scale: 0.5 });                     // (AUTH_WAIT 5 s)
+    const [A, B] = await room(W, 'rq11', ['Аня', 'Богдан'], { lib: {} });
+    const id = await quitWhileAway(A, B);
+    const b = await over(B, 15000);
+    assert.deepEqual(b && [b.id, b.reason, b.by, b.runner], [id, 'quit', 'Богдан', 'Богдан'], 'it moved to his copy, which ended it: ' + JSON.stringify(await rec(B)));
+    await B.net({ lat: 1500 });                              // what Богдан's page sends takes 1.5 s to arrive
+    await A.net({ up: true });
+    assert.ok(await until(async () => { const s = await B.state(); return s.linked && !s.away.length; }, 30000, 5), 'Аня here for him');
+    await sleep(1000);
+    const X = await B.reload();
+    await X.lib('rq11', 'Богдан');
+    await X.open('g');
+    const r = await over(A, 15000);
+    assert.ok(r, 'the round he quit is over for Аня too: ' + JSON.stringify(await rec(A)) + ' ' + JSON.stringify(await rec(X)));
+    assert.deepEqual([r.id, r.reason, r.by], [id, 'quit', 'Богдан']);
+    assert.ok(await heardR(A, 'end quit Богдан', 3000), 'Аня\'s game hears it: ' + rlines(await A.game()));
+    assert.ok(await over(X, 5000), 'and his new page knows it');
+    await sleep(500);
+    const g = await X.game();
+    assert.ok(!g || !rlines(g).some(l => /^(watch|run)/.test(l)), 'his new page is never in it: ' + (g && rlines(g)));
+    assert.ok(await until(async () => (await X.stored(QUITS)) === null, 5000), 'Аня has the end: the tab keeps it no more');
+  });
 
   // (review: nearby too, where a room has no code: the phone's name and the round's id say whose quit it is)
   test('nearby: the guest quits while the host (its runner) is cut off, the page reloads and pairs again: the host ends it', T, async t => {
@@ -236,5 +301,59 @@ describe('a quit outlives a reload', { concurrency: 3 }, () => {
     assert.equal(await B.stored(QUITS), null, 'nothing kept');
     await A.net({ up: true });
     assert.ok(await heardR(A, 'end quit Богдан', 20000), 'back, Аня hears it: ' + rlines(await A.game()));
+  });
+});
+
+// A quit goes to the round's runner through whoever holds the room; what the host keeps for a player whose links start
+// over (her page gave the room up for lost and comes back as a guest) is gone with them, and nobody hears of that: the
+// quit is said again every 2 s while its runner is here, until that round is over (round.js QUIT_AGAIN, invariant 5).
+// (audit: else the runner, back, ran the round on, and the one who quit waited until something relinked)
+describe('a quit is said again while its runner is here', { concurrency: 2 }, () => {
+  // Сава holds the room, her game closed (no seat); Аня runs the round, Богдан plays it; his quit while she is out
+  async function cutOff(t, code, how) {
+    const W = world(t, { scale: 0.5 });
+    const [S, A, B] = await room(W, code, ['Сава', 'Аня', 'Богдан'], { lib: {} });
+    await S.call('gameSlow', { on: true });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    assert.equal(await A.call('rstart', {}), true);
+    assert.equal(await A.call('rsave', { s: { n: 1 } }), true);
+    assert.ok(await until(async () => (await saveOf(B))?.s?.n === 1, 3000));
+    const { id } = await rec(A);
+    await A.net(how);
+    if (how.up === false) assert.ok(await until(async () => (await B.state()).away.includes('Аня'), 5000), 'Богдан sees Аня away');
+    assert.equal(await B.call('rquit'), true);
+    return { A, B, id };
+  }
+  async function back(A, how) {
+    assert.ok(await until(async () => (await A.state()).role === 'host', 15000, 100), 'Аня gives the room up for lost (HOST_WAIT) and holds her own');
+    await A.net(how);
+    assert.ok(await until(async () => { const s = await A.state(); return s.role === 'guest' && s.linked && !s.away.length; }, 15000, 100), 'Аня back with Сава, as a guest');
+  }
+
+  test('the runner hears nothing for longer than HOST_WAIT while a player quits, then hears again: the quit reaches her, the round is over', { timeout: 60000 }, async t => {
+    const { A, B, id } = await cutOff(t, 'rq12', { hear: false });
+    await back(A, { hear: true });
+    const r = await over(A, 10000);
+    assert.ok(r, 'over: ' + JSON.stringify(await rec(A)) + ' ' + JSON.stringify(await rec(B)));
+    assert.deepEqual([r.id, r.reason, r.by], [id, 'quit', 'Богдан']);
+    assert.ok(await heardR(A, 'end quit Богдан', 3000), 'Аня\'s game hears it: ' + rlines(await A.game()));
+  });
+
+  test('the runner cut off for longer than HOST_WAIT while a player quits and goes to the shelf, then back: the quit reaches her, the round is over', { timeout: 60000 }, async t => {
+    const { A, B, id } = await cutOff(t, 'rq13', { up: false });
+    const before = rlines(await A.game());                    // (['start Аня', 'run fresh']: the tab keeps what its games heard)
+    await B.open(null);                                      // Богдан goes to the shelf (everyone here follows)
+    await back(A, { up: true });
+    const r = await over(A, 10000);
+    assert.ok(r, 'over: ' + JSON.stringify(await rec(A)) + ' ' + JSON.stringify(await rec(B)));
+    assert.deepEqual([r.id, r.reason, r.by], [id, 'quit', 'Богдан']);
+    assert.ok(await until(async () => (await A.game()) === null, 3000), 'Аня followed him to the shelf');
+    await B.open('g');                                       // the game again, together: that round is not in it
+    const g = await until(async () => { const x = await A.game(); return x && x.linked && x; }, 8000);
+    assert.ok(g, 'Аня in the game again');
+    await sleep(500);
+    const a = await A.game();
+    assert.deepEqual([a.round.active, rlines(a)], [false, before], 'no round, nothing more of it');
   });
 });

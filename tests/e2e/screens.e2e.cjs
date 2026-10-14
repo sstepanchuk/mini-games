@@ -6,7 +6,8 @@
 // Богдан drops out: Аня's screen «Чекаємо на Богдан… m:ss» with «Не чекати», built once (only the time changes, the
 // focus stays, the live region says nothing new); a button of a finger's size, nothing wider than the frame. The copy
 // hidden: the card says the same at once (no new word for the screen reader); shown again: the screen within the
-// second's tick; covered by a layer of the game's: the card, uncovered: the screen; a second copy: the first keeps the
+// second's tick; covered by a layer of the game's: the card, uncovered: the screen (a focused «Не чекати» moves with
+// its row, there and back); only its «Не чекати» covered: the card, too; a second copy: the first keeps the
 // rows (no churn), gone: the second takes them. «Не чекати» pressed in the game's screen: his place goes, Віра plays,
 // nothing said, the game heard `showing`. A round on, the room to the shelf and back while Віра's game is slow to open:
 // after the grace (not at once) «Чекаємо на Віра — зараз не в грі», nothing to press; her game open: nothing, the same
@@ -22,7 +23,7 @@ const frameOf = p => templateFrame(p, 'main');           // (main: #lobby is hid
 // what the live region of the library page says, and how often it changed since watchSay
 const watchSay = p => p.evaluate(() => {
   window.__said = 0;
-  new MutationObserver(m => { window.__said += m.length; }).observe(document.querySelector('#stage .sr'), { childList: true, characterData: true, subtree: true });
+  new MutationObserver(m => { window.__said += m.length; }).observe(document.querySelector('#layer .sr[role=status]'), { childList: true, characterData: true, subtree: true });
 });
 const saidCount = p => p.evaluate(() => window.__said);
 // back to the shelf, as the game asks it (ihroteka.home()): the room follows
@@ -105,10 +106,31 @@ scenario('screens: the waiting screens in a game (<ihroteka-wait>): one message,
   check(await saidCount(pa) === 0, '… and the screen reader hears nothing new', await saidCount(pa));
   await fa.evaluate(() => { document.querySelector('ihroteka-wait').style.display = ''; });
   check(await until(async () => (await waitShown(pa)).where === 'screen', 1500, 50), 'shown again: the screen (within the second\'s tick)', await waitShown(pa));
+  // (the focus on «Не чекати» goes with its row: to the card's while the copy is covered, back to the copy's after)
+  const focusAt = async () => ({ page: await pa.evaluate(() => { const a = document.activeElement; return !a ? null : a.closest('#waiting') ? 'card:' + a.textContent : a.tagName; }),
+    game: await fa.evaluate(() => { const a = document.activeElement; return !a ? null : a.closest('ihroteka-wait') ? 'copy:' + a.textContent : a.tagName; }) });
+  await fa.evaluate(() => { window.focus(); [...document.querySelectorAll('ihroteka-wait button')].find(x => x.textContent === 'Не чекати').focus(); });
   await fa.evaluate(() => { const d = document.body.appendChild(document.createElement('div')); d.id = 'cover'; d.style.cssText = 'position:fixed;inset:0;z-index:99;background:#888'; });
   check(await until(async () => (await waitShown(pa)).where === 'card', 1500, 50), 'covered by the game\'s own layer: the card', await waitShown(pa));
+  let fo = await focusAt();
+  check(fo.page === 'card:Не чекати', '… and the focus that was on the screen\'s «Не чекати» is on the card\'s', fo);
   await fa.evaluate(() => document.getElementById('cover').remove());
   check(await until(async () => (await waitShown(pa)).where === 'screen', 1500, 50), 'uncovered: the screen', await waitShown(pa));
+  fo = await focusAt();
+  check(fo.page === 'IFRAME' && fo.game === 'copy:Не чекати', '… and the focus back on the screen\'s «Не чекати»', fo);
+  // only «Не чекати» covered (a bar, a toast, a joystick of the game's), the line still on top: it cannot be pressed there
+  const part = await fa.evaluate(() => {
+    const x = document.querySelector('ihroteka-wait'), row = x.querySelector('.wait-row').getBoundingClientRect(), b = x.querySelector('button.ghost').getBoundingClientRect();
+    const cx = row.left + row.width / 2, cy = row.top + row.height / 2, top = Math.max(b.top, b.right > cx && b.left < cx ? cy + 1 : b.top);
+    const d = document.body.appendChild(document.createElement('div')); d.id = 'cover';
+    d.style.cssText = 'position:fixed;z-index:99;background:#888;left:' + b.left + 'px;top:' + top + 'px;width:' + b.width + 'px;height:' + (b.bottom - top) + 'px';
+    const at = (px, py) => { const e = document.elementFromPoint(px, py); return !!e && x.contains(e); };
+    return { line: at(cx, cy), button: at(b.left + b.width / 2, b.top + b.height / 2) };
+  });
+  check(part.line && !part.button, 'only «Не чекати» covered: the row\'s centre is still the screen\'s', part);
+  check(await until(async () => (await waitShown(pa)).where === 'card', 1500, 50), '… so the card says it (its «Не чекати» can be pressed)', await waitShown(pa));
+  await fa.evaluate(() => document.getElementById('cover').remove());
+  check(await until(async () => (await waitShown(pa)).where === 'screen', 1500, 50), 'uncovered: the screen again', await waitShown(pa));
   await fa.evaluate(() => { window.__old = document.querySelector('ihroteka-wait'); document.body.prepend(document.createElement('ihroteka-wait')); });
   await w(400);
   let two = await fa.evaluate(() => { const all = [...document.querySelectorAll('ihroteka-wait')]; return { full: all.filter(x => x.firstElementChild).length, old: !!window.__old.firstElementChild }; });

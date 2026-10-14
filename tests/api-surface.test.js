@@ -268,6 +268,41 @@ test('<ihroteka-wait>: the element, its attribute and event, its kinds and the m
   assert.deepEqual(missing, [], 'missing from README "Game API"');
 });
 
+// The hooks the markup really has: the class literals of make(…) in screens.js build() and the buttons' classes
+// (waiting.js LABEL[*][1]); the data- attributes it sets (node.dataset.*). A hook added or no longer emitted fails here
+// until CLASSES and DATA (and so tests/api-surface.json and README) say the same.
+function emitted() {
+  const build = find(parse('library/app/screens.js'), n => n.type === 'FunctionDeclaration' && n.id.name === 'build', 'function build() in library/app/screens.js');
+  const classes = new Set(), data = new Set(), unread = [];
+  const words = (v, from) => { assert.ok(typeof v === 'string', from + ': a class the test cannot read'); for (const c of v.split(/\s+/)) if (c) classes.add(c); };
+  for (const n of walk(build.body)) {
+    if (n.type === 'CallExpression' && n.callee.type === 'Identifier' && n.callee.name === 'make') {
+      const c = n.arguments[1];
+      if (!c) continue;
+      if (c.type === 'Literal') words(c.value, 'make(…) in build()');
+      else if (c.type === 'MemberExpression' && c.object.type === 'MemberExpression' && c.object.object.type === 'Identifier' && c.object.object.name === 'LABEL' &&
+        c.property.type === 'Literal' && c.property.value === 1) continue;   // a button's: waiting.js LABEL, below
+      else unread.push('line ' + c.loc.start.line);
+    }
+    if (n.type === 'MemberExpression' && !n.computed && n.object.type === 'MemberExpression' && !n.object.computed && n.object.property.name === 'dataset') data.add(n.property.name);
+  }
+  assert.deepEqual(unread, [], 'screens.js build(): a class of make(…) that is neither a literal nor LABEL[act][1]');
+  const label = find(parse('library/app/waiting.js'), n => n.type === 'VariableDeclarator' && n.id.name === 'LABEL', 'const LABEL in library/app/waiting.js');
+  assert.equal(label.init.type, 'ObjectExpression', 'waiting.js LABEL is { act: [text, classes] }');
+  for (const p of label.init.properties) {
+    const v = p.value;
+    assert.ok(v.type === 'ArrayExpression' && v.elements[1]?.type === 'Literal', 'waiting.js LABEL.' + keyOf(p, 'LABEL') + ' is [text, classes]');
+    words(v.elements[1].value, 'waiting.js LABEL.' + keyOf(p, 'LABEL'));
+  }
+  return { classes: sorted(classes), data: sorted(data) };
+}
+
+test('<ihroteka-wait>: CLASSES and DATA are exactly the hooks the markup has', () => {
+  const screens = exported('library/app/screens.js'), got = emitted();
+  assert.deepEqual(got.classes, sorted(screens.CLASSES), 'the classes screens.js build() and waiting.js LABEL give the rows ≠ screens.js CLASSES');
+  assert.deepEqual(got.data, sorted(screens.DATA), 'the data- attributes screens.js build() sets ≠ screens.js DATA');
+});
+
 test('the notes name members of ihroteka.room; kick does nothing (phase 2, H1: the room checks its network itself)', () => {
   const { surface, nodes } = room();
   for (const k of Object.keys(SNAP.notes || {})) assert.ok(Object.values(surface).flat().includes(k), 'tests/api-surface.json "notes": no member ' + k);

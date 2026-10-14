@@ -198,14 +198,15 @@ async function topics(g, code) {
 // this tab's shelf, the first call only, and the games on it; none: the shell does not say, every game 1, any game).
 // The shell's reload(still) answers as shell.js does: once the newer offline copy is in place (here: when the test says
 // so, reloadDone) 'reload' if still() lets it, else 'stay'; or at once what the tab's reloadAnswer scripts ('storage',
-// 'failed', 'timeout', 'same': there is no newer copy to reload into), without asking still().
+// 'failed', 'timeout', 'same': there is no newer copy to reload into), without asking still(); one that said 'timeout'
+// hears later how it ended after all (reloadLater).
 async function shellUp(seats, wires) {
   T = T || await import(lib('app/together.js'));
   seatsOf = seats;
   if (shell) return;
   shell = true; shelf = wires || null;
-  const reload = still => new Promise(res => {
-    const R = { still: still || null, out: null, scripted: reloadAs !== 'reload', done: v => { if (R.out === null) { R.out = v; res(v); } } };
+  const reload = (still, later) => new Promise(res => {
+    const R = { still: still || null, later: later || null, out: null, scripted: reloadAs !== 'reload', done: v => { if (R.out === null) { R.out = v; res(v); } } };
     reloads.push(R);
     if (R.scripted) R.done(reloadAs);
   });
@@ -354,8 +355,14 @@ const cmds = {
   // once the copy is in place, reloadDone; or 'storage', 'failed', 'timeout', 'same' at once)
   reloads: () => reloads.map(R => R.out),
   reloadAnswer: ({ answer }) => { reloadAs = answer; },
+  // the latest reload that said 'timeout' settles after all (shell.js reload's later: 'activated', 'same', 'failed',
+  // 'storage') → whether there was one to settle
+  reloadLater: ({ out }) => { const R = reloads.findLast(x => x.out === 'timeout'); if (!R || !R.later) return false; R.later(out); return true; },
   // the player asks for the newer version («Оновити»: together.js updateNow)
   updateNow: () => { T.updateNow(); },
+  // what the screens are made of (together.js waitFacts: whom we wait for and why, a version gap and why our update to
+  // it did not happen: gap.failed)
+  facts: () => T.waitFacts(),
   // what the page keeps in sessionStorage under k (JSON), as the next page in this tab would find it
   stored: ({ k }) => JSON.parse(session.getItem(k)),
   // everything the page keeps in sessionStorage, [[key, value], …]: the next page in this tab starts with it (world.js reload)

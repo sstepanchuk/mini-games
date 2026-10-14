@@ -2,16 +2,28 @@
 // window.__ihroteka.trace() read it): the last MAX lines, oldest first, each with the time (UTC, to the tenth of a
 // second: the reports of two devices line up). Types, names and sizes only: never what a message, a snapshot or a
 // shared value says, nor an error's message (it may quote them). A line with the same key as the newest one takes
-// its place and counts how many there were (a snapshot a second is one line, «×12»).
+// its place and counts how many there were (a snapshot a second is one line, «×12»). A flag that flips (a link that
+// flaps: 'room weak true', 'room weak false' …) is one line wherever it is: the latest, moved to the end (the lines stay
+// in time order), counting every flip. The ring full, the oldest line goes, but an error only while errors fill more
+// than ERRORS of it (the error a report is for outlives the lines after it).
 export const MAX = 40;
+const ERRORS = 20;
 const lines = [];
 const UTF8 = new TextEncoder();
+const FLAG = /^(room weak|room away \S.*|→ \S+ weak) (?:true|false)$/;
+const ERROR = /^error (in the game|on the page): /;
 
 export function note(text, key = text) {
   const last = lines[lines.length - 1], at = Date.now();   // (no .at(): Safari 15.4, as waiting.js)
   if (last && last.key === key) { last.text = text; last.at = at; last.n++; return; }
-  lines.push({ at, text, key, n: 1 });
-  if (lines.length > MAX) lines.shift();
+  const flag = FLAG.exec(text), fold = flag ? flag[1] : null;
+  let n = 1;
+  if (fold) for (let i = lines.length - 1; i >= 0; i--) if (lines[i].fold === fold) { n += lines[i].n; lines.splice(i, 1); break; }
+  lines.push({ at, text, key, n, fold, error: ERROR.test(text) });
+  if (lines.length > MAX) {
+    const errors = lines.reduce((k, l) => k + (l.error ? 1 : 0), 0), go = lines.findIndex(l => l.error === (errors > ERRORS));
+    lines.splice(go < 0 ? 0 : go, 1);
+  }
 }
 const clock = t => new Date(t).toISOString().slice(11, 21);
 export const read = () => lines.map(l => clock(l.at) + '  ' + l.text + (l.n > 1 ? '  ×' + l.n : ''));

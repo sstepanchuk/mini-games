@@ -43,7 +43,7 @@ const dialogText = async p => p.isClosed() ? '' : p.evaluate(() => document.quer
 // the card over the game («Чекаємо на …», invite.js; only the card: see waitShown): whether it shows, its text
 // (whitespace collapsed), its buttons, and what its live region says to a screen reader (say)
 const waitCard = p => p.evaluate(() => {
-  const c = document.getElementById('waiting'), say = document.querySelector('#stage .sr[role=status]'), shown = !!c && !c.hidden;
+  const c = document.getElementById('waiting'), say = document.querySelector('#layer .sr[role=status]'), shown = !!c && !c.hidden;
   return { shown, text: shown ? c.innerText.replace(/\s+/g, ' ').trim() : '', buttons: shown ? [...c.querySelectorAll('button')].map(b => b.textContent) : [], say: say ? say.textContent : null };
 });
 // The waiting message wherever it is (owner, decision 6 (c)): the library's card over the game (#waiting, invite.js),
@@ -51,7 +51,7 @@ const waitCard = p => p.evaluate(() => {
 // → { where: 'card' | 'screen' | 'both' (never: two messages) | null, text (whitespace collapsed), buttons, say (the
 // live region), showing (the first copy's attribute: the kinds said now, null: none), copies (how many the game has) }
 const waitShown = p => p.evaluate(() => {
-  const norm = t => t.replace(/\s+/g, ' ').trim(), c = document.getElementById('waiting'), say = document.querySelector('#stage .sr[role=status]');
+  const norm = t => t.replace(/\s+/g, ' ').trim(), c = document.getElementById('waiting'), say = document.querySelector('#layer .sr[role=status]');
   const card = !!c && !c.hidden && !!c.firstElementChild;
   let doc = null;
   try { doc = document.querySelector('iframe.frame')?.contentDocument || null; } catch (e) {}

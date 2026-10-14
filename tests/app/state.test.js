@@ -45,6 +45,31 @@ describe('the shared state', { concurrency: 3 }, () => {
     assert.deepEqual([await A.shared('k'), await B.shared('k')], [3, 3]);
   });
 
+  // (roomstate.js: the clocks follow the room's highest, so with a device whose clock runs ahead, a player's older page
+  // wrote on a clock ahead of their own: their next page writes below it until it has merged what the room knows, and
+  // the old page's here: comes back with the greeting. The page then says its own again: together.js staleHere)
+  test('a new page behind its old page\'s clock keeps its here:', T, async t => {
+    const W = world(t);
+    const A = await W.tab('p1tab');
+    await A.lib('state5', 'Аня');
+    assert.ok(await until(async () => (await A.state()).role === 'host', 5000));
+    const B = await W.tab('p2tab');
+    await B.clock(300000);                                   // Богдан's device runs 5 minutes ahead
+    await B.lib('state5', 'Богдан');
+    await A.open('g');
+    assert.ok(await inGame(A, B));
+    await A.open(null);                                      // here:Аня null, on Богдан's clock
+    assert.ok(await until(async () => (await B.state()).lib.view === null, 5000));
+    await A.call('gameSlow', { on: true });                  // her page follows into the next game, which does not open there
+    await B.open('g');
+    assert.ok(await until(async () => (await A.state()).lib.view === 'g', 5000));
+    const A2 = await A.reload();                             // «Онови сторінку»: the page at /g/ again, her clock right
+    await A2.lib('state5', 'Аня');                           // (the shell opens the address's game as the room starts)
+    assert.ok(await until(async () => (await B.state()).lib.here['Аня'] === 'g' && (await B.game())?.linked, 6000),
+      'Богдан sees her game open: ' + JSON.stringify((await B.state()).lib.here));
+    assert.ok(await inGame(A2, B));
+  });
+
   // (a round's snapshot carries a clock of the shared state as its version: the same bound)
   test('a snapshot with a clock far in the future does not freeze a round\'s snapshots', T, async t => {
     const W = world(t);

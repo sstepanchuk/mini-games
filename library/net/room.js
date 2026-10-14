@@ -640,7 +640,7 @@ function arrive(N, P, m, reliable) {
     for (const Q of linkedPeers(N)) if (Q !== P && (to === '*' || Q.name === to)) send(Q, { ...m, _f: from }, { fast: !reliable });
     if (to !== '*' && to !== N.name) return;
   }
-  N.emit('message', m, from);
+  N.emit('message', m, from, reliable);              // (reliable: numbered, so a game's copy that holds it keeps it all)
 }
 
 /* ---------- several links, one room ---------- */

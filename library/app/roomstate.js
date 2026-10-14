@@ -1,8 +1,10 @@
 // What the players of a room share, the same for everyone: a few keys, each with the version that set it.
-// A version is a Lamport clock (it starts from the wall clock, so a player's new tab writes after its old one)
-// and, between equal clocks, the writer's name. Whoever has the higher version for a key has its value, so
-// everyone ends up with the same, whatever order the changes arrive in, and nothing depends on who passes the
-// messages on. Pure data: together.js sends the changes around.
+// A version is a Lamport clock and, between equal clocks, the writer's name. The clock starts at the wall clock (so a
+// player's new tab writes after its old one) and follows the highest it merged: with a device in the room whose clock
+// runs ahead, a player's new page writes below its old page's entries until it has merged them, so together.js writes
+// the player's own keys again once merged (staleHere, staleWires). Whoever has the higher version for a key has its
+// value, so everyone ends up with the same, whatever order the changes arrive in, and nothing depends on who passes
+// the messages on. Pure data: together.js sends the changes around.
 //
 //   view           the game everyone looks at (null: the shelf)
 //   here:<name>    the game this player has open (null: none); only they write it

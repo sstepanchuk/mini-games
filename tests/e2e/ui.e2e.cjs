@@ -3,9 +3,11 @@
 // scan a code); with internet it offers two ways. Both ways link two players up: a link (the friend opens it and
 // gives a name), and nearby (show / scan a code, then the other way round). A new room's code has 8 characters; the
 // code of the last room is used again only if it is that long (a shorter one is from before the seal, phase 5).
+// «Ви граєте разом» stays as it is while the room changes (a third player joins, drops out, comes back): only what it
+// says changes, and the focused «Від’єднатися» keeps its focus.
 'use strict';
-const { scenario, check, step, until } = require('./support/scenario.cjs');
-const { openPage, phone, pair, allLinked, libState, dialogText } = require('./support/pages.cjs');
+const { scenario, check, step, until, launch } = require('./support/scenario.cjs');
+const { openPage, createLink, phone, pair, allLinked, libState, dialogText } = require('./support/pages.cjs');
 
 scenario('ui: the play-together dialog, without and with internet; a link and nearby link up', async () => {
   step('no internet');
@@ -57,4 +59,28 @@ scenario('ui: the play-together dialog, without and with internet; a link and ne
   check(sc.kind === 'nearby' && sd.kind === 'nearby', 'nearby', [sc.kind, sd.kind]);
   check(sc.role === 'host' && sd.role === 'guest', 'who showed the code first hosts', [sc.role, sd.role]);
   check(sc.players.join() === 'Сава,Дана' && sd.players.join() === 'Сава,Дана', 'both see Сава and Дана', [sc.players, sd.players]);
-}, { timeout: 120000 });
+  await C.b.close(); await D.b.close();
+
+  step('3: «Ви граєте разом» while the room changes: the focus stays where it is');
+  const ctx = await (await launch()).newContext({ viewport: { width: 420, height: 860 } });   // (one context: one fake network)
+  const P = await openPage(ctx, 'ffffffffffff', undefined, { label: 'Аня' });
+  const room = await createLink(P, 'Аня');
+  const Q = await openPage(ctx, 'gggggggggggg', room, { name: 'Богдан' });
+  check(await allLinked([P, Q], 15000), 'Аня and Богдан linked');
+  await until(async () => !(await P.$('.backdrop')), 5000);
+  await P.click('#together');
+  await P.focus('.dialog button:has-text("Від’єднатися")');
+  await P.evaluate(() => { window.__f = document.activeElement; });
+  const seen = () => P.evaluate(() => ({ same: !!window.__f && document.activeElement === window.__f, focus: (a => a === document.body ? 'BODY' : a.tagName + ':' + a.textContent.slice(0, 20))(document.activeElement), h2: document.querySelector('.dialog h2')?.textContent,
+    players: [...document.querySelectorAll('.dialog ul.players li')].map(li => li.textContent) }));
+  const V = await openPage(ctx, 'hhhhhhhhhhhh', room, { name: 'Віра' });
+  check(await allLinked([P, Q, V], 15000), 'Віра joins');
+  let x = await until(async () => { const y = await seen(); return y.h2 === 'Вас 3' && y; }, 5000);
+  check(x && x.same, 'the heading says «Вас 3», and «Від’єднатися» keeps the focus (the same node)', await seen());
+  await V.evaluate(() => window.__net(false));
+  x = await until(async () => { const y = await seen(); return y.players.includes('Віра — відпав, місце чекає') && y; }, 30000);
+  check(x && x.same, '«Віра — відпав, місце чекає», and the focus stays', await seen());
+  await V.evaluate(() => window.__net(true));
+  x = await until(async () => { const y = await seen(); return y.players.includes('Віра') && y; }, 30000);
+  check(x && x.same, 'Віра back, and the focus stays', await seen());
+}, { timeout: 180000 });

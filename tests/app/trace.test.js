@@ -22,6 +22,41 @@ describe('the trace (phase 2, G5)', () => {
     assert.match(trace.read().at(-1), /room weak true  ×2$/);
   });
 
+  // (a link that flaps: 'room weak true', 'room weak false' … would push out of the ring everything a report needs)
+  test('a flag that flips is one line, the latest, counted, where it last flipped; the ring keeps errors before other lines', () => {
+    for (let i = 0; i < trace.MAX; i++) trace.note('before ' + i);   // (what the tests above left goes)
+    trace.note('error in the game: TypeError at main.js:1:1');
+    for (let i = 0; i < 50; i++) { trace.note('room weak ' + (i % 2 === 0)); trace.note('→ g weak ' + (i % 2 === 0)); }
+    let r = trace.read();
+    assert.ok(r.length <= trace.MAX, r.length + ' lines');
+    assert.ok(r.some(l => /  error in the game: TypeError at main\.js:1:1$/.test(l)), 'the error is still there: ' + r.join('\n'));
+    assert.match(r[r.length - 2], /  room weak false  ×50$/, 'one line for the room\'s, the latest flip, counted');
+    assert.match(r[r.length - 1], /  → g weak false  ×50$/, 'and one for the game\'s');
+    assert.equal(r.filter(l => /weak/.test(l)).length, 2);
+    // two players' flags fold apart, each where it last flipped (the lines stay in time order)
+    trace.note('room away Аня true'); trace.note('room away Богдан true'); trace.note('room linked');
+    trace.note('room away Аня false'); trace.note('room away Богдан false');
+    r = trace.read();
+    assert.deepEqual(r.slice(-3).map(l => l.slice(12)), ['room linked', 'room away Аня false  ×2', 'room away Богдан false  ×2']);
+    // the ring full of other lines: they go before the error does
+    for (let i = 0; i < 50; i++) trace.note('room away Гравець ' + i + ' true');
+    r = trace.read();
+    assert.equal(r.length, trace.MAX);
+    assert.ok(r.some(l => /  error in the game: TypeError at main\.js:1:1$/.test(l)), 'the error is still there: ' + r.join('\n'));
+    assert.match(r[r.length - 1], /  room away Гравець 49 true$/);
+    // and errors themselves are kept only up to a share of the ring: the newest ones, and the newest other lines
+    for (let i = 0; i < 2 * trace.MAX; i++) trace.note('error on the page: TypeError at x.js:' + i + ':1');
+    trace.note('room linked');
+    r = trace.read();
+    assert.equal(r.length, trace.MAX);
+    assert.ok(r.filter(l => /  error /.test(l)).length < trace.MAX, 'not only errors');
+    assert.match(r[r.length - 2], /  error on the page: TypeError at x\.js:79:1$/, 'the newest error');
+    assert.match(r[r.length - 1], /  room linked$/);
+    // anything else: as it was (the same line again is counted only while it is the newest)
+    trace.note('room linked'); trace.note('room joined Аня'); trace.note('room linked');
+    assert.deepEqual(trace.read().slice(-3).map(l => l.slice(12)), ['room linked  ×2', 'room joined Аня', 'room linked']);
+  });
+
   // (Safari 15.0–15.3, older iPhones: no .at(); trace.note() runs on every page, so the library opened no room there)
   test('works in a browser without Array.prototype.at', () => {
     const at = Object.getOwnPropertyDescriptor(Array.prototype, 'at');

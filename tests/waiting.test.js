@@ -3,9 +3,9 @@
 // where they may show (placeLines: the card over a game, or nothing while a copy of the game's <ihroteka-wait> holds them).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { KINDS, LABEL, mmss, names, placeLines, sayOf, screen } from '../library/app/waiting.js';
+import { KINDS, LABEL, mmss, NAMED, names, placeLines, sayOf, screen } from '../library/app/waiting.js';
 
-const UPDATE = 'Онови сторінку — у друга інша версія';
+const UPDATE = 'Онови сторінку — у друга інша версія', NEARBY = 'Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.';
 const facts = o => ({ waits: [], restoring: false, seat: null, gap: null, offer: false, nearby: false, ...o });
 const link = (name, o) => ({ name, left: 165000, why: 'link', release: true, ...o });
 const one = o => { const m = screen(facts(o)); assert.equal(m.rows.length, 1, JSON.stringify(m.rows)); return m.rows[0]; };
@@ -86,12 +86,35 @@ test('key: the same while only the time changes; another when who, why, the butt
   assert.equal(new Set(screen(facts({ waits: [link('Богдан'), link('Віра')], restoring: true, seat: { players: [] }, gap: { key: 'x' } })).rows.map(r => r.key)).size, 5, 'one key per row');
 });
 
-test('what a screen reader hears: never the time, rows joined as the card always joined them', () => {
+test('what a screen reader hears: never the time; rows as sentences («. » between them, a space after «…» or «.»)', () => {
   const m = screen(facts({ waits: [link('Богдан')], gap: { key: 'wire:g:2' }, offer: true }));
-  assert.equal(m.say, 'Чекаємо на Богдан…. ' + UPDATE);
+  assert.equal(m.say, 'Чекаємо на Богдан… ' + UPDATE);
   assert.equal(sayOf(m.rows), m.say);
   assert.ok(!/\d:\d\d/.test(m.say));
   assert.equal(screen(facts({ waits: [{ name: 'Богдан', left: 5000, why: 'loading', release: false }] })).say, 'Чекаємо на Богдан — повертається в гру');
+  assert.equal(screen(facts({ waits: [{ name: 'Б', left: 1, why: 'loading', release: false }], gap: { key: 'g' } })).say, 'Чекаємо на Б — повертається в гру. ' + UPDATE);
+  assert.equal(screen(facts({ restoring: true, seat: { players: ['Аня'] }, gap: { key: 'g' } })).say,
+    'Повертаю гру з того місця, де ви зупинилися… Ти чекаєш на місце. Грають зараз: Аня. ' + UPDATE);
+  const every = screen(facts({ waits: [link('Б'), link('В'), { name: 'Г', left: 0, why: 'closed', release: false, round: true }], restoring: true,
+    seat: { players: ['Аня'] }, gap: { key: 'g' }, nearby: true }));
+  for (const s of [every.say, ...every.rows.map(r => r.say)]) assert.ok(!/[.…]\./.test(s), s);
+});
+
+test('nearby: why the link waits is heard once, with the first link row (its key as before); over the internet, only who', () => {
+  const m = screen(facts({ waits: [{ name: 'Г', left: 0, why: 'closed', release: false, round: true }, link('Богдан'), link('Віра')], nearby: true, gap: { key: 'g' } }));
+  assert.equal(m.say, 'Чекаємо на Г — зараз не в грі. Чекаємо на Богдан… ' + NEARBY + ' Чекаємо на Віра… ' + UPDATE);
+  assert.equal(m.say.split(NEARBY).length - 1, 1, 'once');
+  assert.deepEqual(m.rows.map(r => r.say), ['Чекаємо на Г — зараз не в грі', 'Чекаємо на Богдан… ' + NEARBY, 'Чекаємо на Віра…', UPDATE]);
+  assert.deepEqual(m.rows.map(r => r.fine), [null, NEARBY, NEARBY, null], 'the small line of every link row stays');
+  assert.deepEqual(m.rows.map(r => r.key), ['closed:Г::', 'link:Богдан:repair,release:', 'link:Віра:repair,release:', 'version:::g']);
+  assert.ok(sayOf(placeLines(m.rows, { ready: true, adopted: false, held: false })).includes(NEARBY), 'the card of a game without the element says it too');
+  assert.equal(one({ waits: [link('Богдан')] }).say, 'Чекаємо на Богдан…', 'over the internet');
+});
+
+test('«Не чекати» for one player, as a screen reader names it: the visible words first, then whom', () => {
+  assert.equal(NAMED.release('Богдан'), 'Не чекати на Богдан');
+  assert.ok(NAMED.release('Богдан').startsWith(LABEL.release[0]));
+  assert.deepEqual(Object.keys(NAMED), ['release'], '«З’єднатися знову» and «Оновити» keep their plain names');
 });
 
 test('classic (the card as it was before the screens): link and loading of whom we play with, and the version; not the round\'s, closed, restoring or seat', () => {

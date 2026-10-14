@@ -5,6 +5,14 @@
 //   const G = await newGame('demo2', ['--title', 'Демо два'], { devnet: true })
 //   G.made: cli new worked (G.out: what it said); G.up: its server answers at G.url (port G.port); G.log: what the
 //   server said (its stdout and stderr: the detail of a failed check(G.up, …))
+// A library of its own, made and assembled as the published one is (cli init, new, build --no-tests and site, in a
+// scratch IHROTEKA_ROOT) and served by `cli dev site` on a free port (its offline copy, sw.js, too): for the scenarios
+// of the password (lock). Its passwords are the ones cli init made: read from what it printed, never printed again nor
+// put in a check's detail; they reach a child process only through its env (VAULT_PASSWORD), a page only by typing.
+//   const L = await scratchLibrary('demo', ['alice'])
+//   L.made: all of it was made (L.out: what the tools said, the passwords cut out); L.up: its server answers at L.url
+//   (http://localhost:<port>/, as the server says: one origin, one sign-in); L.passwords.alice; L.log: the server
+// The scratch copy and the server go when the scenario's process exits, a signal too.
 // The template's page in a library page p: templateFrame(p, sel) waits for its frame and sel visible in it (#lobby,
 // or main: #lobby is hidden mid-round); templateView(f) is what a player sees there (null: the frame is gone).
 // The template puts the library's waiting screen under its title (<ihroteka-wait>, README "Waiting screens"), where it
@@ -46,6 +54,39 @@ async function newGame(id, args = [], { devnet = false } = {}) {
   return G;
 }
 
+async function scratchLibrary(id = 'demo', names = ['alice']) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ihroteka-lib-'));
+  let server = null;
+  process.on('exit', () => { if (server) server.kill(); fs.rmSync(root, { recursive: true, force: true }); });
+  exitOnSignals();
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ homepage: 'https://example.github.io/lib/' }));
+  const env = { ...process.env, IHROTEKA_ROOT: root };
+  delete env.VAULT_PASSWORD;
+  delete env.VAULT_PASSWORDS;
+  const passwords = {}, said = [];
+  const hide = t => Object.values(passwords).reduce((x, pw) => x.split(pw).join('…'), t);
+  const cli = (args, password) => {
+    const r = spawnSync(process.execPath, [CLI, ...args], { env: password === undefined ? env : { ...env, VAULT_PASSWORD: password }, encoding: 'utf8' });
+    if (args[0] === 'init') for (const m of r.stdout.matchAll(/^\s+(\S+)\s+(\S+)$/gm)) if (names.includes(m[1])) passwords[m[1]] = m[2];
+    said.push('$ cli ' + args.join(' ') + '\n' + hide(r.stdout + r.stderr));
+    return r.status === 0;
+  };
+  const log = [];
+  const L = { made: false, up: false, url: null, port: null, passwords, get out() { return said.join('\n'); }, get log() { return Buffer.concat(log).toString(); } };
+  L.made = cli(['init', ...names]) && names.every(n => passwords[n]) && cli(['new', id]) && cli(['build', '--no-tests'], passwords[names[0]]) && cli(['site']);
+  if (!L.made) return L;
+  L.port = await freePort();
+  L.url = 'http://localhost:' + L.port + '/';
+  server = spawn(process.execPath, [CLI, 'dev', 'site', String(L.port)], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let ended = false;
+  server.stdout.on('data', d => log.push(d));
+  server.stderr.on('data', d => log.push(d));
+  server.on('exit', (code, signal) => { ended = true; log.push(Buffer.from('(the dev server exited: ' + (signal || code) + ')\n')); });
+  const at = 'http://127.0.0.1:' + L.port + '/';
+  L.up = await until(() => ended ? 'ended' : fetch(at, { signal: AbortSignal.timeout(1000) }).then(x => x.ok, () => false), 15000) === true;
+  return L;
+}
+
 // (every library page, from its start: see above)
 function SCREENS() {
   if (window.top !== window) return;
@@ -80,4 +121,4 @@ const templateView = f => f.evaluate(() => {
     seats: [...$('seats').children].map(li => li.textContent), steps: [...$('steps').children].map(b => !b.disabled), again: !$('again').hidden };
 }).catch(() => null);
 
-module.exports = { newGame, SCREENS, sampled, templateFrame, templateView };
+module.exports = { newGame, scratchLibrary, SCREENS, sampled, templateFrame, templateView };

@@ -417,13 +417,24 @@ test('players: a game for two, the same pair in another order keeps the round', 
 });
 
 /* ---------- a round's snapshot ---------- */
+const ROOM = ['Аня', 'Богдан', 'Сава'];                   // (everyone still in the room)
 test('snapshot: fits the players seated now, as a set; one from an older library (no players) fits any', () => {
-  assert.equal(snapFits({ s: 1, p: ['Аня', 'Богдан'] }, ['Аня', 'Богдан']), true);
-  assert.equal(snapFits({ s: 1, p: ['Аня', 'Богдан'] }, ['Богдан', 'Аня']), true);
-  assert.equal(snapFits({ s: 1, p: ['Аня', 'Богдан'] }, ['Аня', 'Сава']), false);    // someone else's round
-  assert.equal(snapFits({ s: 1, p: ['Аня', 'Богдан'] }, ['Аня']), false);
-  assert.equal(snapFits({ s: 1, p: ['Аня', 'Богдан'] }, ['Аня', 'Богдан', 'Сава']), false);
-  assert.equal(snapFits({ s: 1 }, ['Аня', 'Сава']), true);
+  assert.equal(snapFits({ s: 1, p: ['Аня', 'Богдан'] }, ['Аня', 'Богдан'], ROOM), true);
+  assert.equal(snapFits({ s: 1, p: ['Аня', 'Богдан'] }, ['Богдан', 'Аня'], ROOM), true);
+  assert.equal(snapFits({ s: 1, p: ['Аня', 'Богдан'] }, ['Аня', 'Сава'], ROOM), false);    // someone else's round
+  assert.equal(snapFits({ s: 1, p: ['Аня', 'Богдан'] }, ['Аня'], ROOM), false);
+  assert.equal(snapFits({ s: 1, p: ['Аня', 'Богдан'] }, ['Аня', 'Богдан', 'Сава'], ROOM), false);
+  assert.equal(snapFits({ s: 1 }, ['Аня', 'Сава'], ROOM), true);
+});
+
+// (names-and-3plus-09: in a game for 3+, a seated player who left the room for good is not tombstoned while the open
+// game decides; until the runner's next snapshot, its players still name them)
+test('snapshot: a player who left the room for good since does not count; anyone else in their seat does', () => {
+  const three = { s: 1, p: ['Аня', 'Богдан', 'Сава'] };
+  assert.equal(snapFits(three, ['Аня', 'Богдан'], ['Аня', 'Богдан']), true, 'Сава left: the round goes on with the other two');
+  assert.equal(snapFits(three, ['Аня', 'Богдан', 'Дана'], ['Аня', 'Богдан', 'Дана']), false, 'a newcomer in Сава\'s seat');
+  assert.equal(snapFits(three, ['Аня', 'Богдан'], ['Аня', 'Богдан', 'Сава']), false, 'Сава is still in the room: off her seat only');
+  assert.equal(snapFits({ s: 1, p: ['Гліб', 'Дана'] }, ['Аня', 'Богдан'], ['Аня', 'Богдан']), false, 'another round\'s players, all gone');
 });
 
 test('round over for good: one of its players is gone from the room (not one who only closed the game or is away)', () => {

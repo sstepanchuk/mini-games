@@ -4,7 +4,8 @@
    element in the game's own window and only says where its copies are (waitScreen, through shell.js); everything else
    is here, in the library page, so it changes without rebuilding the games.
    - One copy at a time holds the rows (the holder): the one that holds them while it is still seen, else the first seen
-     copy in document order (seen: visible, in the frame's view, and on top where its first row is). Every other copy
+     copy in document order (seen: visible, opacity too on every engine; in the frame's view; and on top at the centre
+     of its first row and of each of its buttons in view: a button the game covers cannot be pressed). Every other copy
      is empty, and an empty one takes no room (the style injected once into the game's <head>).
    - Never two messages: when no copy is seen, the card over the game (invite.js) says it instead, every row; a game
      that never placed one (adopted false: the probe, a build from before the screens) gets the card as it was
@@ -12,7 +13,8 @@
    - On every copy, the attribute `showing` says the kinds said now, wherever they show (a copy, the card); the event
      `showing` (the game's window's Event, no bubbling) says when what is said changed, after the rows are in place.
    - The rows are waiting.js's, painted by one renderer for the card and the copies (paint): each row built once per
-     key, so each second only its time changes and a focused button keeps its focus.
+     key, so each second only its time changes and a focused button keeps its focus. When the rows move (a copy to the
+     card, the card to a copy, a copy to another), a focused button's focus goes with them (focused, carry).
    When it looks again (soon: one pass of invite.js waitNote, deduped in a microtask): a copy connected or gone, the
    game's page parsed (DOMContentLoaded), the game attached or closed, a size change of a copy or of anything around it
    (a ResizeObserver of the game's window, its work deferred to the game's next animation frame: a menu panel shown or
@@ -20,7 +22,7 @@
    While a library dialog is open (the stage inert), the holder stays as it is, with no hit test.
    ===================================================================== */
 import { safe } from './dom.js';
-import { LABEL, mmss } from './waiting.js';
+import { LABEL, mmss, NAMED } from './waiting.js';
 
 export const ELEMENT = 'ihroteka-wait', ATTR = 'showing', EVENT = 'showing';
 export const CLASSES = ['btn', 'fine', 'ghost', 'wait-row', 'wait-time'];   // the markup's hooks (README "Waiting screens")
@@ -43,6 +45,7 @@ let told = '', showing = '';                             // the model key last a
 let ro = null, raf = 0, queued = false, repaint = null;  // the game's ResizeObserver, its frame; a pass asked; invite's waitNote
 const warned = new Set();
 const built = new WeakMap();                             // box (a copy, the card) → Map(row key → { node, time })
+const made = new WeakMap();                              // a button of the rows → { key, act }: the same one elsewhere
 
 // invite.js: what to call for a new pass (its waitNote)
 export function initScreens(fn) { repaint = fn; }
@@ -111,19 +114,35 @@ function mark(list, v) {
 }
 // a library dialog is open (the stage behind it inert): the holder stays as it is (no hit test behind the backdrop)
 const inert = () => { try { return !!win.frameElement && !!win.frameElement.closest('[inert]'); } catch (e) { return false; } };
-// Whether the player sees this copy (measured with its rows painted): visible (opacity and visibility too, where the
-// browser can say), in the frame's view by 1×1 px at least, and on top at the centre of what is in view of its first
-// row (not under the game's own menu, say). A false "unseen" still leaves one message: the card's.
+// Visible to the eye: not visibility:hidden or opacity:0, on it or around it (display:none leaves no box: seen says
+// so). Both generations of checkVisibility's option names (Chromium 105–120 knows only checkOpacity and
+// checkVisibilityCSS, and ignores the rest); without checkVisibility (Safari before 17.4), its visibility (inherited)
+// and every ancestor's opacity, read here (a few nodes, at most once a second).
+const VIS = { checkOpacity: true, checkVisibilityCSS: true, opacityProperty: true, visibilityProperty: true };
+function visible(el) {
+  if (el.checkVisibility) return el.checkVisibility(VIS);
+  if (win.getComputedStyle(el).visibility !== 'visible') return false;
+  for (let n = el; n; n = n.parentElement) if (win.getComputedStyle(n).opacity === '0') return false;
+  return true;
+}
+// Whether the player sees this copy (measured with its rows painted): visible, in the frame's view by 1×1 px at least,
+// and on top (not under the game's own menu, bar or toast, say) at the centre of what is in view of its first row, and
+// at the centre of each of its buttons whose centre is in the frame's view (one out of view still counts: scrolling
+// reaches it). A false "unseen" still leaves one message: the card's.
 function seen(el) {
   try {
     if (!el.isConnected || el.ownerDocument !== win.document) return false;
-    if (el.checkVisibility ? !el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) : win.getComputedStyle(el).visibility !== 'visible') return false;
+    if (!visible(el)) return false;
     const vw = win.innerWidth, vh = win.innerHeight;
     const centre = r => { const x = Math.max(r.left, 0), y = Math.max(r.top, 0), w = Math.min(r.right, vw) - x, h = Math.min(r.bottom, vh) - y; return w >= 1 && h >= 1 ? [x + w / 2, y + h / 2] : null; };
+    const top = (x, y) => { const hit = win.document.elementFromPoint(x, y); return !!hit && (hit === el || el.contains(hit)); };
     const c = centre(el.getBoundingClientRect()) && centre((el.firstElementChild || el).getBoundingClientRect());
-    if (!c) return false;
-    const hit = win.document.elementFromPoint(c[0], c[1]);
-    return !!hit && (hit === el || el.contains(hit));
+    if (!c || !top(c[0], c[1])) return false;
+    for (const b of el.querySelectorAll('button')) {
+      const r = b.getBoundingClientRect(), x = (r.left + r.right) / 2, y = (r.top + r.bottom) / 2;
+      if (r.width && r.height && x >= 0 && y >= 0 && x < vw && y < vh && !top(x, y)) return false;   // (no box: the game hides it)
+    }
+    return true;
   } catch (e) { return false; }
 }
 // Which copy holds the rows: the holder while it is still seen, else the first seen one in document order (each tried
@@ -185,7 +204,7 @@ export function clear(box) {
   built.delete(box);
 }
 // a row: the line (with the time, for a place that is kept), the small line, the buttons (library functions, also in
-// the game's document)
+// the game's document; one that acts on a player is named for a screen reader with whom: waiting.js NAMED)
 function build(doc, r, acts) {
   const make = (tag, cls, text) => { const n = doc.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
   const node = make('div', 'wait-row'), line = make('p', '', r.text);
@@ -198,10 +217,42 @@ function build(doc, r, acts) {
   for (const { act, arg } of r.acts) {
     const b = make('button', LABEL[act][1], LABEL[act][0]);
     b.type = 'button';
+    if (NAMED[act]) b.setAttribute('aria-label', NAMED[act](arg));
     b.addEventListener('click', () => safe(acts[act], arg));
+    made.set(b, { key: r.key, act });
     node.append(b);
   }
   return { node, time };
+}
+
+// The focus across a move of the rows (a copy to the card, the card to a copy, a copy to another). focused(): the
+// button of the rows that has the focus as a pass starts (the card's, or a copy's while the game's frame has the
+// focus), or null. carry(was, card): after the pass, when that button went with the move and the focus is nowhere
+// since (the page's <body>, or the frame with its <body>), the same row's same button in the holder or the card takes
+// it; a game's 'showing' listener that put the focus somewhere wins. → whether it did. (A copy the game hides with
+// display:none loses its focus to the browser before the pass: nothing to carry.)
+export function focused() {
+  const a = document.activeElement;
+  if (a && made.has(a)) return a;
+  try { if (win && a && a === win.frameElement) { const g = win.document.activeElement; if (g && made.has(g)) return g; } } catch (e) {}
+  return null;
+}
+const nowhere = () => {
+  const a = document.activeElement;
+  if (!a || a === document.body) return true;
+  try { return !!win && a === win.frameElement && (!win.document.activeElement || win.document.activeElement === win.document.body); } catch (e) { return false; }
+};
+export function carry(was, card) {
+  if (!was || was.isConnected || !nowhere()) return false;
+  const id = made.get(was);
+  for (const box of [holder, card]) {
+    if (!box) continue;
+    for (const b of box.querySelectorAll('button')) {
+      const x = made.get(b);
+      if (x && x.key === id.key && x.act === id.act) { b.focus({ preventScroll: true }); return true; }
+    }
+  }
+  return false;
 }
 
 // for checks (__ihroteka.screens()): the open game's page parsed, a copy ever placed, how many copies there are, which

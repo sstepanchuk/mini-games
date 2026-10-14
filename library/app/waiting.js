@@ -16,6 +16,9 @@
 export const KINDS = ['link', 'loading', 'closed', 'restoring', 'seat', 'version'];   // row order; api-surface.json "screens"
 // a button: its text and its classes (the markup's hooks, screens.js)
 export const LABEL = { repair: ['З’єднатися знову', 'btn'], release: ['Не чекати', 'btn ghost'], update: ['Оновити', 'btn ghost'] };
+// what a screen reader calls a button that acts on one player (its aria-label: the visible words first, then whom);
+// «З’єднатися знову» keeps its plain name: it is the same pairing on every row
+export const NAMED = { release: n => 'Не чекати на ' + n };
 export const UPDATE = 'Онови сторінку — у друга інша версія';   // (owner, decision 9: also the chip's and the dialog's)
 const NEARBY = 'Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.';
 const RESTORING = 'Повертаю гру з того місця, де ви зупинилися…', SEAT = 'Ти чекаєш на місце';
@@ -26,18 +29,21 @@ export const mmss = ms => { const s = Math.max(0, Math.ceil(ms / 1000)); return 
 export const names = l => l.length > 1 ? l.slice(0, -1).join(', ') + ' і ' + l[l.length - 1] : l.join('');
 
 // facts: null (nothing to say: the shelf) | { waits: [{ name, why: 'link'|'loading'|'closed', left, release, round? }],
-//   restoring: bool, seat: null | { players: [names] }, gap: null | { key, older }, offer: bool, nearby: bool }
+//   restoring: bool, seat: null | { players: [names] }, gap: null | { key, older, failed }, offer: bool, nearby: bool }
 // → { rows: [{ key, kind, name, text, time, fine, acts: [{ act, arg }], say, classic }], showing, say, key }
-//   time: ms left (link only, else null); say: what a screen reader hears (never the time); classic: a row of the card
-//   from before the screens (placeLines); key: a row's identity (who, why and what can be done: never the time)
+//   time: ms left (link only, else null); say: what a screen reader hears (never the time; nearby, why with the first
+//   link row only); classic: a row of the card from before the screens (placeLines); key: a row's identity (who, why
+//   and what can be done: never the time)
 export function screen(facts) {
   if (!facts) return { rows: [], showing: '', say: '', key: '' };
   const rows = [];
   const add = (kind, name, text, { time = null, fine = null, acts = [], say = text, classic = false, extra = '' } = {}) =>
     rows.push({ key: kind + ':' + (name || '') + ':' + acts.map(a => a.act).join(',') + ':' + extra, kind, name, text, time, fine, acts, say, classic });
+  let why = !!facts.nearby;                              // nearby: why the link rows wait, heard once (with the first)
   for (const x of facts.waits || []) {
-    const link = x.why === 'link';
-    add(x.why, x.name, LINE[x.why](x.name), { time: link ? x.left : null, fine: link && facts.nearby ? NEARBY : null,
+    const link = x.why === 'link', text = LINE[x.why](x.name), told = link && why;
+    if (told) why = false;
+    add(x.why, x.name, text, { time: link ? x.left : null, fine: link && facts.nearby ? NEARBY : null, say: told ? text + ' ' + NEARBY : text,
       acts: link ? [...(facts.nearby ? [{ act: 'repair' }] : []), ...(x.release ? [{ act: 'release', arg: x.name }] : [])] : [],
       classic: !x.round && x.why !== 'closed' });
   }
@@ -49,7 +55,8 @@ export function screen(facts) {
   if (facts.gap) add('version', null, UPDATE, { acts: facts.offer ? [{ act: 'update' }] : [], classic: true, extra: facts.gap.key });
   return { rows, showing: [...new Set(rows.map(r => r.kind))].join(' '), say: sayOf(rows), key: rows.map(r => r.key).join('|') };
 }
-export const sayOf = rows => rows.map(r => r.say).join('. ');
+// the rows as sentences: '. ' between them, only a space after one that already ends one («…», «.»)
+export const sayOf = rows => rows.reduce((s, r) => !s ? r.say : s + (/[.…!?]$/.test(s) ? ' ' : '. ') + r.say, '');
 // The card's rows (invite.js): none while a copy of the game's holds them (held); before the game's page has parsed
 // (ready false), only the version row; a game that placed <ihroteka-wait> (adopted): every row; one that never did:
 // exactly the card from before the screens (classic rows: link and loading of whom we play with, and version)

@@ -10,6 +10,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { room, sleep, until, world } from '../support/world.js';
+import { CAP } from '../../library/app/rules.js';
 
 const T = { timeout: 40000 }, SCALE = 0.3;
 const evs = (g, from = 0) => g.events.slice(from).map(e => e.slice(1).map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' '));
@@ -402,8 +403,9 @@ const saveOf = async (X, game = 'g') => ((await X.state()).lib.saves || {})[game
 const heardR = (X, l, ms = 5000) => until(async () => { const g = await X.game(); return g && rlines(g).includes(l) && g; }, ms, 50);
 const start = (X, setup, opts) => X.call('rstart', { setup, opts });
 const save = (X, s) => X.call('rsave', { s });
-// a round record as another library would write it (a forged one: the room checks only its shape and writer)
-const forged = (v, a = v.runner) => ({ t: 'lib-state', e: [['round:g', { v: { on: true, by: v.runner, reason: null, result: null, setup: null, saved: false, w: 1, ...v }, c: Date.now() + 1000, a }]] });
+// a round record as another library would write it (a forged one: the room checks only its shape and writer); dc: how
+// far its clock is ahead of the wall clock
+const forged = (v, a = v.runner, dc = 1000) => ({ t: 'lib-state', e: [['round:g', { v: { on: true, by: v.runner, reason: null, result: null, setup: null, saved: false, w: 1, ...v }, c: Date.now() + dc, a }]] });
 
 describe('the round layer (ihroteka.round)', { concurrency: 3 }, () => {
   test('a round begins: everyone hears start, then the runner run (fresh) and the others watch, a player without a seat too', T, async t => {
@@ -458,6 +460,41 @@ describe('the round layer (ihroteka.round)', { concurrency: 3 }, () => {
     assert.deepEqual([rlines(await A.game()), rlines(await B.game()), (await A.game()).round.active], [[], [], false], 'no round');
     assert.equal(await start(B), true, 'asked again now');
     assert.ok(await heardR(B, 'watch Аня', 3000), 'it begins');
+  });
+
+  test('a start asked again before the first is answered is refused (within ASK_TTL); the first begins, once', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'rl31', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    const frozen = A.freeze(1000);                           // Аня's tab stops a moment: the start Богдан asks waits for her
+    await sleep(100);
+    assert.equal(await start(B, 1), true, 'asked');
+    assert.equal(await start(B, 2), false, 'asked already');
+    assert.ok((await B.state()).lib.trace.some(l => /refused: start: asked already/.test(l)), (await B.state()).lib.trace.slice(-5).join(' | '));
+    await frozen;
+    assert.ok(await heardR(B, 'watch Аня', 5000), 'the first begins: ' + rlines(await B.game()));
+    await sleep(500);
+    assert.deepEqual([rlines(await A.game()), (await rec(A)).setup], [['start Богдан', 'run fresh'], 1], 'once, as first asked');
+  });
+
+  // (start(setup, { seats }): the same players in another order; no game uses it yet)
+  test('start with the seats in another order, by the runner and asked by another player; any other seats are refused', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'rl30', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    for (const seats of [['Аня'], ['Аня', 'Сава'], ['Аня', 'Богдан', 'Сава'], 'Аня,Богдан', ['Аня', 'Аня']]) assert.equal(await start(A, 1, { seats }), false, 'not the players seated: ' + seats);
+    assert.equal(await start(A, 1, { seats: ['Богдан', 'Аня'] }), true);
+    const g = await heardR(B, 'watch Аня', 3000);
+    assert.ok(g, rlines(await B.game()));
+    assert.deepEqual([(await rec(A)).seats, g.round.seats, g.round.mySeat, (await A.game()).round.mySeat], [['Богдан', 'Аня'], ['Богдан', 'Аня'], 0, 1]);
+    assert.equal(await A.call('rover', {}), true);
+    assert.ok(await heardR(B, 'end over Аня', 3000));
+    assert.equal(await start(B, 2, { seats: ['Аня', 'Сава'] }), false, 'asked: refused as well');
+    assert.equal(await start(B, 2, { seats: ['Богдан', 'Аня'] }), true, 'asked');
+    assert.ok(await until(async () => (await rec(A))?.on && (await rec(A)).setup === 2, 3000), 'it begins');
+    assert.deepEqual([(await rec(A)).seats, (await rec(A)).runner, (await rec(A)).by], [['Богдан', 'Аня'], 'Аня', 'Богдан']);
   });
 
   test('save: only from the copy that runs the round; its players keep the latest; one from anyone else, of another round or wire, is refused', T, async t => {
@@ -865,6 +902,29 @@ describe('the round layer (ihroteka.round)', { concurrency: 3 }, () => {
     assert.deepEqual([(await A.game()).round.active, (await B.game()).round.active], [false, false]);
   });
 
+  // The same seen by a copy without a seat (a watcher): the round it knows is over comes back on (a record of the
+  // other side, its clock ahead). Its players end it again; the watcher leaves that to them: its own end would name a
+  // runner outside the seats, which nobody takes, and its record would differ from everyone's for good (invariant 3).
+  test('split seen by a watcher: a copy without a seat never ends the round again (its players do); the same record everywhere', T, async t => {
+    const W = world(t);
+    const [A, B, C] = await room(W, 'rl28', ['Аня', 'Богдан', 'Сава'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B, C], 'Аня,Богдан'));
+    await start(A);
+    assert.ok(await heardR(C, 'watch Аня', 3000));
+    const { id } = await rec(A);
+    assert.equal(await A.call('rover', {}), true);
+    assert.ok(await until(async () => (await rec(B))?.on === false && (await rec(C))?.on === false, 3000), 'over for everyone');
+    // that round on, as Богдан's copy wrote it on the other side of a split, after it ran it on (its clock ahead)
+    await B.send(forged({ id, seats: ['Аня', 'Богдан'], runner: 'Богдан', saved: true }, 'Богдан', 5000));
+    await sleep(1500);
+    const recs = await Promise.all([A, B, C].map(X => rec(X)));
+    assert.deepEqual(recs.map(r => [r.id, r.on, r.runner, r.by, r.reason]), Array(3).fill([id, false, 'Аня', 'Аня', 'over']),
+      'Аня ended it again; the same record everywhere: ' + JSON.stringify(recs));
+    assert.ok(!(await C.state()).lib.trace.some(l => /on again/.test(l)), 'not Сава\'s copy');
+    assert.deepEqual(rlines(await C.game()), ['start Аня', 'watch Аня', 'end over Аня'], 'her game heard nothing more of it');
+  });
+
   // (together.js update: one pass at a time; what the game does on an event comes in a pass of its own after it)
   test('a round the game ends from its own listener (on start): it hears start, run, then end, once each, never its part after its end', T, async t => {
     const W = world(t);
@@ -878,6 +938,20 @@ describe('the round layer (ihroteka.round)', { concurrency: 3 }, () => {
     const a = await A.game();
     assert.deepEqual([rlines(a), a.round.active], [['start Аня', 'run fresh', 'end over Аня'], false]);
     assert.ok(!rlines(await B.game()).slice(rlines(await B.game()).indexOf('end over Аня')).some(l => /^(run|watch)/.test(l)), rlines(await B.game()));
+  });
+
+  test('a player who does not run the round quits it from its own listener (on start): start, watch, then end', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'rl29', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await B.call('ron', { ev: 'start', call: 'quit' });
+    assert.equal(await start(A), true);
+    assert.ok(await heardR(A, 'end quit Богдан', 3000), 'over for Аня: ' + rlines(await A.game()));
+    await sleep(300);
+    const [a, b] = await Promise.all([A.game(), B.game()]);
+    assert.deepEqual([rlines(b), b.round.active], [['start Аня', 'watch Аня', 'end quit Богдан'], false], 'his part, then its end (never its end in the middle of the pass that told him the start)');
+    assert.deepEqual([rlines(a), a.round.active], [['start Аня', 'run fresh', 'end quit Богдан'], false]);
   });
 
   test('our room closed mid-round (end closed) and we are back in it, the game still open: our part again, then its real end', T, async t => {
@@ -928,6 +1002,43 @@ describe('the round layer (ihroteka.round)', { concurrency: 3 }, () => {
     const r = await until(async () => { const x = await rec(A2); return x && !x.on && x; }, 8000);
     assert.ok(r, 'over: ' + JSON.stringify(await rec(A2)) + ' ' + (await A2.game() && rlines(await A2.game())));
     assert.deepEqual([r.reason, r.by], ['quit', 'Богдан']);
+  });
+
+  // (a page's last words hold about 64 KB, net/brokers.js lastWords: one copy of a snapshot near CAP, not two. The
+  // runner's snapshots go to its players in seat order, round.js sendSave, so that one is the first guest's, the one
+  // rules.takeOver names to run the round on: it does, from it, and passes it on)
+  test('3 seats: the runner\'s tab closes in sight with a save near CAP still waiting; its last words hold the first guest\'s copy, and the round goes on from the latest save', { timeout: 60000 }, async t => {
+    const W = world(t, { scale: SCALE }), S = W.spy();
+    const [A, B, C] = await room(W, 'rl32', ['Аня', 'Богдан', 'Сава'], { lib: { g: 3 } });
+    await A.open('g');
+    assert.ok(await plays([A, B, C], 'Аня,Богдан,Сава'));
+    await start(A);
+    const pad = 'x'.repeat(CAP - 50 - JSON.stringify({ moves: 1, pad: '' }).length);
+    assert.equal(await save(A, { moves: 1, pad }), true);
+    assert.ok(await until(async () => (await saveOf(B))?.s?.moves === 1 && (await saveOf(C))?.s?.moves === 1, 6000), 'both have it');
+    // a save that goes at once (both its copies sealed and out: the spy sees them), then the last one, which waits for
+    // its turn (half a second after the one before: round.js SAVE_EVERY) as the page goes (a busy machine: again)
+    const out = (n, X) => S.seen.some(x => x.m && x.m.f === A.session && x.m.t === 'd' && x.m.to === X.session && (x.m.d || []).some(m => m.t === 'lib-save' && m.s.moves === n));
+    let last = 0;
+    for (let n = 2; !last; n += 2) {
+      assert.ok(n < 12, 'a save that waits for its turn as the page goes');
+      await sleep(700);
+      const at = Date.now();
+      assert.equal(await save(A, { moves: n, pad }), true);
+      if (await until(() => out(n, B) && out(n, C), 400, 5) && Date.now() - at < 400 && await save(A, { moves: n + 1, pad })) last = n + 1;
+    }
+    await A.close({ hidden: true });                         // (it goes now, as the page goes: in its last words, what fits)
+    const bye = await until(() => S.seen.filter(x => x.m && x.m.f === A.session && x.m.t === 'bye').pop(), 3000);
+    assert.ok(bye, 'her last words');
+    const w = (bye.m.w || []).map(([to, , list]) => [to, list.filter(m => m.t === 'lib-save').map(m => m.s.moves)]).filter(([, l]) => l.length);
+    assert.deepEqual(w, [[B.session, [last]]], 'they hold the latest save, Богдан\'s copy only: ' + JSON.stringify(w));
+    assert.ok(await until(async () => (await saveOf(B))?.s?.moves === last, 3000), 'Богдан has it');
+    assert.equal((await saveOf(C)).s.moves, last - 1, 'Сава has the one before');
+    const { AUTH_WAIT } = (await B.info()).timing;
+    assert.ok(await until(async () => (await rec(B))?.runner === 'Богдан', AUTH_WAIT + 8000, 100), 'Богдан runs the round on: ' + JSON.stringify(await rec(B)));
+    const c = await until(async () => { const x = await saveOf(C); return x?.a === 'Богдан' && x; }, 3000);
+    assert.ok(c, 'Сава keeps his copy of it');
+    assert.deepEqual([c.s.moves, (await rec(C)).on], [last, true], 'the round goes on from the latest save');
   });
 
   test('a round whose runner left waits for the player away who has its snapshot: back, it goes on from it there', { timeout: 60000 }, async t => {

@@ -83,6 +83,9 @@ async function boxKey(priv, pubRaw, epk, id) {
 /* ---------- keyring ---------- */
 export const KEYRING_V = 4;                            // format version (4: a password salt per person)
 export const newKeyring = () => ({ v: KEYRING_V, kid: '', kdf: { iterations: 600000 }, people: [] });
+// a keyring this code can read: its header (a portal's JSON, null or a newer format is not; tools/build.js checkVault
+// also checks every entry before a deploy)
+export const isKeyring = kr => kr?.v === KEYRING_V && typeof kr.kid === 'string' && kr.kdf?.iterations > 0 && Array.isArray(kr.people);
 
 // a private key (PKCS#8) sealed with a password, under a new salt → { salt, priv }
 export async function sealPrivate(keyring, id, pkcs8, password) {

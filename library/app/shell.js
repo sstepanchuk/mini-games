@@ -4,12 +4,15 @@
    (together.js) lives on from game to game. Addresses stay real: <root> is the shelf, <root><id>/ a game.
    A game that breaks while it starts (an error in its window or its listeners before START ms after its page loaded)
    leaves no empty screen: the stage says «Гра зламалася» and offers the report (together.js report) to copy.
+   A game's copy speaks the wire of its own code (api), which a page open since before a deploy may not have on its
+   shelf; and the page reloads into a newer version only once its offline copy is in place (reload, update.js).
    ===================================================================== */
 import { $, copy, el, root, safe } from './dom.js';
 import { initInvite, openDialog } from './invite.js';
 import { attachScreens, detachScreens, waitScreen, state as screens } from './screens.js';
 import { attachGame, detachGame, gameError, initTogether, leave, openRound, pageError, query, report, state, viewChanged } from './together.js';
 import * as trace from './trace.js';
+import { updateCopy } from './update.js';
 
 let games = [], current, frame = null, load = null, loads = 0;   // current: the open game id, null on the shelf (undefined before the first view)
 const START = 5000;                                      // an error this soon after the game's page loaded (or before) is a broken start
@@ -63,22 +66,20 @@ const find = id => games.find(g => g.id === id);
 // a game's wire number (game.json "wire", bumped by hand when its messages change): 1 when not given (an older shelf)
 const wireOf = g => Number.isSafeInteger(g.wire) && g.wire > 0 ? g.wire : 1;
 
-// A friend runs a newer version (together.js versionCheck): this page fetches it, its offline copy first (the service
-// worker, up to 30 s: a reload before the new copy is in place would open this version again), then reloads; unless
-// still (when the page does it by itself) says by then that it is no longer the time.
-async function reload(still) {
-  try {
-    const reg = await navigator.serviceWorker?.getRegistration(root.href);
-    if (reg) {
-      await reg.update();
-      const w = reg.installing || reg.waiting;
-      if (w) await new Promise(done => {
-        const t = setTimeout(done, 30000);
-        w.addEventListener('statechange', () => { if (w.state === 'activated' || w.state === 'redundant') { clearTimeout(t); done(); } });
-      });
-    }
-  } catch (e) {}
-  if (!still || still()) location.reload();
+// A friend runs a newer version (together.js versionCheck), or the player asks («Оновити»): this page fetches it, its
+// offline copy first (update.js, up to 30 s: a reload before the new copy is in place would open this version again),
+// then reloads; unless still (when the page does it by itself) says by then that it is no longer the time. With no
+// newer copy to reload into (the site has nothing newer yet, no room on the device, no network, still on its way) the
+// page stays as it is and says why; later hears how an update that ran past its time ended.
+// → 'reload' | 'stay' (still said no) | 'same' | 'storage' | 'failed' | 'timeout' (update.js)
+async function reload(still, later) {
+  let reg = null;
+  try { reg = await navigator.serviceWorker?.getRegistration(root.href); } catch (e) {}
+  const out = await updateCopy(reg, { later });
+  if (out !== 'activated' && out !== 'none') return out;
+  if (still && !still()) return 'stay';
+  location.reload();
+  return 'reload';
 }
 const fromAddress = () => { const id = location.pathname.slice(root.pathname.length).split('/')[0]; return find(id) ? id : null; };
 const address = id => new URL((id ? id + '/' : '') + query(), root).href;
@@ -134,7 +135,7 @@ async function openFrame(g, byPeer) {
   frame.setAttribute('allowfullscreen', '');
   if (page.srcdoc != null) frame.srcdoc = page.srcdoc; else frame.src = page.src;
   frame.addEventListener('load', () => { loaded = performance.now(); if (broke) return; note.hidden = true; safe(() => frame.contentWindow.focus()); }, { once: true });
-  $('stage').append(frame);
+  $('stage-note').after(frame);                         // (before the card over it: the game first, in Tab and reading order)
 }
 
 // What the game's frame may use (its permissions policy; README: Trust): the camera and the microphone each only for a
@@ -178,7 +179,10 @@ const refusal = r => Object.prototype.toString.call(r) === '[object DOMException
 // (gameError); a browser's notice (notice) or refusal (refusal) does not.
 function api(info, win) {
   const g = find(current) || info;
-  const room = attachGame(current), round = openRound();
+  // the wire of the copy that runs: its own page says it (game-api.js GAME; a game.bin from before the numbers speaks
+  // 1), which may not be the shelf's (a deploy while this page stayed open); the shelf's only for a page without one
+  const wire = info && info.id === g.id ? wireOf(info) : wireOf(g);
+  const room = attachGame(current, wire), round = openRound();
   win.addEventListener('error', e => { if (win === frame?.contentWindow) { if (notice(e)) trace.note('the game\'s ResizeObserver looped (a notice)'); else gameError(e.error, e); } });
   win.addEventListener('unhandledrejection', e => {
     if (win !== frame?.contentWindow) return;
@@ -187,7 +191,7 @@ function api(info, win) {
   attachScreens(win);                                    // (its <ihroteka-wait>, as its page is parsed: screens.js)
   return Object.freeze({
     version: 4,
-    game: Object.freeze({ id: g.id, title: g.title, players: Object.freeze({ ...(g.players || { min: 2, max: 2 }) }), wire: wireOf(g) }),
+    game: Object.freeze({ id: g.id, title: g.title, players: Object.freeze({ ...(g.players || { min: 2, max: 2 }) }), wire }),
     libraryUrl: root.href,
     home: () => go(null),
     room,
