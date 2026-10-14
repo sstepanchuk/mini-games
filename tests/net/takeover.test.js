@@ -1,7 +1,9 @@
 // Places by name (library/net/room.js, internet.js), in worker tabs over fake brokers (tests/support): the same name
 // from a new tab takes that player's place over and the old tab steps aside ('replaced'), the host's name too; the
 // takeover sticks (a hello the old tab says by itself is not fresh: it is told 'moved'), and the new session is seated
-// before the old link goes, so nobody hears the player leave.
+// before the old link goes, so nobody hears the player leave. A typed name (ask) whose place is held by a device still on
+// the line is asked about first (status 'taken', room.take(): owner, q18); the host's name from a new device while the
+// old one is offline comes in at once (the guests move on as soon as they hear it: owner, q03).
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { room, settled, show, shows, sleep, states, until, world } from '../support/world.js';
@@ -25,6 +27,144 @@ describe('places by name: another tab takes a place over', { concurrency: 3 }, (
     assert.equal(old.linked, false);
     assert.ok(await said(A, 'relinked', 'Богдан', true), 'the host hears: Богдан, from a new tab');
     assert.ok(!await said(A, 'leave', 'Богдан') && !await said(C, 'leave', 'Богдан'), 'nobody hears he left');
+    assert.ok(!await said(B2, 'status', 'taken'), 'a join that does not ask is asked nothing (an older library, a return)');
+  });
+
+  /* ---------- ask before taking a place whose device is still on the line (owner, q18) ---------- */
+  // (names-and-3plus-02: a second person with the same name took the first one's place mid-round without a word)
+  test('a typed name whose place is held by a device still on the line: the room asks first (taken); nobody moves', T, async t => {
+    const W = world(t);
+    const [A, B, C] = await room(W, 'take7', ['Аня', 'Богдан', 'Сава']);
+    const n = await Promise.all([A, B, C].map(async x => (await x.events()).length));
+    const B2 = await W.tab('p4tab');
+    await B2.join('take7', 'Богдан', { ask: true });
+    assert.ok(await until(async () => (await B2.state()).status === 'taken', 5000), 'the new tab is asked: ' + await shows([B2]));
+    await sleep(2500);                                       // (its hellos would have taken the place by now)
+    const [a, b, c, b2] = await states([A, B, C, B2]);
+    assert.deepEqual([b2.linked, b2.status], [false, 'taken'], 'it waits for the player\'s answer');
+    assert.deepEqual([b.role, b.linked], ['guest', true], 'the old tab is still in its place');
+    for (const x of [a, b, c]) assert.deepEqual([x.players.join(), x.away.join()], ['Аня,Богдан,Сава', ''], 'nobody moved: ' + show(x));
+    const ev = (await Promise.all([A, B, C].map(x => x.events()))).map((e, i) => e.slice(n[i]).map(x => x.slice(1).join(' ')));
+    assert.deepEqual(ev.flat().filter(e => /^(relinked|leave|join|replaced|away)/.test(e)), [], 'and nobody heard anything');
+  });
+
+  test('…and when the player says it is them (take): the old tab steps aside, the new one has the place; the others hear relinked, not leave or join', T, async t => {
+    const W = world(t);
+    const [A, B, C] = await room(W, 'take8', ['Аня', 'Богдан', 'Сава']);
+    const B2 = await W.tab('p4tab');
+    await B2.join('take8', 'Богдан', { ask: true });
+    assert.ok(await until(async () => (await B2.state()).status === 'taken', 5000), await shows([B2]));
+    const n = await Promise.all([A, C].map(async x => (await x.events()).length));
+    await B2.call('take');
+    const s = await until(settled([A, B2, C]), 5000);
+    assert.ok(s, 'the new tab is in: ' + await shows([A, B2, C]));
+    assert.deepEqual(s.map(x => x.players.join()), Array(3).fill('Аня,Богдан,Сава'), 'in the same place');
+    assert.ok(await until(() => said(B, 'replaced'), 3000), 'the old tab hears it was replaced');
+    assert.equal((await B.state()).role, 'out');
+    assert.ok(await said(A, 'relinked', 'Богдан', true) && await said(C, 'relinked', 'Богдан', true), 'the others hear: Богдан, from a new tab');
+    for (const [i, x] of [A, C].entries()) {
+      const ev = (await x.events()).slice(n[i]).map(e => e.slice(1).join(' '));
+      assert.ok(!ev.some(e => /^(leave|join) Богдан/.test(e)), 'nobody hears him leave or join: ' + ev);
+    }
+  });
+
+  test('a place whose device is away (or weak) is taken without a question: a return after dropping out', T, async t => {
+    const W = world(t);
+    const [A, B, C] = await room(W, 'take9', ['Аня', 'Богдан', 'Сава']);
+    await B.net({ up: false });                              // Богдан's phone drops out…
+    assert.ok(await until(async () => (await A.state()).away.includes('Богдан'), 5000), await shows([A]));
+    const B2 = await W.tab('p4tab');
+    await B2.join('take9', 'Богдан', { ask: true });         // …and he types his name on another device
+    const s = await until(settled([A, B2, C]), 5000);
+    assert.ok(s, 'in, without a question: ' + await shows([A, B2, C]));
+    assert.deepEqual(s[0].players, ['Аня', 'Богдан', 'Сава']);
+    assert.ok(!await said(B2, 'status', 'taken'), 'never asked');
+  });
+
+  test('the host\'s own name with ask: the room asks first, the host stays the host and nobody moves; take() then moves it as ever', T, async t => {
+    const W = world(t);
+    const [A, B, C] = await room(W, 'take10', ['Аня', 'Богдан', 'Сава']);
+    const A2 = await W.tab('p4tab');
+    await A2.join('take10', 'Аня', { ask: true });
+    assert.ok(await until(async () => (await A2.state()).status === 'taken', 5000), await shows([A2]));
+    await sleep(2500);
+    const s = await until(settled([A, B, C]), 1000);
+    assert.ok(s, 'the room as it was: ' + await shows([A, B, C, A2]));
+    assert.deepEqual(s.map(x => x.role), ['host', 'guest', 'guest'], 'Аня still holds the room');
+    assert.ok(!await said(A, 'replaced'));
+    await A2.call('take');
+    const s2 = await until(settled([A2, B, C]), 10000);
+    assert.ok(s2, await shows([A2, B, C]));
+    assert.deepEqual(s2.map(x => x.role), ['guest', 'host', 'guest'], 'Богдан holds the room now, the new tab has Аня\'s place');
+    assert.equal((await A.state()).role, 'out');
+  });
+
+  // (review: a network blip or a page of another version on the code while the player reads «Це ти?» turned the asked
+  // tab's status into 'joining' with no hello going out: closed then, the dialog no longer left the room, which stayed
+  // «Чекаю на друга…» for good, and «Інше ім’я» found no room to come into again)
+  test('an asked tab stays asked through a network blip and another version passing by; its answer still works', T, async t => {
+    const W = world(t, { scale: 0.3 }), S = W.spy();
+    const [A, B] = await room(W, 'take13', ['Аня', 'Богдан']);
+    const B2 = await W.tab('p4tab');
+    await B2.join('take13', 'Богдан', { ask: true });
+    const status = async () => (await B2.state()).status;
+    assert.ok(await until(async () => await status() === 'taken', 5000), await shows([B2]));
+    const n = (await B2.events()).length;
+    await B2.net({ up: false });
+    assert.ok(await until(async () => await status() === 'no-signal', 3000), 'the blip: ' + await status());
+    await B2.net({ up: true });
+    assert.ok(await until(async () => await status() !== 'no-signal', 3000));
+    await sleep(500);
+    assert.equal(await status(), 'taken', 'back on the line, still asked: ' + (await B2.events()).slice(n).map(e => e.slice(1).join(' ')));
+    const { topic, timing } = await A.info('take13');
+    S.publish(topic, { t: 'who', n: 'Віра', pv: 99 }, 'zzzzzzzz.zzzzzz');   // a page of another version asks, once
+    assert.ok(await until(async () => await status() === 'version', 3000), 'version: ' + await status());
+    assert.ok(await until(async () => (await B2.state()).version === null, timing.VERSION + 3000), 'forgotten');
+    await sleep(200);
+    assert.equal(await status(), 'taken', 'and once that version is gone');
+    await B2.take();
+    assert.ok(await until(settled([A, B2]), 8000), 'the answer works: ' + await shows([A, B2]));
+    assert.ok(await until(async () => (await B.state()).role === 'out', 3000), 'the old tab steps aside: ' + show(await B.state()));   // (told a moment after)
+  });
+
+  /* ---------- the host's name from a new device while the old one is offline (owner, q03) ---------- */
+  // (net-core-09: nobody answered the new device but hosts, so it made a room of its own and merged after HOST_WAIT,
+  // ~11 s, the others waiting for Аня all along; in half the session orders the merge went the wrong way round)
+  test('the host\'s name from a new device while the old host is offline: in the room within 2 s, the others never see Аня leave', T, async t => {
+    const W = world(t);
+    const [A, B, C] = await room(W, 'take11', ['Аня', 'Богдан', 'Сава']);
+    const { WEAK } = (await A.info()).timing;
+    await A.net({ up: false });                              // her phone loses the network…
+    await sleep(WEAK + 300);                                 // (…and the others hear it: as long as it takes her to pick up the tablet)
+    const A2 = await W.tab('p0tab');                         // (a session before Богдан's: two rooms would merge into hers)
+    await A2.join('take11', 'Аня', { ask: true });
+    const s = await until(settled([A2, B, C]), 2000);
+    assert.ok(s, 'in at once, not after HOST_WAIT: ' + await shows([A2, B, C]));
+    assert.deepEqual(s.map(x => x.role), ['guest', 'host', 'guest'], 'Богдан holds the room: no room of her own, no merge');
+    assert.deepEqual(s[0].players, ['Аня', 'Богдан', 'Сава'], 'Аня keeps her place, first');
+    for (const [tab, n] of [[B, 'Богдан'], [C, 'Сава']]) {
+      for (const p of ['Аня', 'Богдан', 'Сава']) assert.ok(!await said(tab, 'leave', p), n + ' hears nobody leave (' + p + ')');
+    }
+    await A.net({ up: true });                               // the old phone back: it steps aside, the takeover sticks
+    assert.ok(await until(async () => (await A.state()).role === 'out', 15000), await shows([A, A2, B, C]));
+    assert.ok(await until(settled([A2, B, C]), 3000), await shows([A2, B, C]));
+  });
+
+  test('a \'who\' with the host\'s name while the host is there moves nobody, even when the host goes quiet a moment later', T, async t => {
+    const W = world(t);
+    const [A, B, C] = await room(W, 'take12', ['Аня', 'Богдан', 'Сава']);
+    const { topic } = await A.info('take12');
+    const { WEAK, HOST_WAIT } = (await A.info()).timing;
+    W.spy().publish(topic, { t: 'who', n: 'Аня', pv: (await A.info()).proto }, 'p9tab0000000.abcdef');   // a tab of hers that asks and is gone again
+    await sleep(800);                                        // (the host is heard after it)
+    await A.net({ up: false });
+    await sleep(WEAK + 1500);                                // away, not for HOST_WAIT
+    assert.ok(HOST_WAIT > WEAK + 2500);
+    const mid = [await B.state(), await C.state()];
+    assert.ok(mid.every(x => x.role === 'guest' && x.host === 'Аня'), 'Богдан and Сава still wait for Аня: ' + await shows([A, B, C]));
+    await A.net({ up: true });
+    const s = await until(settled([A, B, C]), 5000);
+    assert.ok(s && s[0].role === 'host', 'the room goes on as it was: ' + await shows([A, B, C]));
   });
 
   test('the host\'s name from a new tab: the host steps aside, the next player holds the room, the new tab gets the place', T, async t => {

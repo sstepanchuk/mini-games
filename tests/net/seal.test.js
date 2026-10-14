@@ -292,7 +292,9 @@ describe('sealed rooms, in worker tabs (phase 5, J2)', { concurrency: 3 }, () =>
         '(and newRoom); seal.js: legacy (roomKeys); tests/support/seal.js and tests/support/tab.js: legacy; tests/net/seal.test.js: \'the ' +
         'door\' (and K.legacy in the first test); tests/net/version.test.js: the assertions on the previous release at the door. And decide ' +
         'whether pages of PROTO 2 need a door of their own (they meet nobody of PROTO ' + PROTO + ' on the sealed topic: without one, a ' +
-        'PROTO 2 page never hears that it should update).');
+        'PROTO 2 page never hears that it should update). And key round:<game> and the game\'s shared values g:<game>:<key> by the ' +
+        'game\'s wire (round.js KEY, together.js share/knownEntry, the \'shared\' prefix, SHARE_KEYS: audit round-07, owner decision: with ' +
+        'the next PROTO bump).');
     }
   });
 

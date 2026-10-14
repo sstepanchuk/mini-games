@@ -4,6 +4,9 @@
 // a=x-fake-channels names the channels, else they are 'fast' and 'ctl'; signalling goes through the fake brokers or
 // the codes), no ICE candidates as events, gathering complete at once, channels that open once both descriptions
 // are set (what comes before ours opened waits for it, as on a real link), send and close, getStats with nothing in it.
+// iceConnectionState: the answering side's goes 'connected' once its answer is set and the offerer's connection is there
+// and live (its device answers the checks before it has read the answer: Chromium, ~2 s), and 'failed' (with its
+// connectionState) when the offerer's closes before they connected; both sides' go 'connected' as their channels open.
 // A message takes dcMs (5 ms); the ordered channel keeps its order, the unordered one ('fast') loses what the
 // network's loss says. Both ends drop everything while either tab's network or direct links are off (fakenet.js:
 // up, direct: a network switch, before the links fail); kill() closes this tab's links (the phone's OS dropped them),
@@ -51,7 +54,8 @@ export function install({ bus, pid, live, loss = () => 0, dcMs = 5 }) {
   class PeerConnection {
     constructor() {
       Object.assign(this, { id: pid + '#' + (++n), remote: null, labels: [], channels: new Map(), connectionState: 'new', signalingState: 'stable',
-        iceGatheringState: 'new', localDescription: null, remoteDescription: null, onicecandidate: null, onconnectionstatechange: null, ondatachannel: null });
+        iceGatheringState: 'new', iceConnectionState: 'new', localDescription: null, remoteDescription: null, onicecandidate: null, onconnectionstatechange: null,
+        oniceconnectionstatechange: null, ondatachannel: null, checker: null });
       pcs.set(this.id, this);
     }
     createDataChannel(label, o) { const dc = new DataChannel(this, label, o); this.channels.set(label, dc); return dc; }
@@ -59,6 +63,7 @@ export function install({ bus, pid, live, loss = () => 0, dcMs = 5 }) {
     createAnswer() { return Promise.resolve({ type: 'answer', sdp: sdp(this, 'answer') }); }
     setLocalDescription(d) {
       this.localDescription = d; this.signalingState = d.type === 'offer' ? 'have-local-offer' : 'stable'; this.iceGatheringState = 'complete';
+      if (d.type === 'answer' && this.remote && live()) post({ to: this.remote, from: this.id, check: true });   // (ICE: are they there?)
       return Promise.resolve();
     }
     addEventListener() {}
@@ -71,14 +76,21 @@ export function install({ bus, pid, live, loss = () => 0, dcMs = 5 }) {
     }
     addIceCandidate() { return Promise.resolve(); }
     getStats() { return Promise.resolve(new Map()); }
-    // what the other end sent: the connection (to the answering side: its channels come), its closing, or data
+    // what the other end sent: an ICE check (to the offerer, before it has read the answer: it answers while live) and its
+    // answer, the connection (to the answering side: its channels come), its closing, or data
     recv(m) {
+      if (m.check) { if (live()) { this.checker = m.from; post({ to: m.from, from: this.id, checked: true }); } return; }
       if (m.from && m.from !== this.remote) return;
+      if (m.checked) { if (live() && this.connectionState === 'new') this.ice('connected'); return; }
       if (m.connect) {
         if (this.connectionState !== 'new') return;
         for (const l of this.labels) { const dc = this.createDataChannel(l, { ordered: l !== 'fast' }); if (this.ondatachannel) this.ondatachannel({ channel: dc }); }
         this.open();
-      } else if (m.close) later(() => this.end('closed'));   // (after what came before it: dcMs, in order)
+      } else if (m.close) {                              // (after what came before it: dcMs, in order)
+        // never connected, ICE had reached them: no more answers to its checks, ICE fails (and the connection with it)
+        if (this.connectionState === 'new' && this.iceConnectionState === 'connected') later(() => { this.ice('failed'); this.state('failed'); });
+        else later(() => this.end('closed'));
+      }
       else if (live()) {
         const dc = this.channels.get(m.label);
         if (dc && dc.readyState === 'connecting') dc.early.push(m.s);   // sent the moment the other end opened: it waits for ours
@@ -86,6 +98,7 @@ export function install({ bus, pid, live, loss = () => 0, dcMs = 5 }) {
       }
     }
     open() {
+      this.ice('connected');
       this.state('connected');
       later(() => {
         for (const dc of this.channels.values()) if (this.connectionState === 'connected' && dc.readyState === 'connecting') { dc.readyState = 'open'; if (dc.onopen) dc.onopen(); }
@@ -93,6 +106,7 @@ export function install({ bus, pid, live, loss = () => 0, dcMs = 5 }) {
       });
     }
     state(s) { if (this.connectionState === s) return; this.connectionState = s; if (this.onconnectionstatechange) later(() => this.onconnectionstatechange && this.onconnectionstatechange()); }
+    ice(s) { if (this.iceConnectionState === s) return; this.iceConnectionState = s; if (this.oniceconnectionstatechange) later(() => this.oniceconnectionstatechange && this.oniceconnectionstatechange()); }
     // the connection ends: its channels close (they hear it at once, the connection's state a moment later)
     end(s) {
       if (this.connectionState === 'closed') return;
@@ -102,7 +116,9 @@ export function install({ bus, pid, live, loss = () => 0, dcMs = 5 }) {
     }
     close() {
       if (this.connectionState === 'closed') return;
-      if (this.remote && live()) post({ to: this.remote, from: this.id, close: true });
+      const to = this.remote || this.checker;            // (an offerer that has not read the answer: whoever checked it)
+      if (to && live()) post({ to, from: this.id, close: true });
+      this.iceConnectionState = 'closed';                // (closed by us: no event, as in a browser)
       this.end('closed');
     }
   }

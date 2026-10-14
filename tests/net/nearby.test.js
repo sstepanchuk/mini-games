@@ -1,8 +1,10 @@
 // Nearby rooms (library/net/nearby.js), in worker tabs with fake direct links (tests/support/fakertc.js): phones paired
 // by codes, no brokers. A place is dropped in only three ways (room.js): a page that closes or reloads says a bye that
 // keeps it (the link closes, the player is away until paired again); a name already in the room gets an answer at once
-// (the host's own is refused, a guest's from another phone takes that place over, that phone is told); a phone back from
-// a sleep longer than places are kept sees the others away at once.
+// (the host's own is refused; a guest's from another phone takes that place over, that phone is told, but a phone whose
+// player typed the name, ask, is asked first while the old phone is linked: room.take()); a phone back from a sleep
+// longer than places are kept sees the others away at once. A guest waits for its code to be read as long as the
+// devices reach each other; a pairing whose other phone gave up ends at once ('closed').
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { OFFER, encode } from '../../library/net/code.js';
@@ -151,7 +153,8 @@ describe('nearby rooms: places, names', { concurrency: 3 }, () => {
     assert.deepEqual((await H.state()).players, ['Ганна', 'Гліб']);
   });
 
-  // (phase 1b, C3: the host used to ignore the new phone while the old link worked, and its pairing hung)
+  // (phase 1b, C3: the host used to ignore the new phone while the old link worked, and its pairing hung; a phone that
+  // does not ask, as a library from before it asked, or a return: the place moves at once)
   test('a guest\'s name from another phone, while the old one is still linked: the new phone takes the place over, the old one is told', T, async t => {
     const W = world(t, { rtc: true });
     const [H, G, K] = await phones(W, ['Ганна', 'Гліб', 'Кіра']);
@@ -169,6 +172,62 @@ describe('nearby rooms: places, names', { concurrency: 3 }, () => {
     assert.ok(![...eh, ...ek].some(e => /^(peer-gone|leave|weak true|linked)/.test(e)), 'nobody hears him leave: ' + eh + ' | ' + ek);
     await G2.send({ t: 'x', n: 1 });
     assert.ok(await until(async () => (await K.got()).join() === 'Гліб:x:1', 3000), 'the new phone plays: ' + await K.got());
+  });
+
+  // (audit, names-and-3plus-02: a second person with the same name took the first one's place mid-round, unasked;
+  // owner, decision 44: a phone whose player typed the name (ask) is asked first while the old phone is linked)
+  test('a guest\'s name from another phone that asks, while the old one is linked: the newcomer is asked (status taken), nobody moves', T, async t => {
+    const W = world(t, { rtc: true });
+    const [H, G, K] = await phones(W, ['Ганна', 'Гліб', 'Кіра']);
+    const n = [(await H.events()).length, (await G.events()).length, (await K.events()).length];
+    const G2 = await W.tab('p4tab');
+    await G2.near('Гліб', { ask: true });
+    await pairUp(H, G2);
+    const s = await until(async () => { const x = await G2.state(); return x.status === 'taken' && x; }, 3000);
+    assert.ok(s, 'the newcomer is asked: ' + JSON.stringify(await G2.state()));
+    assert.deepEqual([s.reason, s.linked, s.pairing, s.players], ['taken', false, true, ['Гліб']], 'its pairing waits for its answer: ' + JSON.stringify(s));
+    await sleep(600);
+    const all = await until(settled([H, G, K]), 1000);
+    assert.ok(all, 'Гліб plays on his old phone: ' + await shows([H, G, K]));
+    assert.deepEqual(all.map(x => x.players.join()), Array(3).fill('Ганна,Гліб,Кіра'));
+    const ev = [await since(H, n[0]), await since(G, n[1]), await since(K, n[2])];
+    assert.ok(!ev.flat().some(e => /^(replaced|relinked|leave|join|peer-gone|weak true)/.test(e)), 'nobody moved: ' + ev.join(' | '));
+    assert.equal((await G2.state()).status, 'taken', 'still asked');
+  });
+
+  test('asked, the newcomer says it is them (room.take()): the old phone steps aside (out), the newcomer in that place, the others hear relinked', T, async t => {
+    const W = world(t, { rtc: true });
+    const [H, G, K] = await phones(W, ['Ганна', 'Гліб', 'Кіра']);
+    const n = [(await H.events()).length, (await K.events()).length];
+    const G2 = await W.tab('p4tab');
+    await G2.near('Гліб', { ask: true });
+    await pairUp(H, G2);
+    assert.ok(await until(async () => (await G2.state()).status === 'taken', 3000), JSON.stringify(await G2.state()));
+    await G2.call('take');
+    const all = await until(settled([H, G2, K]), 5000);
+    assert.ok(all, 'the newcomer in his place: ' + await shows([H, G2, K]));
+    assert.deepEqual(all.map(x => x.players.join()), Array(3).fill('Ганна,Гліб,Кіра'));
+    assert.ok(await until(() => said(G, 'replaced'), 3000), 'the old phone hears it was replaced');
+    assert.deepEqual([(await G.state()).role, (await G.state()).linked], ['out', false]);
+    const [eh, ek] = [await since(H, n[0]), await since(K, n[1])];
+    assert.ok(eh.includes('relinked Гліб true') && ek.includes('relinked Гліб true'), 'Гліб, from a new phone: ' + eh + ' | ' + ek);
+    assert.ok(![...eh, ...ek].some(e => /^(peer-gone|leave|join|weak true)/.test(e)), 'nobody hears him leave: ' + eh + ' | ' + ek);
+    const st = (await G2.events()).filter(e => e[1] === 'status').map(e => e[2]);
+    assert.ok(st.includes('taken') && !st.includes('failed') && st[st.length - 1] === 'ready', 'asked, then in: ' + st);
+  });
+
+  test('a newcomer that asks, while the old phone\'s link is dead (its OS dropped it): no question, it takes the place', T, async t => {
+    const W = world(t, { rtc: true });
+    const [H, G] = await phones(W, ['Ганна', 'Гліб']);
+    await G.killDc();
+    assert.ok(await until(async () => (await H.state()).away.includes('Гліб'), 5000), 'Гліб away: ' + show(await H.state()));
+    const G2 = await W.tab('p3tab');
+    await G2.near('Гліб', { ask: true });
+    await pairUp(H, G2);
+    const all = await until(settled([H, G2]), 8000);
+    assert.ok(all, 'back in his place: ' + await shows([H, G2]));
+    assert.deepEqual(all.map(x => x.players.join()), ['Ганна,Гліб', 'Ганна,Гліб']);
+    assert.ok(!(await G2.events()).some(e => e[1] === 'status' && e[2] === 'taken'), 'never asked');
   });
 
   // (phase 1b, C3: a full room used to refuse even to show a code while a place was held)
@@ -206,6 +265,83 @@ describe('nearby rooms: places, names', { concurrency: 3 }, () => {
     assert.deepEqual(s.map(x => x.players.join()), ['Ганна,Борис', 'Ганна,Борис'], 'Гліб is gone: his phone is Борис now');
     const ev = (await H.events()).map(e => e.slice(1).join(' '));
     assert.ok(ev.includes('leave Гліб') && ev.includes('join Борис') && !ev.includes('relinked Борис false'), ev.join(', '));
+  });
+});
+
+// A pairing that waits and one that ends (the guest's wait, PAIR_WAIT, set to 3 s here: config.js __timing). The guest's
+// device reaches the host's (ICE) once its answer is set, before the host has read it: then only the scan is missing,
+// and the guest waits on, however long (owner, decision 30); a pairing whose other phone gave up ends at once with
+// reason 'closed' (decision 33).
+describe('nearby rooms: a pairing that waits, a pairing that ends', { concurrency: 3 }, () => {
+  const W3 = t => world(t, { rtc: true, scale: 0.5, timing: { PAIR_WAIT: 3000 } });
+  const two = async W => {
+    const H = await W.tab('p1tab'), G = await W.tab('p2tab');
+    await H.near('Ганна'); await G.near('Гліб');
+    return [H, G];
+  };
+  const statuses = async tab => (await tab.events()).filter(e => e[1] === 'status').map(e => e[2]);
+
+  // (audit, net-edge-05: after 90 s the guest said the network keeps the devices apart, and a late scan did not link)
+  test('the host scans the guest\'s code only after PAIR_WAIT: the guest never goes failed, says pair.slow (event \'pair\'), and finish() then links both', T, async t => {
+    const W = W3(t);
+    const [H, G] = await two(W);
+    assert.equal((await G.info()).timing.PAIR_WAIT, 3000, 'the guest\'s wait as the test set it');
+    const answer = await G.pair('answer', await H.pair('offer'));
+    await sleep(2 * 3000 + 500);                           // (its wait ran out twice)
+    const s = await G.state();
+    assert.deepEqual([s.status, s.pairing, s.reason], ['connecting', true, ''], 'still waiting for the scan: ' + JSON.stringify(s));
+    assert.equal(s.slow, true, 'pair.slow: the hint is due');
+    const ev = (await G.events()).map(e => e[1]);
+    assert.equal(ev.filter(e => e === 'pair').length, 1, 'the event \'pair\' once: ' + ev);
+    await H.pair('finish', answer);
+    const all = await until(settled([H, G]), 5000);
+    assert.ok(all, 'a late scan links both: ' + await shows([H, G]));
+    assert.ok(!(await statuses(G)).includes('failed'), 'the guest never failed: ' + await statuses(G));
+  });
+
+  test('the host\'s page is gone before it scans (its pc closed after ICE connected): the guest fails with reason closed', T, async t => {
+    const W = W3(t);
+    const [H, G] = await two(W);
+    await G.pair('answer', await H.pair('offer'));
+    await sleep(300);                                      // (the guest's device reached the host's)
+    await H.killDc();                                      // the page goes: its connections close with it
+    await H.close();
+    const s = await until(async () => { const x = await G.state(); return x.status === 'failed' && x; }, 2000);
+    assert.ok(s, 'at once, not after PAIR_WAIT: ' + JSON.stringify(await G.state()));
+    assert.deepEqual([s.reason, s.pairing], ['closed', false], 'the other phone gave up, not the network: ' + JSON.stringify(s));
+  });
+
+  test('nobody ever answers (ICE never connects): blocked, as before', T, async t => {
+    const W = W3(t);
+    const [H, G] = await two(W);
+    const offer = await H.pair('offer');
+    await H.kill();                                        // (its device never answers the guest's)
+    const t0 = Date.now();
+    await G.pair('answer', offer);
+    const s = await until(async () => { const x = await G.state(); return x.status === 'failed' && x; }, 6000);
+    assert.ok(s, JSON.stringify(await G.state()));
+    assert.ok(Date.now() - t0 >= 2500, 'after the guest\'s wait: ' + (Date.now() - t0) + ' ms');
+    assert.deepEqual([s.reason, s.pairing], ['blocked', false], JSON.stringify(s));
+  });
+
+  // (audit, deploy-day-live-02: the guest stayed «Чекаю на з’єднання…» for good, past its own timer)
+  test('the host gives up right after reading the guest\'s code: the guest\'s pairing ends at once (failed, reason closed), not connecting', T, async t => {
+    const W = W3(t);
+    for (const [i, wait] of [0, 40].entries()) {
+      const H = await W.tab('p' + (2 * i + 1) + 'tab'), G = await W.tab('p' + (2 * i + 2) + 'tab');
+      await H.near('Ганна'); await G.near('Гліб');
+      const answer = await G.pair('answer', await H.pair('offer'));
+      await H.pair('finish', answer);
+      if (wait) await sleep(wait);
+      await H.leave();                                     // (its dialog's «Скасувати» leaves the room)
+      const s = await until(async () => { const x = await G.state(); return /^(failed|peer-left)$/.test(x.status) && x; }, 1500);
+      assert.ok(s, wait + ' ms: the pairing ends at once: ' + JSON.stringify(await G.state()));
+      assert.equal(s.pairing, false, wait + ' ms: nothing pending');
+      // (40 ms: the host may have welcomed it first: the guest linked, and the host's final bye ended the room)
+      const welcomed = (await statuses(G)).includes('ready');
+      assert.ok(!welcomed || wait, 'at 0 ms the host cannot have welcomed it');
+      assert.deepEqual([s.status, s.reason], welcomed ? ['peer-left', ''] : ['failed', 'closed'], wait + ' ms, welcomed ' + welcomed + ': ' + JSON.stringify(s));
+    }
   });
 });
 

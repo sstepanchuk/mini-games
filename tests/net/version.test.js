@@ -6,6 +6,9 @@
 // and both sides say status 'version' with the other's number (room.versionMismatch). The previous release speaks
 // version 1, before the brokers' traffic was sealed (phase 5, J2: PROTO 2, on another topic): it meets this one only at
 // the door (internet.js), where this one says its version and nothing else, and only once the old page spoke there.
+// And the release before this one of the same wire version (release.js previousRelease): what this one added to that
+// wire is ignored by it, and the two still play as before (a typed name's question, ask: an older host asks nothing, an
+// older guest says no ask: the place moves as ever).
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -17,7 +20,7 @@ import { settled, shows, sleep, states, until, world } from '../support/world.js
 
 const T = { timeout: 40000 };
 const LIB = fileURLToPath(new URL('../../library', import.meta.url));
-let dir, next, prev, why;
+let dir, next, prev, why, same, whySame;
 
 // this library with PROTO + 1
 function nextVersion() {
@@ -34,6 +37,8 @@ const lastStatus = async tab => (await tab.events()).filter(e => e[1] === 'statu
 before(() => {
   dir = mkdtempSync(join(tmpdir(), 'ihroteka-versions-'));
   next = nextVersion();
+  same = previousRelease(dir);                             // (the library before its last change: this PROTO)
+  whySame = noPrevious();
   prev = previousRelease(dir, { older: true });            // (tests/support/release.js: the library just before this PROTO)
   why = noPrevious();
 });
@@ -134,6 +139,39 @@ describe('library versions in one room', { concurrency: 3 }, () => {
       assert.equal((await old.state()).linked, false, 'the old one still alone');
     });
   }
+
+  // (q18: a typed name asks before it takes a place whose device is still on the line, ask and take on the hello: an older
+  // host ignores both, an older guest says neither; PROTO stays)
+  test('internet: a host of the release before this one seats a guest that asks, as ever (it knows no question)', T, async t => {
+    if (!same) { t.skip('no previous release of this wire version: ' + whySame); return; }
+    const W = world(t);
+    const A = await W.tab('p1tab', {}, { library: same.library }), B = await W.tab('p2tab');
+    await A.join('ver7', 'Аня');
+    assert.ok(await until(async () => (await A.state()).role === 'host', 5000));
+    await B.join('ver7', 'Богдан');
+    assert.ok(await until(settled([A, B]), 8000), await shows([A, B]));
+    const B2 = await W.tab('p3tab');
+    await B2.join('ver7', 'Богдан', { ask: true });
+    const s = await until(settled([A, B2]), 8000);
+    assert.ok(s, 'the place moves as ever: ' + await shows([A, B2]));
+    assert.equal((await B.state()).role, 'out');
+    assert.ok(!(await B2.events()).some(e => e[1] === 'status' && e[2] === 'taken'), 'nobody asked');
+  });
+
+  test('internet: a guest of the release before this one (it says no ask) takes a place over as ever', T, async t => {
+    if (!same) { t.skip('no previous release of this wire version: ' + whySame); return; }
+    const W = world(t);
+    const [A, B] = [await W.tab('p1tab'), await W.tab('p2tab')];
+    await A.join('ver8', 'Аня');
+    assert.ok(await until(async () => (await A.state()).role === 'host', 5000));
+    await B.join('ver8', 'Богдан');
+    assert.ok(await until(settled([A, B]), 8000), await shows([A, B]));
+    const B2 = await W.tab('p3tab', {}, { library: same.library });
+    await B2.join('ver8', 'Богдан', { ask: true });          // (that library has no ask: its hello says none)
+    const s = await until(settled([A, B2]), 8000);
+    assert.ok(s, 'the place moves as ever: ' + await shows([A, B2]));
+    assert.equal((await B.state()).role, 'out');
+  });
 
   /* ---------- nearby ---------- */
   // two phones pair: the host shows its code, the guest answers, the host reads the answer

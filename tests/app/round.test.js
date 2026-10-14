@@ -9,7 +9,7 @@
 // id, frozen seats, events once per round id, a round lost after LOST_WAIT, and no policy but the game's.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { room, sleep, until, world } from '../support/world.js';
+import { room, settled, shows, sleep, until, world } from '../support/world.js';
 import { CAP } from '../../library/app/rules.js';
 
 const T = { timeout: 40000 }, SCALE = 0.3;
@@ -1065,4 +1065,112 @@ describe('the round layer (ihroteka.round)', { concurrency: 3 }, () => {
     assert.ok(a, 'Богдан back with it: Аня runs it on from it: ' + rlines(await A.game()) + ' ' + JSON.stringify(await rec(A)));
     assert.ok(!rlines(a).some(l => l.startsWith('end')), rlines(a));
   });
+});
+
+/* ---------- the round through what the room does (phase A: the room's own fixes, seen from the round) ---------- */
+const roomEv = async (X, n, kinds = ['leave']) => (await X.events()).slice(n).filter(e => kinds.includes(e[1])).map(e => e.slice(1).join(' '));
+describe('the round through the room\'s changes', { concurrency: 3 }, () => {
+  // (net-core-06: the released tab heard a final bye from its host, took it as "Аня left for good", ran the round on at
+  // once, and its record won when it was heard again: the room's round moved to it, back to its last snapshot)
+  test('«Не чекати» for a guest whose page still hears the room: its copy never takes the round over, and back, the round stays with its runner', { timeout: 60000 }, async t => {
+    const W = world(t);                                      // (real time: back well before HOST_WAIT, as a page that was only stuck)
+    const [A, B, C] = await room(W, 'rla1', ['Аня', 'Богдан', 'Сава'], { lib: { g: 3 } });
+    await A.open('g');
+    assert.ok(await plays([A, B, C], 'Аня,Богдан,Сава'), 'all three play');
+    assert.equal(await start(A), true);
+    assert.equal(await save(A, { n: 1 }), true);
+    assert.ok(await until(async () => (await saveOf(B))?.s?.n === 1, 3000), 'Богдан keeps the snapshot');
+    const id = (await rec(A)).id, nB = (await B.game()).events.length;
+    await B.net({ send: false });                            // Богдан hears the room; nobody hears him
+    assert.ok(await until(async () => (await A.state()).away.includes('Богдан'), 8000), 'away');
+    await A.release('Богдан');                               // «Не чекати»
+    assert.ok(await until(async () => (await A.state()).players.join() === 'Аня,Сава', 3000), 'his place goes');
+    await sleep(1000);
+    assert.equal(await save(A, { n: 2 }), true, 'the room plays on without him');
+    await sleep(1500);
+    assert.deepEqual(rlines(await B.game(), nB).filter(l => l.startsWith('run')), [], 'his copy never ran it meanwhile: ' + rlines(await B.game(), nB));
+    await B.net({ send: true });
+    const s = await until(async () => { const x = await Promise.all([A, B, C].map(X => X.state())); return x.every(y => y.linked && y.players.length === 3 && !y.away.length) && x; }, 15000, 100);
+    assert.ok(s, 'he is back, as a new player: ' + await shows([A, B, C]));
+    assert.deepEqual(s.map(x => x.role), ['host', 'guest', 'guest'], 'Аня still holds the room');
+    await sleep(1500);
+    for (const X of [A, B, C]) {
+      const r = await rec(X);
+      assert.deepEqual(r && [r.id, r.on, r.runner], [id, true, 'Аня'], 'the round stays with its runner: ' + JSON.stringify(r));
+    }
+    assert.deepEqual(rlines(await B.game(), nB).filter(l => l.startsWith('run')), [], 'his copy never ran it: ' + rlines(await B.game(), nB));
+    assert.ok(rlines(await A.game()).every(l => !l.startsWith('watch') && !l.startsWith('end')), 'Аня\'s copy runs it on: ' + rlines(await A.game()));
+    assert.equal((await saveOf(C))?.s?.n, 2, 'from her latest snapshot, not his');
+  });
+
+  // (net-core-09: the others waited out HOST_WAIT for the old phone, and about half the time the rooms then merged the
+  // wrong way: a guest heard «Сава left», and the round became a tombstone everywhere)
+  for (const pid of ['p0tab', 'p4tab']) {
+    test('the host\'s phone offline, her new device joins: the round goes on, whichever session sorts first (' + (pid === 'p0tab' ? 'before' : 'after') + ' the others\')', { timeout: 60000 }, async t => {
+      const W = world(t), code = 'rla2' + pid;
+      const [A, B, C] = await room(W, code, ['Аня', 'Богдан', 'Сава'], { lib: { g: 3 } });
+      await A.open('g');
+      assert.ok(await plays([A, B, C], 'Аня,Богдан,Сава'), 'all three play');
+      await A.snapshot({ round: 1, n: 5 });
+      assert.ok(await until(async () => (await snapOf(B))?.s?.round === 1 && (await snapOf(C))?.s?.round === 1, 5000), 'everyone keeps it');
+      const n = [(await B.events()).length, (await C.events()).length];
+      await A.net({ up: false });                            // her phone drops out…
+      await sleep(3000);
+      const A2 = await W.tab(pid);                           // …and she opens the room on another device
+      await A2.lib(code, 'Аня', { g: 3 }, undefined, { ask: true });
+      assert.ok(await until(settled([A2, B, C]), 8000), 'in the room: ' + await shows([A2, B, C]));
+      await sleep(3000);
+      for (const X of [A2, B, C]) {
+        const x = await snapOf(X);
+        assert.ok(x && x.s && x.s.round === 1, 'the round on, never a tombstone: ' + JSON.stringify(x));
+      }
+      assert.deepEqual([...await roomEv(B, n[0]), ...await roomEv(C, n[1])], [], 'nobody heard a player leave');
+    });
+  }
+
+  // (round-11: two rooms on one code merged, and the list a guest had until its new host's came said the others had
+  // left: the round ended 'gone', or its runner moved at once)
+  const only = i => ({ brokers: [0, 1, 2, 3].map(j => j === i) });
+  for (const [label, pol] of [['endWhenSeatGone', { endWhenSeatGone: true }], ['no policy', null]]) {
+    for (const order of ['its host first', 'a guest first']) {
+      test('two rooms on one code merge mid-round (' + label + ', ' + order + '): the round stays on, with its runner; nobody hears anyone leave', { timeout: 60000 }, async t => {
+        const W = world(t, { scale: 0.5 }), code = 'rla3' + (pol ? 'p' : 'n') + (order === 'a guest first' ? 'g' : 'h');
+        const mk = async (pid, name, net, host) => {
+          const X = await W.tab(pid, net);
+          await X.lib(code, name, {});
+          assert.ok(await until(async () => { const s = await X.state(); return host ? s.role === 'host' : s.linked; }, 8000), name);
+          return X;
+        };
+        // Богдан's room (broker 0) plays a round; Дана's (broker 1) is the other, whose host's session sorts first
+        const B = await mk('p5tab', 'Богдан', only(0), true), C = await mk('p6tab', 'Сава', only(0));
+        const D = await mk('p0tab', 'Дана', only(1), true), E = await mk('p1tab', 'Еля', only(1));
+        await B.open('g');
+        assert.ok(await until(async () => (await B.game())?.linked && (await C.game())?.linked, 8000), 'they play');
+        if (pol) for (const X of [B, C]) await X.call('rpolicy', { p: pol });
+        assert.equal(await start(B), true);
+        assert.ok(await heardR(C, 'watch Богдан', 3000));
+        const id = (await rec(B)).id, n = await Promise.all([B, C, D, E].map(async X => (await X.events()).length));
+        if (order === 'a guest first') {
+          // Сава comes over to Дана before Богдан can hear her: a 'go' said as Богдан, while only Сава hears both rooms
+          const { topic } = await C.info(code, 'ihroteka');
+          const S = W.spy();
+          await C.net({ brokers: true });
+          await C.kick();
+          await sleep(3000);                                 // (its brokers connect)
+          S.publish(topic, { t: 'go', h: D.session, to: C.session }, B.session);
+          assert.ok(await until(async () => (await C.state()).players.includes('Дана'), 8000), 'Сава went over to Дана: ' + await shows([C]));
+          await sleep(1500);
+        }
+        for (const X of [B, C, D, E]) await X.net({ brokers: true });
+        assert.ok(await until(settled([B, C, D, E]), 20000), 'one room: ' + await shows([B, C, D, E]));
+        await sleep(2000);
+        for (const X of [B, C, D, E]) {
+          const r = await rec(X);
+          assert.deepEqual(r && [r.id, r.on, r.runner], [id, true, 'Богдан'], 'the round stays on, with its runner: ' + JSON.stringify(r));
+        }
+        const left = (await Promise.all([B, C, D, E].map((X, i) => roomEv(X, n[i])))).flat();
+        assert.deepEqual(left, [], 'nobody heard anyone leave');
+      });
+    }
+  }
 });

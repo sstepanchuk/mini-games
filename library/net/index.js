@@ -12,6 +12,8 @@ export { joinNearby } from './nearby.js';
 // version; secure(): whether this page can have internet rooms; CODE_LENGTH: of a new room's code (newRoomCode;
 // validRoomCode takes the older, shorter ones too)
 export { CODE_LENGTH, newRoomCode, PROTO, SCALE, secure, TIMING, validRoomCode } from './config.js';
-export { HOLD, MAX_PLAYERS, NAME } from './room.js';
+// names (room.js): NAME, what the wire takes from anyone; ownName, what a player may take as their own (not «*», EVERYONE:
+// everyone on the wire); cleanName, a typed name in the one spelling the room knows it by; nameShows, whether it shows at all
+export { cleanName, EVERYONE, HOLD, MAX_PLAYERS, NAME, nameShows, ownName } from './room.js';
 // start loading the internet transport early (e.g. while the player is still on the shelf); never throws
 export const preload = () => { loadTransport().catch(() => {}); };

@@ -88,7 +88,9 @@ async function page(dev) {
   return { lock: await import(LOCK + q), device: await import(DEVICE + q), ui: await import(STUB + q) };
 }
 const settle = () => new Promise(r => setImmediate(r));
-async function until(fn, tries = 2000) { for (let i = 0; i < tries; i++) { const v = fn(); if (v) return v; await settle(); } return fn(); }
+// (by the clock, not by turns: Web Crypto and gunzip run on Node's thread pool, which the worker tabs of the tests that
+// run alongside keep busy — 2000 turns were not always enough for a retry past the caches)
+async function until(fn, ms = 10000) { const end = Date.now() + ms; for (;;) { const v = fn(); if (v || Date.now() > end) return v; await settle(); } }
 
 // the open dialog; its parts
 const dialog = pg => pg.ui.dialogs.find(d => d.open);

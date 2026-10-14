@@ -4,10 +4,11 @@
 // (the site's version, the connection, the trace: the error's type and place, never its message). A game that
 // started well and throws later shows no note, but the trace has it; so does the library page's own error. A browser's
 // notice that comes as a window error with nothing thrown (a ResizeObserver loop, as a layout settles while the game
-// starts) is no broken game: no note, a line in the trace; nor is a promise left rejected because the browser refused
-// (NotAllowedError: a sound played before any tap). One left rejected with an error of the game's own is. Needs the dev
-// server with the plaintext games (npm run unlock): it opens Two Dragons; or with the probe (npm run dev -- --probe,
-// E2E_GAME=probe). First, a guard: a page's console.error is counted as an error (support/scenario.cjs watch).
+// starts, or any time later) is no broken game: no note, a line in the trace; nor is a promise left rejected because
+// the browser refused (NotAllowedError: a sound played before any tap). One left rejected with an error of the game's
+// own is. Needs the dev server with the plaintext games (npm run unlock): it opens Two Dragons; or with the probe (npm
+// run dev -- --probe, E2E_GAME=probe). First, a guard: a page's console.error is counted as an error (support/scenario.cjs
+// watch).
 'use strict';
 const { U, w, launch, watch, errs, scenario, check, step, until, GAME } = require('./support/scenario.cjs');
 const { fakeNet } = require('./support/fakenet.cjs');
@@ -21,6 +22,8 @@ const CARD = 'a.game[href*="/' + GAME + '/"]';
 // the game's code has run (its modules, then the page loaded)
 const started = () => !!window.ihroteka && document.readyState === 'complete';
 const traced = (p, re) => p.evaluate(src => window.__ihroteka.trace().some(l => new RegExp(src).test(l)), re.source);
+// how many times the trace says so (a line repeated is one line, «×n»)
+const times = (p, re) => p.evaluate(src => window.__ihroteka.trace().filter(l => new RegExp(src).test(l)).reduce((k, l) => k + +((/ ×(\d+)$/.exec(l) || [0, 1])[1]), 0), re.source);
 
 scenario('crash: a game that breaks as it starts', async () => {
   const ctx = await (await launch()).newContext();
@@ -99,6 +102,19 @@ scenario('crash: a game that breaks as it starts', async () => {
   await w(1000);
   check(!(await note(p)).shown, 'and no note: the game did not break', await note(p));
   check(!(await traced(p, /error in the game: null/)), 'not counted as the game\'s error');
+  // (later than START: an error then is the game's, not a broken start; a loop is still only a notice)
+  const looped = await times(p, /the game's ResizeObserver looped \(a notice\)/);
+  await w(5500);
+  await g.evaluate(() => {                                // (the same loop, now)
+    const d = document.body.appendChild(document.createElement('i'));
+    d.style.display = 'block';
+    let n = 0;
+    new ResizeObserver(() => { if (++n < 30) d.style.width = n + 'px'; }).observe(d);
+  });
+  check(await until(async () => await times(p, /the game's ResizeObserver looped \(a notice\)/) > looped, 3000), 'a ResizeObserver loop later, the game long started: a notice in the trace too');
+  await w(1000);
+  check(!(await note(p)).shown, 'and no note', await note(p));
+  check(!(await traced(p, /error in the game: null/)), 'not counted as the game\'s error either');
 
   await p.evaluate(() => history.back());
   await p.waitForSelector('#shelf:not([hidden])');

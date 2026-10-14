@@ -3,8 +3,9 @@
 // dialog (app/invite.js STATUS), no 'role' event, and a library (app/) that writes nothing onto the net room it does
 // not own (no r.kind, no r.lastStatus). A page without Web Crypto (plain http) has no internet room: 'unavailable',
 // and nothing of it reaches the brokers (phase 3, L4). A room alone whose one working broker drops says 'no-signal' and
-// tries the others again at once, and a short blip ends as soon as the browser is online. Read from the source, run
-// in Node, and in worker tabs (tests/support).
+// tries the others again at once, and a short blip ends as soon as the browser is online. The status tells the truth
+// (owner, q02): an internet host left alone says 'peer-left', and 'version' only while that version is heard. Read from
+// the source, run in Node, and in worker tabs (tests/support).
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -29,9 +30,10 @@ const APP = fs.readdirSync(path.join(REPO, 'library/app')).filter(f => f.endsWit
 // room.js in Node: config.js reads window (a session, the timing scale)
 globalThis.window ??= globalThis;
 const { STATUSES, setStatus } = await import('../../library/net/room.js');
+const statuses = async T => (await T.events()).filter(e => e[1] === 'status').map(e => e[2]);
 
 describe('the room\'s status (phase 2, G2)', () => {
-  test('setStatus: only a known status; never the same one twice in a row; alone, another version says \'version\', not \'waiting\'', () => {
+  test('setStatus: only a known status; never the same one twice in a row; alone, another version says \'version\', not \'waiting\' or \'peer-left\'', () => {
     const heard = [], N = { status: '', mismatch: null, linked: false, emit: (e, s) => heard.push(e + ' ' + s) };
     for (const s of ['connecting', 'connecting', 'waiting', 'ready', 'ready', 'peer-left']) setStatus(N, s);
     assert.deepEqual(heard, ['status connecting', 'status waiting', 'status ready', 'status peer-left']);
@@ -43,6 +45,9 @@ describe('the room\'s status (phase 2, G2)', () => {
     N.linked = true;
     setStatus(N, 'ready');
     assert.equal(N.status, 'ready');
+    N.linked = false;
+    setStatus(N, 'peer-left');
+    assert.equal(N.status, 'version', 'left alone while that version is heard: version (one of us must update)');
   });
 
   test('every status a mode sets is in STATUSES, each one in STATUSES is set somewhere, and only through setStatus', () => {
@@ -151,5 +156,33 @@ describe('the room\'s status (phase 2, G2)', () => {
     await sleep(1000);
     await A.net({ up: true });
     assert.ok(await until(async () => (await A.state()).status === 'waiting', 500, 20), 'waiting again within 0.5 s of online');
+  });
+
+  // (net-core-07, owner q02: only hostGone said 'peer-left' over the internet; a host whose last guest went kept 'ready',
+  // «Ви разом.», while alone)
+  for (const how of ['leaves for good', 'closes its tab']) {
+    test('an internet host whose last guest ' + how + ' says peer-left, not ready', { timeout: 20000 }, async t => {
+      const W = world(t);
+      const [A, B] = await room(W, 'left' + how.length, ['Аня', 'Богдан']);
+      if (how === 'leaves for good') await B.leave(); else await B.close();
+      assert.ok(await until(async () => !(await A.state()).linked, 5000));
+      assert.equal((await A.state()).status, 'peer-left', 'heard: ' + await statuses(A));
+    });
+  }
+
+  // (net-core-07, owner q02: 'version' stayed for good once a page of another version passed by while two played)
+  test('a version heard while we play: version only while it is heard; then ready, and peer-left once alone', { timeout: 30000 }, async t => {
+    const W = world(t, { scale: 0.3 }), S = W.spy();
+    const [A, B] = await room(W, 'vpass1', ['Аня', 'Богдан']);
+    const { topic, timing } = await A.info('vpass1');
+    S.publish(topic, { t: 'who', n: 'Віра', pv: 99 }, 'zzzzzzzz.zzzzzz');   // a page of another version asks, once
+    assert.ok(await until(async () => (await A.state()).version === 99, 3000));
+    assert.equal((await A.state()).status, 'version', 'while it is heard (the add-player screen says why a third cannot join)');
+    assert.ok(await until(async () => (await A.state()).version === null, timing.VERSION + 3000), 'forgotten');
+    await sleep(100);
+    assert.deepEqual([(await A.state()).status, (await B.state()).status], ['ready', 'ready'], 'A: ' + await statuses(A) + ' | B: ' + await statuses(B));
+    await B.leave();
+    assert.ok(await until(async () => !(await A.state()).linked, 5000));
+    assert.equal((await A.state()).status, 'peer-left');
   });
 });

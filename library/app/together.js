@@ -2,6 +2,20 @@
    Playing together. The library holds one room for up to 8 players (over the internet: a link; nearby: QR
    codes, no internet) for as long as they play, whatever game is open. Players are known by the name they
    come in with (net/room.js): from another tab, browser or device, the same name is the same player.
+   - Names (owner, q17): a name the player types is cleaned first (cleanName, net/room.js: one spelling for what devices
+     type differently; invite.js does it) and taken only if it is one's own and shows (validName: not «*», which means
+     everyone on the wire; a letter, a digit or an emoji). A name already in play is never cleaned nor refused (the
+     room and the tab's kept quits know the player by it): «Повернути сюди», the reload into a newer version (REJOIN)
+     and the rest carry room.me as it is.
+   - A typed name whose place a device still on the line holds (owner, q18): the room asks first (status 'taken': «Це
+     ти?», invite.js, while asking(): a blip in between keeps the question); takePlace() takes the place over,
+     rejoinAs(name) comes in under another name (internet: the same room again; nearby: the pairing again). Not asked: «Повернути сюди», the REJOIN, «Так, грати тут», and a place a tab
+     of this same browser holds (HELD: the player moves to a new tab). The old device hears 'replaced' («Ти граєш
+     деінде»), and from there rejoinAs too comes in as a new player.
+   - A page reloaded while every other player is away (owner, q29): the room takes back the places the page before it
+     kept in the tab (net/room.js, 'restored'), and we take back what it kept of the room's shared state and of the
+     snapshots (KEPT: keepRoom, adopt), as if a player greeted us with them: the rounds, seats and waiting screens are as
+     they were, whom we wait for counts on from their drop, and whatever newer comes from the others as they come back wins.
    - What everyone looks at, which game each player has open, and whose copy runs a round are shared state
      (roomstate.js): the same for everyone, whoever passes the messages on.
    - Each game gets the room as ihroteka.room, with as many seats as it has (game.json "players"): the first
@@ -61,7 +75,7 @@
    The screens for all this are in invite.js (and the waiting screens: waiting.js the words, screens.js where they
    show); it follows the room through onChange.
    ===================================================================== */
-import { HOLD, joinNearby, joinRoom, NAME, PROTO, TIMING, validRoomCode } from '../net/index.js';
+import { cleanName, HOLD, joinNearby, joinRoom, NAME, nameShows, ownName, PROTO, TIMING, validRoomCode } from '../net/index.js';
 import { safe } from './dom.js';
 import { roomState, validClock } from './roomstate.js';
 import { rounds, validRecord } from './round.js';
@@ -92,8 +106,10 @@ function json(v, what) {
 // state in it and changes it must not change the round's snapshot or the room's state (which greet passes on).
 const copy = v => v === undefined ? v : JSON.parse(JSON.stringify(v));
 const REJOIN = 'ihroteka-rejoin', RELOADED = 'ihroteka-reloaded';   // (sessionStorage) see versionCheck
-// (set → whether it was kept: a browser that blocks site data throws)
-const session = { get: k => { try { return JSON.parse(sessionStorage.getItem(k)); } catch (e) { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } } };
+const KEPT = 'ihroteka-kept';                            // (sessionStorage) see keepRoom
+// (set → whether it was kept: a browser that blocks site data throws; null: the key goes)
+const session = { get: k => { try { return JSON.parse(sessionStorage.getItem(k)); } catch (e) { return null; } },
+  set: (k, v) => { try { if (v === null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } } };
 
 let shell = null;                                        // { current(), follow(id), invite(), address(), seats(id), askName(...),
                                                          //   wires() → { game: wire } (the shelf's), reload(still?, later?) →
@@ -103,6 +119,7 @@ let st = null;                                           // its shared state (ro
 let myHere = null;                                       // the game we have open and listening
 let ch = null;                                           // the open game's channel (ihroteka.room)
 let replaced = null;                                     // { kind, code, name }: this player went on in another tab
+let askedRoom = null;                                    // the room that asked «Це ти?» (status 'taken'), until the player answers
 const snaps = new Map();                                 // game → { s, c, a, p }: a round's latest snapshot (s: null, a tombstone)
 const loading = new Map();                               // name → since when: back (a new tab or device, or after their place
                                                          //   dropped), its game not open there yet (rules.arrivesLoading)
@@ -116,19 +133,21 @@ export function initTogether(s) {
   setInterval(watchRunner, 1000);
   let hiddenAt = 0;                                      // (the trace: how long the page was out of sight)
   globalThis.document?.addEventListener?.('visibilitychange', () => {
-    if (document.hidden) { hiddenAt = performance.now(); trace.note('page hidden'); if (ch) ch.snapNow(); }
+    if (document.hidden) { hiddenAt = performance.now(); trace.note('page hidden'); if (ch) ch.snapNow(); keepRoom(); }
     else if (hiddenAt) { trace.note('page shown after ' + ((performance.now() - hiddenAt) / 1000).toFixed(1) + ' s'); hiddenAt = 0; }
   });
   // The page goes (a reload, a closed tab; a hidden one may never come back, above): the open game's latest snapshot,
   // if it still waits for its turn to go, goes now, or the round would go on one step behind (from the copy the others
-  // keep). (Added before any room's own pagehide, net/room.js, so it goes out ahead of its goodbye.)
-  globalThis.addEventListener?.('pagehide', () => { if (ch) ch.snapNow(); });
+  // keep). (Added before any room's own pagehide, net/room.js, so it goes out ahead of its goodbye.) What we know of the
+  // room stays in the tab for the next page (keepRoom); the place this tab holds is no longer held here (hold).
+  globalThis.addEventListener?.('pagehide', () => { if (ch) ch.snapNow(); keepRoom(); hold(false); });
   const code = (new URLSearchParams(location.search).get('room') || '').toLowerCase();
   // the page reloaded itself into a newer version (versionCheck): straight back into its room, once the shell has
-  // shown the address's view (so we follow the room's view instead of announcing ours)
+  // shown the address's view (so we follow the room's view instead of announcing ours), under the name it had there
+  // (never cleaned, never asked about: it is the player who just held that place)
   const back = session.get(REJOIN);
   session.set(REJOIN, null);
-  if (back && back.code === code && NAME.test(back.name) && Date.now() - back.at < 60000) setTimeout(() => startInternet(code, back.name));
+  if (back && back.code === code && ownName(back.name) && Date.now() - back.at < 60000) setTimeout(() => startInternet(code, back.name, { ask: false }));
   else if (validRoomCode(code)) shell.askName(name => startInternet(code, name), () => setQuery(null));   // opened from a link
 }
 
@@ -136,43 +155,79 @@ export function initTogether(s) {
 export const currentRoom = () => room;
 export const linked = () => !!room && room.linked;
 export const elsewhere = () => replaced;
-export const lastName = () => { const n = safe(() => localStorage.getItem(LAST_NAME)) || ''; return NAME.test(n) ? n : ''; };
-export const validName = n => NAME.test(n);
+// A name one may take as one's own (owner, q17): not «*» (everyone, on the wire: ownName), and one that shows (a letter,
+// a digit or an emoji: nameShows). A typed name is cleaned first (cleanName: invite.js); a name in play never is.
+export const validName = n => ownName(n) && nameShows(n);
+export { cleanName };
+// the name the dialog opens with: the last one this browser used, if it may still be taken (else the field opens empty)
+export const lastName = () => { const n = safe(() => localStorage.getItem(LAST_NAME)) || ''; return validName(n) ? n : ''; };
+// whether n is, exactly, the name the page before this one in the tab held a place under (KEPT: a reload in a room;
+// gone once we left it): a name in play, which the name form takes as it is, never cleaned (a page reloaded in its room
+// asks the name again, filled in: «марк'ян» from before names were cleaned stays that player, not a new «Марк’ян»)
+export const nameInPlay = n => { const k = session.get(KEPT); return ownName(n) && !!k && typeof k === 'object' && Array.isArray(k.room) && k.room[2] === n; };
 const send = (m, to) => { if (linked()) room.send(m, to === undefined ? undefined : { to }); };
 // the screens follow the room: fn(what) with what = linked | join | leave | away | relinked | peer-gone |
-// replaced | status | weak | stats | left
+// replaced | status | weak | stats | left | pair (nearby: the pairing waits long, room.pair.slow) | restored
 //   (and version: a friend's version differs, or no longer does, see versionGap; waiting: what the open game's screens
 //   say changed, see waitFacts)
 export const onChange = fn => listeners.add(fn);
 const changed = what => { for (const fn of listeners) safe(fn, what); };
 
-export function startInternet(code, name) {
+// a name nobody may take as their own («*», or not a name: net/room.js ownName) is refused before anything changes (the
+// room we are in, the name remembered)
+const ownOnly = name => { if (!ownName(name)) throw new Error('together: a name of 1 to 24 characters (not «*»)'); };
+// ask: the name was typed (the dialog, a room's link): a place of that name whose device is still on the line is taken
+// only once the player says it is them (status 'taken': takePlace); false: the player who just held it («Повернути
+// сюди», the REJOIN). A place a tab of this browser holds is never asked about (held).
+export function startInternet(code, name, { ask = true } = {}) {
+  ownOnly(name);
   leave();
   remember(LAST, code); remember(LAST_NAME, name);
   setQuery(code);
-  return wire(joinRoom({ game: LIB, code, name }));
+  return wire(joinRoom({ game: LIB, code, name, ask: ask && !held('internet', code, name) }));
 }
 export const lastInternetCode = () => { const c = safe(() => localStorage.getItem(LAST)); return validRoomCode(c) ? c : null; };
 // a nearby room; its host adds players to it (pairing again), and a player whose link broke pairs again into
-// it (to their place), so it is kept
-export function startNearby(name) {
+// it (to their place), so it is kept. ask: as for startInternet.
+export function startNearby(name, { ask = true } = {}) {
   if (room && room.kind === 'nearby' && (room.linked || room.role === 'host')) return room;
+  ownOnly(name);
   leave();
   remember(LAST_NAME, name);
-  return wire(joinNearby({ game: LIB, name }));
+  return wire(joinNearby({ game: LIB, name, ask: ask && !held('nearby', '', name) }));
 }
-// this player went on in another tab or device; come back here (that one steps aside in turn)
+// this player went on in another tab or device; come back here (that one steps aside in turn; nobody is asked: it is
+// the player who held the place)
 export function comeBack() {
   const r = replaced;
   if (!r) return;
   replaced = null;
-  if (r.kind === 'internet') startInternet(r.code, r.name);
+  if (r.kind === 'internet') startInternet(r.code, r.name, { ask: false });
+}
+// «Так, грати тут» (status 'taken': our name's place is held by a device still on the line): it is us, take it over
+// (that device hears 'replaced')
+export const takePlace = () => { if (room) { askedRoom = null; room.take(); } };
+// whether our room waits for the player's answer to «Це ти?»: status 'taken', or a moment that says otherwise in
+// between (a blip: 'no-signal'; another version passing by), the question still open
+export const asking = () => !!room && (room.status === 'taken' || askedRoom === room);
+// «Інше ім’я»: come in under another name. After 'taken' (our new page): over the internet the same room again (asked
+// again if that name's place is live too); nearby, this pairing ends (the dialog asks the name and pairs again). After
+// 'replaced' (our old page, its place now played elsewhere): the same, in the room we were in; the round goes on with
+// the other device, and we come in as a new player (waiting for a seat while it is on). → the new room, or null
+export function rejoinAs(name) {
+  const r = asking() ? { kind: room.kind, code: room.code } : replaced;
+  if (!r) return null;
+  replaced = null;
+  if (r.kind === 'internet') return startInternet(r.code, name);
+  leave();
+  return null;
 }
 export function leave() {
   const r = room;
   room = null; st = null; snaps.clear(); loading.clear(); R.clear(); gapKey = ''; closedSince.clear();
   session.set(REJOIN, null);                             // (a reload under way does not bring us back: we left)
-  if (r) { r.leave(); setQuery(null); trace.note('left the room'); }
+  hold(false);
+  if (r) { r.leave(); setQuery(null); trace.note('left the room'); forgetRoom(); }
   update();
   changed('left');
 }
@@ -234,6 +289,8 @@ function wire(r) {
     sayHere();
     for (const p of r.players) if (p !== r.me) { greet(p); R.met(p); }
     update();
+    hold();
+    if (askedRoom === r) askedRoom = null;
   });
   // Back after their place dropped: until a here: they wrote since arrives, their game is not open as far as we know.
   on('join', p => { sayHere(); greet(p); R.met(p); if (rules.arrivesLoading(facts, p, 'join')) loading.set(p, performance.now()); update(); });
@@ -260,7 +317,11 @@ function wire(r) {
     replaced = { kind: r.kind, code: r.code, name: r.me };
     queueMicrotask(leave);
   });
-  on('status', s => { if (s === 'version') versionCheck(); });
+  // (hold: a room we hold says so at once, before the next tick: a new tab of this browser then asks nothing)
+  on('status', s => { if (s === 'version') versionCheck(); if (s === 'taken') askedRoom = r; hold(); });
+  // (a fresh page alone in the room took back the places the page before it kept: what that page knew of the room too)
+  on('restored', () => adopt(r));
+  on('pair', () => {});                                   // (nearby: the pairing waits long, pair.slow: the dialog says so)
   on('weak', update);
   // the open game's fast messages waited for the relay budget (net/link.js): on the dev server the console says so, once
   on('budget', () => { if (DEV && !budgetWarned) { budgetWarned = true; console.warn('ihroteka.room: through the brokers, fast messages go out at most ~30 times a second per player; more of them wait and go together (a full state each time: send it with { fast: true, latest: … })'); } });
@@ -390,6 +451,65 @@ function staleHere(next) {
   if (myHere ? h !== myHere : h && h !== next) publish(st.set(k, myHere));
 }
 
+/* ---------- what the tab keeps for its next page, and what this browser's tabs hold ---------- */
+const placeOf = r => [r.kind, r.code || '', r.me];      // (as round.js keeps its quits: where)
+// What an internet room's page keeps of the room in its tab, for the next page there (owner, q29): sessionStorage
+// KEPT = { room: [kind, code, our name], at: Date.now(), e: the shared state's entries with their clocks and writers
+// (view, here:, wire:, auth:, round:, g:), s: the snapshots we keep as they travel (lib-save, the rounds of round.js
+// that are on: R.keep; lib-snap, contract 4's, tombstones too) }. Written as the page is hidden and as it goes, and at
+// most once a second while in the room (when it changed), but not while we look for the room (net role null: a new
+// page is not in it yet, and the room may still take back what the page before kept); forgotten when we leave the
+// room. Read and written as the browser lets us (site data may be blocked: it throws); what cannot be kept is simply
+// not there for the next page.
+let keptJson = '';
+function keepRoom() {
+  if (!room || room.kind !== 'internet' || !st || lookingAgain()) return;
+  const k = { room: placeOf(room), e: st.entries(), s: [...R.keep(), ...[...snaps].map(([v, x]) => snapMsg(v, x))] }, json = JSON.stringify(k);
+  if (json !== keptJson && session.set(KEPT, { ...k, at: Date.now() })) keptJson = json;
+}
+function forgetRoom() { keptJson = ''; session.set(KEPT, null); }
+// The room took back the places the page before this one kept (net 'restored': a reload while every other player was
+// away): what that page kept of the room goes in too, as if a player greeted us with it (greet's order: the round
+// records, their snapshots, then the rest; each checked as anything from others is: knownEntry, round.js onSave takes a
+// save only from the runner its record names). Their rounds, seats and waiting screens are as they were; whatever is
+// newer from the others wins as they come back (last writer wins; an end stays final: round.js invariant 3). Kept for
+// another room or name: nothing.
+function adopt(r) {
+  const k = session.get(KEPT);
+  if (!k || typeof k !== 'object' || JSON.stringify(k.room) !== JSON.stringify(placeOf(r)) || !Array.isArray(k.e) || !Array.isArray(k.s)) return;
+  const e = k.e.filter(x => Array.isArray(x) && typeof x[0] === 'string'), isRound = ([key]) => key.startsWith('round:');
+  trace.note('kept by the page before: ' + e.length + ' keys, ' + k.s.length + ' snapshots');
+  onLibMessage({ t: 'lib-state', e: e.filter(isRound) }, r.me);
+  for (const m of k.s) if (room === r && m && typeof m === 'object' && (m.t === 'lib-save' || m.t === 'lib-snap')) onLibMessage(m, r.me);
+  if (room === r) onLibMessage({ t: 'lib-state', e: e.filter(x => !isRound(x)) }, r.me);
+}
+// The places this browser holds (owner, q18): a name typed in a new tab is not asked about («Це ти?») when a tab of this
+// same browser holds that place (the player moves to a new tab), nor in the tab whose page before held it (a reload,
+// its goodbye lost: KEPT names that room and name). localStorage HELD = { [JSON [kind, code, name]]: Date.now() },
+// written as our room comes to hold our place (linked, or its host: its status says so) and renewed every HELD_EVERY
+// while it does, gone as we leave or the page goes (only a mark that is still ours: a newer one is another tab's); one
+// older than HELD_FOR does not count (a tab that went without a word). Read and written as the browser lets us.
+const HELD = 'ihroteka-held', HELD_EVERY = 5000 * SCALE, HELD_FOR = 15000 * SCALE;
+let holding = null;                                      // { key, at }: the mark this page wrote last
+const marks = () => { try { const v = JSON.parse(localStorage.getItem(HELD)); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch (e) { return {}; } };
+const markOn = (at, now) => Number.isFinite(at) && Math.abs(now - at) < HELD_FOR;
+function held(kind, code, name) {
+  const key = JSON.stringify([kind, code || '', name]), k = session.get(KEPT);
+  return markOn(marks()[key], Date.now()) || (!!k && typeof k === 'object' && JSON.stringify(k.room) === key);
+}
+function hold(on = true) {
+  const key = on && room && (room.linked || room.role === 'host') ? JSON.stringify(placeOf(room)) : null, now = Date.now();
+  if (key ? holding && holding.key === key && now - holding.at < HELD_EVERY : !holding) return;
+  try {
+    const all = marks();
+    for (const [k, at] of Object.entries(all)) if (!markOn(at, now)) delete all[k];
+    if (holding && all[holding.key] === holding.at) delete all[holding.key];
+    holding = null;
+    if (key) { all[key] = now; holding = { key, at: now }; }
+    if (Object.keys(all).length) localStorage.setItem(HELD, JSON.stringify(all)); else localStorage.removeItem(HELD);
+  } catch (e) { holding = null; }
+}
+
 /* ---------- the address bar: an internet room stays in the link (?room=), so a reload rejoins ---------- */
 export const query = () => room && room.kind === 'internet' ? '?room=' + room.code : '';
 function setQuery(code) {
@@ -457,6 +577,8 @@ function watchRunner() {
   versionCheck();
   onlineSince = rules.onlineSince(onlineSince, !!room && room.online, now);
   if (!room) return;
+  hold();
+  keepRoom();
   R.tick(now);
   if (!ch || !room) return;
   update();

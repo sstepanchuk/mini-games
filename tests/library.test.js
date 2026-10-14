@@ -81,7 +81,8 @@ test('init, build and check', () => {
 
 test('the site is assembled from library/ and vault/, and works offline: every file is in the service worker', () => {
   const sw = fs.readFileSync(file('site/sw.js'), 'utf8');
-  for (const f of ['""', '"demo/"', '"demo/game.bin"', '"keyring.json"', '"library.json"', '"lib/ihroteka.js"', '"lib/qr-scan.js"', '"manifest.webmanifest"', '"icons/icon-512.png"']) assert.ok(sw.includes(f), f);
+  for (const f of ['""', '"demo/"', '"demo/game.bin"', '"keyring.json"', '"library.json"', '"lib/ihroteka.js"', '"lib/qr-scan.js"', '"lib/inflate.js"', '"manifest.webmanifest"', '"icons/icon-512.png"']) assert.ok(sw.includes(f), f);
+  assert.match(fs.readFileSync(file('site/lib/inflate.js'), 'utf8'), /^\/\*! fflate © Arjun Barrett, MIT \*\//, 'the gunzip of older iPhones, with its licence');
   assert.ok(!sw.includes('"sw.js"') && !sw.includes('index.html'));
   assert.match(sw, /fonts\.googleapis\.com/);
   assert.equal(JSON.parse(fs.readFileSync(file('site/manifest.webmanifest'), 'utf8')).display, 'standalone');
@@ -101,6 +102,25 @@ test('the game page is one self-contained module page with the library API', asy
   assert.match(html, /<script type="module">/);
   assert.doesNotMatch(html, /src="(?!data:)|href="(?!data:)/);              // every relative reference was inlined
   assert.match(html, /hello/);
+});
+
+// (vault-keys-01: Safari before 16.4, iOS 15–16.3, has no DecompressionStream, and every sealed game is gzipped: lock.js
+// then loads lib/inflate.js, fflate's gunzip, and hands it to gameText)
+test('a game opens where the browser has no DecompressionStream (older iPhones)', async () => {
+  const plain = await vault.openFile(await libKey(pw.bob), fs.readFileSync(file('vault/demo/game.bin')), vault.label.game('demo'));
+  assert.deepEqual([...plain.subarray(0, 2)], [0x1f, 0x8b], 'sealed gzipped');
+  const { gunzip } = await import('../library/app/inflate.js');
+  const saved = globalThis.DecompressionStream;
+  delete globalThis.DecompressionStream;
+  try {
+    assert.equal(typeof globalThis.DecompressionStream, 'undefined');
+    assert.throws(() => vault.gameText(plain), ReferenceError, 'without the gunzip it cannot');
+    const html = await vault.gameText(plain, gunzip);
+    assert.match(html, /window\.ihroteka/);
+    assert.match(html, /hello/);
+    assert.equal(html, await (async () => { globalThis.DecompressionStream = saved; try { return await vault.gameText(plain); } finally { delete globalThis.DecompressionStream; } })(), 'the same page as the browser\'s own gunzip gives');
+    assert.equal(await vault.gameText(new TextEncoder().encode('<p>plain</p>'), gunzip), '<p>plain</p>', 'a page sealed without gzip, as before');
+  } finally { globalThis.DecompressionStream = saved; }
 });
 
 test('wrong password is refused', () => {

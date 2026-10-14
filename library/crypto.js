@@ -19,9 +19,12 @@ export const random = n => globalThis.crypto.getRandomValues(new Uint8Array(n));
 export const b64 = u8 => btoa(Array.from(new Uint8Array(u8), b => String.fromCharCode(b)).join(''));
 export const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 export const text = u8 => dec.decode(u8);
-// a game is sealed gzipped (a third of the size: ciphertext cannot be compressed later); older ones are plain
-export const gameText = u8 => u8[0] === 0x1f && u8[1] === 0x8b
-  ? new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'))).text()
+// A game is sealed gzipped (a third of the size: ciphertext cannot be compressed later); older ones are plain. gunzip:
+// u8 → u8, for a browser without DecompressionStream (Safari before 16.4: the page loads lib/inflate.js, lock.js);
+// none: the browser's own. (No DOM here: the Node tools use this file too.)
+export const gameText = (u8, gunzip) => u8[0] === 0x1f && u8[1] === 0x8b
+  // eslint-disable-next-line no-restricted-globals -- only where the browser has it (lock.js asks first)
+  ? gunzip ? text(gunzip(u8)) : new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'))).text()
   : text(u8);
 
 // Associated data for every ciphertext: a file swapped in under another name will not decrypt.

@@ -38,8 +38,9 @@ async function frameOf(p, ready = () => !!window.ihroteka, timeout = 15000) {
 }
 // the library's own view of the room (together.js state()); null for a closed page
 const libState = p => p.isClosed() ? Promise.resolve(null) : p.evaluate(() => window.__ihroteka.state());
-// the open dialog's text, or '' (whitespace collapsed)
-const dialogText = async p => p.isClosed() ? '' : p.evaluate(() => document.querySelector('.dialog')?.innerText.replace(/\s+/g, ' ').trim() || '');
+// the open dialog's text, or '' (whitespace collapsed; without the marks that keep a name from turning the line round,
+// U+2066–U+2069: invite.js iso, which a reader never sees)
+const dialogText = async p => p.isClosed() ? '' : p.evaluate(() => document.querySelector('.dialog')?.innerText.replace(/[\u2066-\u2069]/g, '').replace(/\s+/g, ' ').trim() || '');
 // the card over the game («Чекаємо на …», invite.js; only the card: see waitShown): whether it shows, its text
 // (whitespace collapsed), its buttons, and what its live region says to a screen reader (say)
 const waitCard = p => p.evaluate(() => {
@@ -92,9 +93,12 @@ async function short(p, game) {
 
 /* ---------- nearby: a phone is a browser of its own (no fake brokers in common with the others) ---------- */
 // internet: false (default) = no internet at all, so the dialog goes straight to nearby; net: more fakeNet options
-async function phone(pid, name, { internet = false, net = {}, viewport = { width: 420, height: 860 } } = {}) {
+// (relayOnly: a browser without WebRTC); init: scripts that run in the phone's pages before the library (functions,
+// as context.addInitScript takes them: [fn] or [[fn, arg]])
+async function phone(pid, name, { internet = false, net = {}, viewport = { width: 420, height: 860 }, init = [] } = {}) {
   const b = await launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
   const ctx = await b.newContext({ viewport, ...(CHROMIUM && { permissions: ['camera'] }) });
+  for (const x of init) await (Array.isArray(x) ? ctx.addInitScript(...x) : ctx.addInitScript(x));
   const p = await openPage(ctx, pid, U, { label: name, net: { brokers: internet, ...net } });
   const X = {
     b, p, name,
@@ -136,7 +140,28 @@ async function pair(H, G, { adding = false } = {}) {
   await H.p.click('text=Далі: сканувати код друга');
   await H.paste(answer);
 }
+// Browser contexts of one browser as devices on one network: each context is a device of its own (its own storage:
+// what one tab keeps, another device does not see), and the fake brokers (support/fakenet.cjs: a BroadcastChannel,
+// which never leaves its context) carry between them too. Call it before any of their pages opens.
+async function oneNetwork(...ctxs) {
+  const others = c => ctxs.filter(x => x !== c);
+  let queue = Promise.resolve();                         // (in the order they were sent, as a broker does)
+  const pass = (o, d) => {
+    const p = o.pages().find(x => !x.isClosed() && /^https?:/.test(x.url()));   // (one page of that device passes it on)
+    return p ? p.evaluate(d => { const bc = new BroadcastChannel('fake-mqtt'); bc.postMessage({ ...d, bridged: 1 }); bc.close(); }, d).catch(() => {}) : null;
+  };
+  for (const c of ctxs) {
+    await c.exposeBinding('__bridge', (src, d) => { queue = queue.then(() => Promise.all(others(c).map(o => pass(o, d)))); });
+    await c.addInitScript(() => {
+      const post = BroadcastChannel.prototype.postMessage;
+      BroadcastChannel.prototype.postMessage = function (d) {
+        post.call(this, d);
+        if (this.name === 'fake-mqtt' && d && !d.bridged) window.__bridge(d);
+      };
+    });
+  }
+}
 // → true once every one of these phones (or pages) is linked
 const allLinked = (xs, ms = 15000) => until(async () => (await Promise.all(xs.map(x => libState(x.p || x)))).every(s => s && s.linked), ms);
 
-module.exports = { enterName, openPage, createLink, frameOf, libState, dialogText, waitCard, waitShown, waitBox, clickWait, short, phone, pair, allLinked };
+module.exports = { enterName, openPage, createLink, frameOf, libState, dialogText, oneNetwork, waitCard, waitShown, waitBox, clickWait, short, phone, pair, allLinked };

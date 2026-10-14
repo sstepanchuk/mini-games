@@ -1,6 +1,7 @@
 // Internet rooms (library/net), in worker tabs over fake brokers (tests/support): players linking up, one roster,
-// messages to everyone or to one player, a full room, leaving, «Не чекати» (release), and strangers who talk to the
-// room as if they were in it.
+// messages to everyone or to one player (and «*», everyone on the wire, is nobody's own name), a full room, leaving,
+// «Не чекати» (release; a released tab that still hears the room is told nothing), two rooms on one code that merge
+// (the one that gives way brings its places), and strangers who talk to the room as if they were in it.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { room, settled, show, shows, sleep, states, until, world } from '../support/world.js';
@@ -39,6 +40,19 @@ describe('internet rooms: linking up, messages, a full room, leaving, «Не ч�
     assert.deepEqual(await A.got(), [], 'the host passes on what is not for it, and does not hear it');
     assert.match(await C.send({ t: '_r' }), /a message needs a string t/, 'the room\'s own types are refused');
     assert.match(await C.send({ t: 'p' }), /a message needs a string t/);
+  });
+
+  // (names-and-3plus-06: a guest's message to everyone goes to the host with _t '*', and the host passed one to a player
+  // named «*» on to everyone)
+  test('«*» means everyone on the wire, so it is nobody\'s own name; a guest\'s message to one guest reaches only them', T, async t => {
+    const W = world(t);
+    await assert.rejects((await W.tab('p9tab')).join('rooms9', '*'), /not «\*»/, 'a room refuses «*» as our own name');
+    const [A, B, C, D] = await room(W, 'rooms9', ['Аня', 'Богдан', 'Сава', 'Віра']);
+    await B.send({ t: 'x' }, { to: 'Сава' });
+    assert.ok(await until(async () => (await C.got()).length === 1, 5000));
+    await sleep(500);                                        // (anything more would come by now)
+    assert.deepEqual(await C.got(), ['Богдан:x']);
+    assert.deepEqual([await A.got(), await D.got()], [[], []], 'the host and Віра get nothing of it');
   });
 
   // (phase 1b review: room.lag merged its figures with reduce(Math.max), whose index and array arguments made it NaN as
@@ -103,20 +117,55 @@ describe('internet rooms: linking up, messages, a full room, leaving, «Не ч�
     assert.ok(await until(async () => (await states([A, C])).every(s => s.players.join() === 'Сава,Богдан'), 3000), await shows([A, C]));
   });
 
-  test('two rooms on one code (the brokers split them) merge: the smaller one comes over, its guests too', T, async t => {
+  // (net-core-06: the host's «Не чекати» sent the released tab a final bye, which from one's host says the HOST left for
+  // good: that tab heard Аня leave, said peer-left and held a room of its own until it was heard again)
+  test('a released guest whose tab is still there never hears that the host left; heard again, it is back as a new player (join), the host still the host', T, async t => {
+    const W = world(t);
+    const [A, B, C] = await room(W, 'rooms10', ['Аня', 'Богдан', 'Сава']);
+    await B.net({ send: false });                            // Богдан hears the room, the room does not hear him
+    assert.ok(await until(async () => (await A.state()).away.includes('Богдан'), 8000), 'Аня sees him away: ' + await shows([A]));
+    const n = (await B.events()).length, nA = (await A.events()).length;
+    await A.release('Богдан');
+    assert.ok(await until(async () => (await states([A, C])).every(s => s.players.join() === 'Аня,Сава' && s.linked), 3000), await shows([A, C]));
+    await sleep(1500);
+    const eb = (await B.events()).slice(n).map(e => e.slice(1).join(' '));
+    assert.ok(!eb.includes('leave Аня') && !eb.includes('status peer-left'), 'Богдан never hears that Аня left: ' + eb);
+    await B.net({ send: true });
+    const s = await until(async () => { const x = await states([A, B, C]); return x.every(y => y.linked && y.players.join() === 'Аня,Сава,Богдан' && !y.away.length) && x; }, 15000, 100);
+    assert.ok(s, 'back as a new player, last: ' + await shows([A, B, C]));
+    assert.deepEqual(s.map(x => x.role), ['host', 'guest', 'guest'], 'the host still the host');
+    assert.ok(!(await B.events()).slice(n).some(e => e[1] === 'leave' && e[2] === 'Аня'), 'never');
+    assert.ok((await A.events()).slice(nA).some(e => e[1] === 'join' && e[2] === 'Богдан'), 'the host hears him join, as a new player');
+  });
+
+  // (round-11: the guests of the room that gave way started their list as «the two of us» until the new host's list came,
+  // and heard everyone else leave, their rounds over; and the places of that room were lost unless their players came)
+  test('two rooms on one code (the brokers split them) merge: the smaller one comes over, its guests and its places too; nobody hears anyone leave', T, async t => {
     const W = world(t);
     const one = { brokers: [true, true, false, false] }, two = { brokers: [false, false, true, true] };
     const [A, B, C] = await room(W, 'rooms7', ['Аня', 'Богдан', 'Сава'], { net: one });
-    const D = await W.tab('p4tab', two), E = await W.tab('p5tab', two);
+    const D = await W.tab('p4tab', two), E = await W.tab('p5tab', two), F = await W.tab('p6tab', two);
     await D.join('rooms7', 'Дана');
     assert.ok(await until(async () => (await D.state()).role === 'host', 5000), 'Дана holds a room of her own');
     await E.join('rooms7', 'Єва');
     assert.ok(await until(settled([D, E]), 5000), await shows([D, E]));
-    for (const x of [A, B, C, D, E]) await x.net({ brokers: true });   // one network again
-    const s = await until(settled([A, B, C, D, E]), 20000, 100);
-    assert.ok(s, 'one room of five: ' + await shows([A, B, C, D, E]));
-    assert.deepEqual(s[0].players.slice(0, 3), ['Аня', 'Богдан', 'Сава'], 'the bigger room\'s order first');
+    await F.join('rooms7', 'Фрося');
+    assert.ok(await until(settled([D, E, F]), 5000), await shows([D, E, F]));
+    await F.net({ up: false });                              // Фрося drops out of that room: her place is kept
+    assert.ok(await until(async () => (await states([D, E])).every(x => x.away.join() === 'Фрося'), 8000), await shows([D, E]));
+    const tabs = [A, B, C, D, E], n = await Promise.all(tabs.map(async x => (await x.events()).length));
+    for (const x of tabs) await x.net({ brokers: true });   // one network again
+    const s = await until(async () => {
+      const x = await states(tabs);
+      return x.every(y => y.linked && y.players.join() === x[0].players.join() && y.away.join() === 'Фрося') && x[0].players.length === 6 && x;
+    }, 20000, 100);
+    assert.ok(s, 'one room of five, and Фрося\'s place: ' + await shows(tabs));
+    assert.deepEqual(s[0].players, ['Аня', 'Богдан', 'Сава', 'Дана', 'Єва', 'Фрося'], 'the bigger room\'s order first, then the other\'s');
     assert.deepEqual(s.map(x => x.role), ['host', 'guest', 'guest', 'guest', 'guest']);
+    for (const [i, x] of tabs.entries()) {
+      const left = (await x.events()).slice(n[i]).filter(e => e[1] === 'leave');
+      assert.deepEqual(left, [], s[i].me + ' hears nobody leave');
+    }
   });
 
   test('strangers: the host asks them to say hello again, a guest says we are not together (a bye that keeps every place); once in 2 s each', T, async t => {

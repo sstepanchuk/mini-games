@@ -13,14 +13,24 @@ and works offline. Hosted on GitHub Pages.
   reloads the library, so the connection with a friend lives on from game to game.
 - **Encrypted games.** Each game and its sources are sealed with one library key (AES-256-GCM). Each person has
   a password and an ECDH P-256 key pair; the password unlocks their private key, which unlocks the library key.
-  Removing someone rotates the library key and re-encrypts every game.
+  Removing someone rotates the library key and re-encrypts every game. A game is gzipped before it is sealed; where
+  the browser cannot gunzip (Safari before 16.4: iPhones on iOS 15–16.3), a small gunzip (`lib/inflate.js`, from
+  fflate) loads for it, and only there, so iOS 15 is the lowest (whether the internet rooms' MQTT client runs there is
+  not checked).
 - **Together.** "Грати разом" connects up to 8 players for the whole library: whatever one opens, everyone's library
-  opens too. A player is the name they type on entering a room: the same name from another tab, browser or device
-  takes that player's place (the old one steps aside and can take it back with «Повернути сюди»). A player who drops
-  out keeps their place for 3 minutes; meanwhile the game pauses and the library says whom the others wait for and
-  why, in the game's own waiting screen (`<ihroteka-wait>`), or in its card over a game that has none: one who dropped
-  out, the time left and «Не чекати» (nearby, for the phone that holds the room, «Не чекати» ends the room on this
-  phone: «Без телефона X кімната поруч далі не може»), or one who is only opening the game again, in a new tab or
+  opens too. A player is the name they type on entering a room, in one spelling: apostrophes become ’, invisible and
+  control characters go (emoji stay), several spaces become one, the first letter a capital; a name with no letter,
+  digit or emoji, or «*», is refused («Ім’я має містити літери, цифри чи емодзі»), and a name already in play is never
+  changed. In a sentence of a dialog a name cannot turn the line around. The same name from another tab, browser or
+  device takes that player's place: another tab of the same browser at once; another browser or device, while the old
+  one is still on the line, asks first («Богдан уже грає в кімнаті з іншого пристрою. Це ти?» — «Так, грати тут» or
+  «Інше ім’я»), and the old one says what happened («Під іменем «Богдан» щойно увійшли з іншої вкладки або з іншого
+  пристрою, тож гра продовжується там. Якщо це не ти — увійди під іншим ім’ям», with «Інше ім’я», over the internet
+  also «Повернути сюди»); coming back after the line broke asks nothing. A player who drops out keeps their place
+  for 3 minutes; meanwhile the game pauses and the library says whom the others wait for and why, in the game's own
+  waiting screen (`<ihroteka-wait>`), or in its card over a game that has none: one who dropped out, the time left and
+  «Не чекати» (nearby, for the phone that holds the room, «Не чекати» ends the room on this phone: «Без телефона X
+  кімната поруч далі не може»), or one who is only opening the game again, in a new tab or
   device («Чекаємо на X — повертається в гру», nothing to press); a player of the round whose game is closed, a seat
   to wait for and who plays now, a round coming back after a reload, too. If the copy of the game that runs a
   round is gone for 10 s, the round goes on in another player's copy from its last snapshot, when that player can tell
@@ -28,12 +38,23 @@ and works offline. Hosted on GitHub Pages.
   first checks by itself whether there is internet (whether a broker answers: `navigator.onLine` also says yes on a
   hotspot without data). With internet there are two ways: a link (public MQTT brokers find the friend; WebRTC goes
   direct when it can), or nearby. Without it, only nearby: two devices on the same Wi-Fi or hotspot, one shows a QR
-  code and the other scans it, then the other way round (the first one adds more players the same way). If a nearby
-  link is impossible, the dialog says why (e.g. a phone sharing its hotspot cannot see that network in its browser, or
-  the newcomer has the name of the phone that holds the room: «Це ім’я вже в кімнаті») and offers a report for
-  debugging. Friends whose libraries (or copies of a game) are different versions are not linked (or not seated
-  together) and see «Онови сторінку — у друга інша версія»; the older page updates itself when no game is open there
-  (else its note offers «Оновити»), never in a nearby room.
+  code and the other scans it, then the other way round (the first one adds more players the same way). The camera
+  goes on at the first step already (with it iPhones and Chrome offer the devices' real addresses, so phones nearby
+  link more often), and the dialog says so («Браузер може спитати дозволу на камеру: вона знадобиться на кроці 2, і з
+  нею пристрої поруч з’єднуються надійніше»); it is off while the page is hidden and on again when the player is back.
+  A guest that shows its code waits for it to be read as long as the two devices reach each other: after 90 s it says
+  «Друг ще не зчитав твій код — хай наведе на нього камеру», and a late scan still links. If a nearby link is
+  impossible, the dialog says why (e.g. a phone sharing its hotspot cannot see that network in its browser, the
+  newcomer has the name of the phone that holds the room: «Це ім’я вже в кімнаті», or the other phone gave up or closed
+  its page: «Друг скасував з’єднання або закрив сторінку. Спробуйте ще раз.») and offers a report for debugging; a
+  browser that cannot link directly (no WebRTC, as Tor Browser) is told so up front on the nearby screen: «Цей браузер
+  не вміє з’єднуватися напряму: відкрий Ігротеку в Chrome, Safari чи Firefox». Friends whose libraries (or copies of a
+  game) are different versions are not linked (or not seated together) and see «Онови сторінку — у друга інша версія»
+  while that version is heard; the older page updates itself when no game is open there (else its note offers
+  «Оновити»), never in a nearby room. Whoever holds a room by link and is alone again sees «Друг вийшов. Посилання діє
+  далі — чекаю…» in «Грати разом» (not «Ви разом.»). The library's dialogs leave a game's fullscreen as they open (and
+  so does the card «Чекаємо…» over a game without screens of its own); its notes at the bottom stack in a column (up to
+  three, the same one never twice); «Далі» with no name says «Напиши своє ім’я» under the field.
 - **Offline.** A service worker keeps one complete copy of the site per version, all of that version (a copy that
   mixes two is not installed), and never deletes the copy in use for a newer one; the shelf, the games and nearby
   play work without a network. On a phone it installs as an app.
@@ -44,7 +65,8 @@ and works offline. Hosted on GitHub Pages.
 library/   everything that runs in the browser
   app/       the library page: shell, password, together (+ rules: who plays, who runs a round; round: ihroteka.round,
              a game's rounds; waiting, screens: the waiting screens a game puts in itself; trace: what happened
-             lately, for bug reports), offline copy, page template, icons
+             lately, for bug reports), offline copy, page template, icons; inflate: a gunzip for Safari before 16.4
+             (built as lib/inflate.js, loaded only there)
   net/       rooms for up to 8 players: internet (MQTT, sealed with the room's code, + WebRTC) and nearby (QR-paired
              WebRTC)
   crypto.js  keyring and sealed files (browser and Node)
@@ -491,7 +513,12 @@ overlay is not, nor one whose «Не чекати» a bar of the game's covers: 
 empty, and an empty copy takes no room. When no copy is seen, the card over the game says every row instead; a game
 that never placed the element gets the card as it always was (`link` and `loading` of whom we play with, and
 `version`), so a game built before the screens is never doubled. Until the game's page has parsed (`DOMContentLoaded`),
-only the version shows, on the card. While a library dialog is open, the holder stays as it is.
+only the version shows, on the card. While a library dialog is open, the holder stays as it is. The card stands 16 px
+above the bottom edge of the game, on an iPhone with a home bar too. The library looks again when a copy comes or goes
+and when a copy or its parent changes size (a menu panel around it shown or hidden), in the game's next animation
+frame, and each second for what no observer sees (a layer over the holder, scrolling); it observes nothing anew and
+resizes nothing inside the browser's delivery of size changes, so a copy may come and go anywhere, in the game's own
+`ResizeObserver` callback or a `showing` listener too, and the browser has no «ResizeObserver loop» to report.
 
 **What it says now.** On every copy, the attribute `showing` is the kinds said now, each once, in row order
 (`showing="link version"`), wherever they show (this copy, another one, or the card); absent when nothing is said. Read
@@ -600,27 +627,36 @@ library's card over the game says it instead`.
 
 ### Under it: one room for the whole library
 
-A room is a star: everyone is linked to the room's host, which passes on what guests send. Reliable
-messages stay in the sender's outbox until acknowledged and go again by whatever path works (direct, or the
-brokers), so a network switch or a minute offline loses nothing; a player who goes quiet pauses the game for
-everyone after 1.5 s, and a silence the other path does not explain (a busy phone) never drops the direct link.
-A player who drops out keeps their place for 3 minutes (or until someone presses «Не чекати»; a player cut off from
-the room's host has it only for the host: their word for anyone else could not reach it). A reload or a closed tab is
-dropping out too: of a player's own acts, only leaving the room gives the place up. One who comes back after their
-place went counts as opening the game until their page says which game it has open: the game waits for them, then
-hears `relinked`. Over the internet, if the room's host is gone for 10 s, the first player still here takes over and
-the others follow; when the old host comes back, it joins as a guest, and so does a player who was offline and held
-the room alone meanwhile (in a room of two, the side that was offline comes back as a guest). The room checks its
-brokers at once when the browser says it is online again or its network type changed, even if it checked them a moment
-before. A page Safari restores from its back-forward cache (its sockets closed, its goodbye said) is in its internet
-room again at once: a guest says hello again, a host joins whoever took the room over meanwhile (or goes on, if nobody
-did). A hidden tab whose timers the browser holds back (a tick a minute) still notices a player who went silent, as
-long as it hears someone else: that shows the page itself ran. Nearby (no internet), the host pairs with each guest in
-turn; the guests hear each other through it, and no one else can take the host's part: the room waits for the host's
-phone («Не чекати» for it ends the room on the phone where it is pressed). A phone whose page reloads pairs again
-(«З’єднатися знову») and is back in its place; the host's phone too, also one whose page crashed (a guest pairs again
-as soon as its old link is broken or silent, though the browser may keep its channels open a while): each guest pairs
-with it again, and the room goes on.
+A room is a star: everyone is linked to the room's host, which passes on what guests send. Reliable messages stay in
+the sender's outbox until acknowledged and go again by whatever path works (direct, or the brokers), so a network
+switch or a minute offline loses nothing; a player who goes quiet pauses the game for everyone after 1.5 s, and a
+silence the other path does not explain (a busy phone) never drops the direct link. A player who drops out keeps their
+place for 3 minutes (or until someone presses «Не чекати»; a player cut off from the room's host has it only for the
+host: their word for anyone else could not reach it). A reload or a closed tab is dropping out too: of a player's own
+acts, only leaving the room gives the place up. One who comes back after their place went counts as opening the game
+until their page says which game it has open: the game waits for them, then hears `relinked`. «Не чекати» over the
+internet for a player whose page is still open (it hears the room, the room does not hear it) tells that page nothing:
+while it is not heard it waits for the room as before, and once it is heard again it comes back as a new player, as
+after 3 minutes away; a round stays with whoever ran it. A page reloaded while every other player is away remembers
+the room (internet rooms: its tab keeps who was in it, their places and the round, in sessionStorage): when nobody
+answers it, it takes them back as away, their 3 minutes counted from when they dropped out, so its screens wait for
+them with «Не чекати» and the round stays paused, not a new game on one device. Over the internet, if the room's host
+is gone for 10 s, the first player still here takes over and the others follow; when the host's player comes in from
+another device while the old one is offline, the others go over to it at once (~0.3 s; a round's runner still moves
+only by its own rule); when the old host comes back, it joins as a guest, and so does a player who was offline and
+held the room alone meanwhile (in a room of two, the side that was offline comes back as a guest). Two rooms on one
+code that grew apart merge, and the one that gives way brings its places along (those a reloaded page took back too):
+a player away in it is away in the merged room, their place held for the rest of their 3 minutes, so nobody sees the
+others leave and a round goes on. The room checks its brokers at once when the browser says it is online again or its
+network type changed, even if it checked them a moment before. A page Safari restores from its back-forward cache (its
+sockets closed, its goodbye said) is in its internet room again at once: a guest says hello again, a host joins
+whoever took the room over meanwhile (or goes on, if nobody did). A hidden tab whose timers the browser holds back (a
+tick a minute) still notices a player who went silent, as long as it hears someone else: that shows the page itself
+ran. Nearby (no internet), the host pairs with each guest in turn; the guests hear each other through it, and no one
+else can take the host's part: the room waits for the host's phone («Не чекати» for it ends the room on the phone
+where it is pressed). A phone whose page reloads pairs again («З’єднатися знову») and is back in its place; the host's
+phone too, also one whose page crashed (a guest pairs again as soon as its old link is broken or silent, though the
+browser may keep its channels open a while): each guest pairs with it again, and the room goes on.
 
 ## Trust
 
@@ -708,7 +744,9 @@ they need.
 ## Releases
 
 Each fix deploys on its own, with its test. A commit known to be good is tagged at the end of each phase (`git tag
-phase-N`); `phase-0` and `phase-1a` exist only locally so far (pushing tags waits for the owner). The mixed-version
+phase-N`): `phase-0` … `phase-5` are in the local repository (`phase-1b` … `phase-5` at 5dcc8f7, cda3312, da117f3,
+63e7fe6, 1a26d49 and 83c352a), but GitHub refused tags pushed from a Claude session (403): the owner pushes them (`git
+push origin --tags`), and until then a rollback to a tag works only in a clone that has them. The mixed-version
 tests (`tests/app/release.test.js`, `tests/net/version.test.js`: an earlier library against this one) take that
 library from `main`'s history (the one before the library's last change; a library edited and not committed yet
 plays against `HEAD`'s, the one it replaces), so they need no tag; CI fetches the whole history for them and fails

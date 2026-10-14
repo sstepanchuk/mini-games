@@ -2,10 +2,13 @@
 // Net level, places by name: three players; messages by name; a new tab of the same name takes that place over (the
 // old tab steps aside); the host offline long enough that another player takes over, then back as a guest; «Не
 // чекати» (release) lets an away player's place go, and that player comes back as new; the host's name in yet
-// another tab.
+// another tab. Then the library's dialog (owner, decision 43): a typed name is cleaned («дар'я» comes in as «Дар’я»),
+// and one nobody would see (only invisible characters) or «*» (everyone, on the wire) is refused, saying why; a name
+// already in play is taken as it is when a reload asks for it again.
 'use strict';
-const { scenario, launch, check, step, until, w } = require('./support/scenario.cjs');
+const { scenario, launch, check, step, until, w, U } = require('./support/scenario.cjs');
 const { netPage, join, rooms, show } = require('./support/net.cjs');
+const { openPage, libState } = require('./support/pages.cjs');
 
 scenario('names: places by name, takeover, the host away, «Не чекати», the host in another tab', async () => {
   const ctx = await (await launch()).newContext();
@@ -78,4 +81,41 @@ scenario('names: places by name, takeover, the host away, «Не чекати»,
   check(o.role === 'out' && !o.linked, 'and steps aside', show(o));
   r = await rooms([A, C, H2]);
   check(r.every(x => !x.away.length), 'nobody away', r.map(show));
+
+  step('the library’s dialog: a name is cleaned, or refused saying why');
+  const L = await openPage(ctx, 'llll1111llll', U, { label: 'library' });
+  await L.click('#together');
+  const field = '.dialog input.link';
+  for (const [what, bad] of [['only an invisible character', '\u200b'], ['«*»', '*'], ['no letter, digit or emoji', '\u2800\u200b ']]) {
+    await L.fill(field, bad);
+    await L.press(field, 'Enter');
+    const said = await until(() => L.evaluate(() => document.querySelector('.dialog [role=alert]')?.textContent), 3000, 50);
+    check(said === 'Ім’я має містити літери, цифри чи емодзі', what + ': refused, «Ім’я має містити літери, цифри чи емодзі»', said);
+    check(await L.evaluate(() => document.activeElement?.matches('.dialog input.link')), '… the focus on the field');
+  }
+  await L.fill(field, 'дар\'я');
+  await L.press(field, 'Enter');
+  await L.click('text=Через посилання');
+  const me = await until(async () => (await libState(L)).me, 10000);
+  check(me === 'Дар’я', '«дар\'я» comes in as «Дар’я» (one spelling on every device)', me);
+
+  // A name already in play is never cleaned (owner, decision 43): a page in the room as «марк'ян» (a name typed before
+  // names were cleaned, carried by the reload into this version: REJOIN) reloads, and the room's link asks for the name
+  // again with it filled in: taken as it is, the same player in the same place (cleaned, a new player «Марк’ян» would
+  // wait for a seat while the old place waits 3 min for nobody)
+  step('a name in play, its page reloaded: the name stays as it is');
+  const code = new URL(await L.evaluate(() => location.href)).searchParams.get('room');
+  const M = await openPage(ctx, 'mmmm1111mmmm', U, { label: 'Марк’ян' });
+  await M.evaluate(c => sessionStorage.setItem('ihroteka-rejoin', JSON.stringify({ code: c, name: 'марк\'ян', at: Date.now() })), code);
+  await M.goto(U + '?room=' + code);
+  const both = async () => { const s = await Promise.all([L, M].map(libState)); return s.every(x => x.linked && x.players.join() === 'Дар’я,марк\'ян' && !x.away.length) && s; };
+  check(await until(both, 15000), 'in the room as «марк\'ян» (the reload into a newer version keeps the name)', [await libState(L), await libState(M)]);
+  await w(1500);                                         // (what the tab keeps of the room: kept within a second)
+  await M.reload();
+  await M.waitForSelector(field);
+  check(await M.inputValue(field) === 'марк\'ян', 'the name asked again, filled in as it was', await M.inputValue(field));
+  await M.press(field, 'Enter');
+  const after = await until(both, 15000);
+  check(after, 'the same player, in the same place: nobody new, nobody away', [await libState(L), await libState(M)]);
+  check((await libState(M)).me === 'марк\'ян', '… under the name as it was', (await libState(M)).me);
 }, { timeout: 240000 });

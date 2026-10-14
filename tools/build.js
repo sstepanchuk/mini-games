@@ -253,6 +253,7 @@ async function libraryFiles(version) {
     'lib/ihroteka.js': await js('index.js'),
     'lib/ihroteka.css': await esbuildText(path.join(dir, 'style.css'), {}, 'library/app'),
     'lib/qr-scan.js': await js('scan.js', '/*! jsQR © Cosmo Wolfe, Apache-2.0 */'),
+    'lib/inflate.js': await js('inflate.js', '/*! fflate © Arjun Barrett, MIT */'),   // (only where the browser cannot gunzip: lock.js)
     'manifest.webmanifest': JSON.stringify({
       name: LIBRARY.title, short_name: LIBRARY.title, description: LIBRARY.description, lang: 'uk', id: './', start_url: './', scope: './',
       display: 'standalone', background_color: LIBRARY.theme, theme_color: LIBRARY.theme,

@@ -2,8 +2,10 @@
 // game's policies and the public room object. internet.js and nearby.js add how players meet (the mode, below).
 //
 // Players are known by name: whoever comes in with a name is that player, from any tab, browser or device.
-// The same name again takes the place over (the old tab or device is told so and steps aside); a player who
-// drops out keeps their place for a while (HOLD) and gets it back by coming in with the same name.
+// The same name again takes the place over (the old tab or device is told so and steps aside; a name the player typed
+// is asked about first while that device is still on the line: status 'taken', room.take); a player who drops out keeps
+// their place for a while (HOLD) and gets it back by coming in with the same name. A name typed in the dialog is
+// cleaned first (cleanName), and «*» (EVERYONE: everyone, on the wire) is nobody's own name (ownName).
 //
 // A room is a star: one host and up to max - 1 guests, each linked to the host only. (Over the internet the
 // guests could reach each other too, but nearby they often cannot: one shape for both.) The host passes on what
@@ -15,26 +17,29 @@
 // the host one per guest. Links are by session (one per tab); places are by name. (Fields: Room, Peer below.)
 //
 // The places invariant. A place (an entry of N.members) is dropped in only three ways:
-//   - its player leaves for good: a final bye (menu: 1, only from room.leave(true) and from the host's room.release)
-//     → the mode's byeFrom → dropMember (our host's: hostGone, gone); or, that bye lost, the same session comes in
-//     under another name (a tab changes its name only by leaving: seatMember);
+//   - its player leaves for good: a final bye (menu: 1: only from room.leave(true), and, nearby, from the host's
+//     room.release) → the mode's byeFrom → dropMember (our host's: hostGone, gone); or, that bye lost, the same session
+//     comes in under another name (a tab changes its name only by leaving: seatMember);
 //   - someone presses «Не чекати»: room.release → dropMember on the host (a guest asks it with _x; for the host
-//     itself, the mode's releaseHost);
+//     itself, the mode's releaseHost). Over the internet the released tab is told nothing, as for HOLD: if it still
+//     hears us, it is back as a new player once it is heard;
 //   - HOLD runs out: holdOver, on the host.
 // Anything else keeps every place: a link that ends (a closed tab or a reload: a bye without menu; a silent link; a
 // link that starts over; another tab of the same player), and a mode that starts over (internet.js: discover,
 // hostGone, dropAll say no final bye and keep the list; nearby.js: a host back from a reload takes the list back from
-// the first guest that pairs again, adopt). A player who comes back from any session gets the same place
-// (seatMember). The host's list is the room's: a guest takes it as sent (_r). Known exceptions (the guest's own view
-// only, until the host's list comes): when two rooms on one code merge (giveWay), the places of the one that gives way
-// go unless their players are here to come along; a guest linked to a host missing from its list starts it as the two
-// of us (guestMembers).
+// the first guest that pairs again, adopt). Over the internet a page keeps its list in the tab, and a fresh page there
+// that holds the room only because nobody answered takes those places back, away since they dropped out (restorePlaces:
+// a reload while everyone else was away); two rooms on one code that merge keep the places of the one that gives way
+// (internet.js keepAlong; a guest linked to a host missing from its list keeps its own, away, until the host's comes:
+// guestMembers). A player who comes back from any session gets the same place (seatMember). The host's list is the
+// room's: a guest takes it as sent (_r).
 //
 // The takeover invariant: a replaced tab never takes its place back by itself. Who comes in by the player's own act
 // (a typed name, «Повернути сюди», a reload: a new room, until it has linked once: N.ever) is fresh and takes the
-// place over; a tab that only says hello again by itself (internet.js: fresh: false) is told it was replaced if another
-// session holds its place. The new session is seated before the old link goes (unlink, quiet), so nobody hears the
-// player leave or the room fall apart for a moment.
+// place over (a typed name, N.ask, only once the player says it is them, if the device that holds the place is still on
+// the line: 'taken', room.take); a tab that only says hello again by itself (internet.js: fresh: false) is told it was
+// replaced if another session holds its place. The new session is seated before the old link goes (unlink, quiet), so
+// nobody hears the player leave or the room fall apart for a moment.
 //
 // Roles (N.role, room.role; the library reads it when it needs it, there is no event for it):
 //   null     looking for the room: internet, asking 'who'; nearby, before pairing
@@ -67,16 +72,50 @@ export const STATUSES = Object.freeze([
   'no-signal',                                         // internet: no broker answers (alone: when linked, 'weak' says it)
   'waiting',                                           // internet: we hold the room, alone: friends find it by its code
   'joining',                                           // internet: a host answered, we say hello to it
+  'taken',                                             // both: the name we came with holds a place whose device is still on the line;
+                                                       //   room.take() takes it over, or leave and come in under another name
   'full',                                              // internet: no place left for us (we look again in 2 s)
   'pairing',                                           // nearby: a new room, to pair by codes
   'failed',                                            // nearby: a pairing did not link (room.pair.reason says why)
   'ready',                                             // both: a link works (someone else is here)
-  'peer-left',                                         // both: the last link ended; we are alone (every place stays)
-  'version'                                            // both: another library version on our code, or pairing with us (PROTO)
+  'peer-left',                                         // both: the last link ended; we are alone (every place stays; internet: a host
+                                                       //   whose last guest went, a guest whose host went and nobody is here)
+  'version'                                            // both: another library version on our code, or pairing with us (PROTO): while
+                                                       //   it is heard (otherVersion), then the status for where we are
 ]);
 export const MAX_PLAYERS = 8;
 export const HOLD = TIMING.HOLD;                       // how long a player who dropped out keeps their place
 export const NAME = /^\S(?:.{0,22}\S)?$/u;             // a name: 1 to 24 characters, no spaces around
+
+// Names (owner, q17). NAME is what the wire takes from anyone (an older page's names keep working); what this tab
+// takes as its own name is stricter (ownName), and a name typed in the dialog is cleaned first (cleanName). The
+// library's validName is ownName and nameShows.
+export const EVERYONE = '*';                           // _t for everyone (sendRoom, arrive): so it is nobody's own name
+export const ownName = n => typeof n === 'string' && NAME.test(n) && n !== EVERYONE;
+// What gets dropped from a typed name: control characters (spaces among them become one space, below) and everything
+// invisible (Default_Ignorable_Code_Point: the bidi controls, ZWSP, the word joiner, the BOM, a soft hyphen, the Hangul
+// fillers…), but for what emoji need: ZWJ between two pictographs (👨‍👩‍👧, ❤️‍🔥), a variation selector right after a
+// pictograph or a keycap's base (❤️, 1️⃣), and tags after a pictograph (🏴󠁧󠁢󠁳󠁣󠁴󠁿).
+const PIC = '\\p{Extended_Pictographic}', TAG = '[\\u{E0020}-\\u{E007F}]';
+const INVISIBLE = new RegExp('(?![\\t\\n\\v\\f\\r])\\p{Cc}' +
+  `|(?<!${PIC}(?:\\uFE0F|\\p{Emoji_Modifier})?)\\u200D|\\u200D(?!${PIC})` +
+  `|(?<![${PIC}#*0-9])[\\uFE00-\\uFE0F]|(?<!${PIC}${TAG}*)${TAG}` +
+  `|(?![\\u200D\\uFE00-\\uFE0F\\u{E0020}-\\u{E007F}])\\p{Default_Ignorable_Code_Point}`, 'gu');
+const APOSTROPHES = /['‘’ʼ`´′ʹʻ]/gu;                    // every apostrophe-like character → ’ (the library's texts use it)
+// A typed name in the one spelling the room knows it by: nothing invisible (INVISIBLE), then NFC (a й typed in two parts
+// is one letter), one apostrophe (’), one space between words and none around, a capital first letter (as phones type it;
+// only where it stays one character: ß, ŉ stay). Latin look-alikes of Cyrillic letters are not mapped (owner). → the
+// name, or '' (nothing left, or longer than NAME takes). Idempotent; never longer than typed (but for the few
+// characters that NFC itself writes as two, such as क़). Only where a name is typed: a name in play is never changed.
+export function cleanName(s) {
+  let n = String(s).replace(INVISIBLE, '').normalize('NFC').replace(APOSTROPHES, '’').replace(/\s+/gu, ' ').trim();
+  const c = n ? String.fromCodePoint(n.codePointAt(0)) : '', u = c.toLocaleUpperCase('uk');
+  if (u !== c && [...u].length === 1) n = (u + n.slice(c.length)).normalize('NFC');
+  return NAME.test(n) ? n : '';
+}
+// whether a name shows at all: a letter, a digit or an emoji once the invisible (and the blank Braille cell) are gone
+// ('​', 'ㅤ', '⠀' and '***' do not)
+export const nameShows = n => /[\p{L}\p{N}\p{Extended_Pictographic}]/u.test(String(n).replace(/[\p{Default_Ignorable_Code_Point}⠀]/gu, ''));
 
 /**
  * The mode: what internet.js and nearby.js plug into a room. newRoom takes it as `mode` and puts each hook on N
@@ -118,6 +157,8 @@ export const NAME = /^\S(?:.{0,22}\S)?$/u;             // a name: 1 to 24 charac
  *                        for a while gives way to whoever does; nearby, longer than HOLD: the others are away from now
  *                        on instead of here for GRACE, they have let us go by now)
  *   releaseHost()        a guest's room.release(n) for its own host (internet: hostGone, the host's place goes)
+ *   take()               room.take(), after status 'taken': this player takes the place over from the device that holds it
+ *                        (N.took; internet: a hello again at once, with take: 1)
  *   onDirect(P, open)    rtc.js: P's direct channels both opened (true), or one closed (false) (nearby: say _h)
  *   onHello(P, m)        rtc.js, rooms without brokers: an _h on a direct link that does not count yet
  * Also on N, from newRoom for link.js, rtc.js and the mode (not the mode's): emit, streaming(), playing(), pulse(now),
@@ -125,7 +166,7 @@ export const NAME = /^\S(?:.{0,22}\S)?$/u;             // a name: 1 to 24 charac
  */
 const REQUIRED = ['peerGone', 'restart', 'byeFrom'], BROKER_HOOKS = ['onConnected', 'onMessage', 'onDown'];
 const HOOKS = [...REQUIRED, ...BROKER_HOOKS, 'onLegacy', 'close', 'bye', 'back', 'deafBack', 'onUnlink', 'probe', 'hubCheck', 'longSleep', 'releaseHost',
-  'onDirect', 'onHello'];
+  'take', 'onDirect', 'onHello'];
 function modeHooks(mode, relay) {
   for (const k of Object.keys(mode)) if (!HOOKS.includes(k) || (mode[k] != null && typeof mode[k] !== 'function')) throw new Error('room: not a mode hook (or not a function): ' + k);
   for (const k of relay ? [...REQUIRED, ...BROKER_HOOKS] : REQUIRED) if (!mode[k]) throw new Error('room: the mode needs ' + k);
@@ -139,6 +180,12 @@ function modeHooks(mode, relay) {
  * @property {string} game           the game: rooms of different games never meet
  * @property {string} code           the room code ('' nearby)
  * @property {string} name           our player's name
+ * @property {boolean} ask            we came with a typed name: before taking a place whose device is still on the line, the
+ *                                   room asks (status 'taken'; room.take()). took: the player said it is them (room.take).
+ *                                   asked: internet, our host asked (taken) and the player has not answered yet: until then a
+ *                                   status for where we are says 'taken', not 'joining' (setStatus: a blip, a version passing by)
+ * @property {boolean} took
+ * @property {boolean} asked
  * @property {boolean} relay         true: the brokers carry data when the direct link cannot (internet rooms)
  * @property {number} max            players at most, the host included (2…MAX_PLAYERS)
  * @property {number} lostAfter      HOLD: a link silent this long is gone (and so are we, to the others, after a sleep this long)
@@ -183,6 +230,9 @@ function modeHooks(mode, relay) {
  *                                   (ours: me), away since (performance.now(); 0 while here). A guest's a is as the host
  *                                   says, the host's own as our link to it; awaySince adds what a guest cannot vouch for
  * @property {number} cutAt          a guest: since when our link to the host is missing or weak (0: it works)
+ * @property {?Array} along          internet, a guest that came over from a room that gave way (giveWay, 'go'): that room's
+ *                                   list as it travels ([[name, session, away ms], …]), in our hellos until the host answers
+ *                                   (the host keeps the places it lacks: internet.js keepAlong); null otherwise
  * @property {boolean} ever          we have linked with someone in this room: what we say by ourselves now is no longer
  *                                   the player's own act (internet.js: a hello is not fresh)
  * @property {string} sent           the host: the list as last sent (_r), so an unchanged one does not go again
@@ -190,6 +240,11 @@ function modeHooks(mode, relay) {
  * @property {Map} strangers         session → when we last told it we are not linked, or our version at the door
  *                                   (internet.js: stranger, door; due)
  * @property {number} yieldUntil     internet, a host awake from a long sleep: until then it gives way to any other host
+ * @property {?object} kept          internet: the places the page before this one in the tab kept for this room ({ at, m },
+ *                                   keptPlaces), until a fresh page that nobody answered takes them back (restorePlaces)
+ * @property {boolean} restored      it did (room.restored, event 'restored')
+ * @property {number} heirAt         internet, a guest: when another session last asked for the room with our host's name
+ *                                   (internet.js heir: that player went on there; once the host is quiet, we move on)
  * The room as a whole:
  * @property {boolean} linked        someone else is here and we hear each other
  * @property {boolean} weak          someone linked went quiet: the game pauses
@@ -288,6 +343,10 @@ function modeHooks(mode, relay) {
  * @property {?number} iceRtt        the browser's own round trip, ms
  * @property {number} statsAt        when the browser was last asked (probeLink)
  * @property {boolean} failing       nearby: a failed pairing is being described
+ * @property {boolean} iceUp         nearby: the devices reached each other (ICE connected): a pairing that fails after
+ *                                   that says 'closed' (the other phone gave up), not that the network keeps them apart
+ * @property {boolean} taken         nearby, a guest: the host asked whether it is us (status 'taken'); room.take() says
+ *                                   hello again on this link, with take: 1
  */
 
 /**
@@ -296,22 +355,26 @@ function modeHooks(mode, relay) {
  *   name         this player's name
  *   relay        true: the brokers carry data when the direct link cannot (internet rooms)
  *   max          players in the room, the host included (2…MAX_PLAYERS)
+ *   ask          true: a name the player typed: a place of that name whose device is still on the line is not taken
+ *                before the player says so (status 'taken', room.take()); false (default): taken as ever (a reload, a
+ *                return: the same player)
  *   mode         the mode's hooks (above)
  */
-export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode = {} }) {
-  if (typeof name !== 'string' || !NAME.test(name)) throw new Error('room: a name of 1 to 24 characters');
+export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, ask = false, mode = {} }) {
+  if (!ownName(name)) throw new Error('room: a name of 1 to 24 characters (not «*»)');
   const hooks = modeHooks(mode, relay);
   const ev = emitter();
   const N = {
-    game, code, name, relay, lostAfter: HOLD, max: Math.max(2, Math.min(MAX_PLAYERS, max | 0 || MAX_PLAYERS)), closed: false,
+    game, code, name, relay, ask: !!ask, took: false, asked: false, lostAfter: HOLD, max: Math.max(2, Math.min(MAX_PLAYERS, max | 0 || MAX_PLAYERS)), closed: false,
     // brokers (brokers.js); seq starts from the clock, so numbers of a new connection never collide with what
     // the other players remember from our previous one (and, in this page, never below them: brokers.js seqHi)
     keys: null, keyMs: null, topic: '', legacy: '', clients: [], br: [], seq: Date.now(), out: Promise.resolve(), wait: new Set(), kq: new Map(), spare: null,
     stash: null, hid: false, door: null, last: new Map(), ready: false, up: false, kickAt: -1e9, kAt: 0, kPrev: 0, rxAt: 0, winAt: 0, pubN: 0,
     // our role, the host's session (when we are a guest), the links (session → peer), the players
     // ({ n: name, s: session, a: away since, 0 while here }, in the order they came; ours has s = me)
-    role: null, host: null, peers: new Map(), members: [{ n: name, s: me, a: 0 }], sent: '', told: [], cutAt: 0, ever: false,
-    linked: false, weak: false, statsDue: false, budgetSaid: false, strangers: new Map(), yieldUntil: 0, status: '', mismatch: null,
+    role: null, host: null, peers: new Map(), members: [{ n: name, s: me, a: 0 }], sent: '', told: [], cutAt: 0, ever: false, along: null,
+    kept: relay ? keptPlaces(code, name) : null, restored: false,
+    linked: false, weak: false, statsDue: false, budgetSaid: false, strangers: new Map(), yieldUntil: 0, heirAt: 0, status: '', mismatch: null,
     // the watchdog (link.js)
     lastWatch: 0, watchMs: 0, graceUntil: 0, heardAt: 0, stall: 0,
     // timers
@@ -333,6 +396,8 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
     get nearby() { return !relay; },                   // a nearby room (no internet involved)
     get kind() { return relay ? 'internet' : 'nearby'; },
     get status() { return N.status; },                 // the last status the listeners heard (STATUSES; '' before the first)
+    // a fresh page alone in the room took back the places the page before it in this tab kept ('restored', once)
+    get restored() { return N.restored; },
     // a broker answers us: connected and heard lately (it echoes us every 5 s); a nearby room has none: always
     get online() { const t = performance.now(); return !relay || N.clients.some(c => c && c._ok && t - c._rx < 7000); },
     // The policies of whoever plays on the room (the library sets them for the open game; replace these functions):
@@ -353,6 +418,8 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
     },
     // let the place of a player who dropped out go now (nobody wants to wait any longer)
     release: n => release(N, n),
+    // after status 'taken' (the player said it is them): take the place over from the device that holds it
+    take: () => { if (!N.closed) { N.took = true; N.take(); } },
     lag: n => pick(N, n, lag, Math.max, 0),            // one-way delay estimate, ms (to one player, or the slowest)
     stats: n => roomStats(N, n),                       // { rtt, peerRtt, direct, relayed, turn, weak }
     diag: () => diag(N),                               // multi-line connection report
@@ -372,6 +439,7 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
   // our timers and the page's listeners.
   const shut = (final, out) => {
     if (N.closed) return;
+    if (final) forgetPlaces(N);                        // (we left for good: the next page here does not come back to them)
     N.closed = true; N.linked = false; N.weak = false;
     N.close(final, out);
     stop(N, 'watchTimer', 'versionTimer', 'aliveTimer');
@@ -397,6 +465,7 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
   const onPageHide = () => {
     if (N.closed) return;
     N.hid = true;
+    keepPlaces(N);                                     // (for the next page in this tab: a reload)
     for (const P of linkedPeers(N)) try { send(P, { t: 'bye' }); if (N.relay) flushRelay(P); } catch (e) {}
     try { N.bye(); } catch (e) {}
   };
@@ -414,7 +483,7 @@ export function newRoom({ game, code = '', name, relay, max = MAX_PLAYERS, mode 
   };
   // back on screen (a background tab may have been throttled to a timer a second, too little to count as sleep); and
   // out of sight: no watching the direct link closely (tendAlive)
-  const onShow = () => { tendAlive(N); if (!document.hidden) kick(N); };
+  const onShow = () => { tendAlive(N); if (!document.hidden) kick(N); else keepPlaces(N); };
   document.addEventListener('visibilitychange', onShow);
   addEventListener('pageshow', onPageShow);
   return { N, room };
@@ -459,9 +528,11 @@ export function closePeer(P) {
 
 // A handshake (internet: who, host, hello, hi; nearby: _h) from another library version (config.js PROTO), or with
 // a pv that is not a version: true, and the mode ignores it (no link with them). The room says 'version' (unless it
-// already does) and keeps their number as room.versionMismatch, until we link with someone or have not heard that
-// version for TIMING.VERSION (it left: a tab of it still on our code says so at least every 10 s, as a host); then a
-// room alone says 'waiting' again.
+// already does; also while linked: the add-player screen says why a third player cannot join) and keeps their number
+// as room.versionMismatch, until we link with someone or have not heard that version for TIMING.VERSION (it left: a
+// tab of it still on our code says so at least every 10 s, as a host); then the status says where we are again: ready
+// (linked), waiting (a host alone), joining (a guest), connecting (still looking). (A nearby room not linked keeps
+// 'version': its pairing ended for that.)
 export function otherVersion(N, m) {
   const v = pvOf(m);
   if (v === PROTO) return false;
@@ -470,7 +541,9 @@ export function otherVersion(N, m) {
     stop(N, 'versionTimer');
     N.versionTimer = setTimeout(() => {
       N.versionTimer = null; N.mismatch = null;
-      if (!N.closed && N.relay && !N.linked && N.status === 'version' && N.role === 'host') setStatus(N, 'waiting');
+      if (!N.closed && N.status === 'version' && (N.linked || N.relay)) {
+        setStatus(N, N.linked ? 'ready' : N.role === 'host' ? 'waiting' : N.role === 'guest' ? 'joining' : 'connecting');
+      }
     }, TIMING.VERSION);
     setStatus(N, 'version');
   }
@@ -509,7 +582,10 @@ export function unlink(P, { quiet = false, linger = 0 } = {}) {
   N.peers.delete(P.id);
   if (!was) return;
   N.linked = linkedPeers(N).length > 0;
-  if (!N.linked && !quiet) N.emit('peer-gone');
+  if (!N.linked && !quiet) {
+    if (N.relay && N.role === 'host') setStatus(N, 'peer-left');   // (internet: a host left alone; a guest: hostGone; nearby: ended)
+    N.emit('peer-gone');
+  }
   weakChanged(N);
   N.statsDue = true;
 }
@@ -548,7 +624,7 @@ export const awaySince = (N, m) => m.a || (N.role !== 'host' && m.n !== N.name ?
 export function seatMember(N, n, s) {
   N.members = N.members.filter(x => x.n === n || x.s !== s);
   const m = memberOf(N, n);
-  if (m) { m.s = s; m.a = 0; } else N.members.push({ n, s, a: 0 });
+  if (m) { m.s = s; m.a = 0; delete m.along; } else N.members.push({ n, s, a: 0 });
   presence(N);
 }
 // a player's place goes (they left for good, nobody waits for them any more, or HOLD is over)
@@ -565,10 +641,56 @@ export function holdOver(N, now) {
   if (N.role !== 'host') return;
   for (const m of [...N.members]) if (m.a && now - m.a > HOLD) dropMember(N, m.n);
 }
+// The places an internet room's page keeps in its tab, for the next page there (a reload: owner, q29): sessionStorage
+// PLACES = { room: [kind, code, our name], at: Date.now(), m: [[name, session, away ms], …] } (as the list travels:
+// validWire), written whenever the list or an away flag changes (tell), as the page is hidden and as it goes (pagehide),
+// and forgotten when we leave for good. Read and written as the browser lets us (site data may be blocked: it throws);
+// what it cannot keep is simply not there for the next page.
+const PLACES = 'ihroteka-places';
+const placesOf = (code, name) => ['internet', code, name];
+const keptOf = (code, name) => { const k = JSON.parse(sessionStorage.getItem(PLACES)); return k && JSON.stringify(k.room) === JSON.stringify(placesOf(code, name)) ? k : null; };
+function keepPlaces(N) {
+  if (!N.relay || N.closed || N.role === null) return;   // (still looking: our list is not the room's)
+  const now = performance.now(), m = N.members.map(x => { const a = awaySince(N, x); return [x.n, x.s, a ? Math.max(1, Math.round(now - a)) : 0]; });
+  try { sessionStorage.setItem(PLACES, JSON.stringify({ room: placesOf(N.code, N.name), at: Date.now(), m })); } catch (e) {}
+}
+function forgetPlaces(N) {
+  try { if (N.relay && keptOf(N.code, N.name)) sessionStorage.removeItem(PLACES); } catch (e) {}
+}
+// what the page before this one in the tab kept for this room as this player → { at, m } | null
+function keptPlaces(code, name) {
+  try { const k = keptOf(code, name); return k && Number.isFinite(k.at) && validWire(k.m) ? { at: k.at, m: k.m } : null; } catch (e) { return null; }
+}
+// A fresh page (nothing linked yet) holds the room only because nobody answered (internet.js discover): the other
+// players the page before it kept are its places again, in their order, away since they dropped out there (the time
+// since it kept them counts too: their HOLD runs from the drop, not from the reload), but for one past HOLD by now.
+// From here on each is held as any place (holdOver, «Не чекати», their hello: seatMember, two rooms: giveWay). A host
+// that answers wins: then nothing is taken back. → whether any was (the room says 'restored': the library takes back
+// what it kept too)
+export function restorePlaces(N) {
+  const k = N.kept;
+  N.kept = null;
+  if (!k || N.ever || N.members.length !== 1) return false;
+  const now = performance.now(), since = Math.max(0, Date.now() - k.at), seen = new Set(), list = [];
+  let room = N.max - 1;
+  for (const [n, s, a] of k.m) {
+    if (seen.has(n)) continue;
+    seen.add(n);
+    const away = Math.max(1, a) + since;
+    if (n === N.name) list.push(N.members[0]);
+    else if (s !== me && away <= HOLD && room > 0) { list.push({ n, s, a: now - away }); room--; }
+  }
+  if (!seen.has(N.name) || list.length < 2) return false;
+  N.members = list;
+  N.restored = true;
+  return true;
+}
+
 // The game hears who came, who left, who dropped out or is back, and who goes on in a new tab.
 function tell(N) {
   const before = N.told, after = N.members.map(m => ({ n: m.n, s: m.s, away: !!awaySince(N, m) }));
   N.told = after;
+  if (JSON.stringify(before) !== JSON.stringify(after)) keepPlaces(N);
   for (const b of before) if (!after.some(a => a.n === b.n)) N.emit('leave', b.n);
   for (const a of after) {
     const b = before.find(x => x.n === a.n);
@@ -585,11 +707,13 @@ function setMembers(N, wire) {
   if (!memberOf(N, N.name)) N.members.push({ n: N.name, s: me, a: 0 });
   presence(N);
 }
-// A guest just linked with the host: until it sends the players, the list we had (the host here now, on its
-// session) if it fits, else the two of us.
+// A guest just linked with the host: until it sends the players, the list we had, the host here now (on its session);
+// a host missing from it (we came over from a room that gave way to this host's: internet.js giveWay, 'go') goes in
+// front, and the others count as away until its list comes (we cannot vouch for them; nobody hears anyone leave).
 export function guestMembers(N, hostName) {
-  const h = memberOf(N, hostName);
-  if (h) { h.s = N.host; h.a = 0; } else N.members = [{ n: hostName, s: N.host, a: 0 }, { n: N.name, s: me, a: 0 }];
+  const h = memberOf(N, hostName), now = performance.now();
+  if (h) { h.s = N.host; h.a = 0; }
+  else N.members = [{ n: hostName, s: N.host, a: 0 }, ...N.members.filter(x => x.s !== N.host).map(x => x.s === me ? x : { ...x, a: x.a || now })];
   presence(N);
 }
 // a list of players as it travels: [[name, session, away ms], …] (_r; nearby.js, a guest's _h)
@@ -601,7 +725,10 @@ function release(N, n) {
   if (n === N.name) return;
   if (N.role === 'host') {
     const m = memberOf(N, n), P = m && N.peers.get(m.s);
-    if (P && P.linked) send(P, { t: 'bye', menu: 1 });   // if it is still there somewhere: it is not in the room any more
+    // nearby: if it is still there, it is not in the room any more (it pairs again). Over the internet its tab, if alive,
+    // is told nothing (a final bye from its host would say the HOST left): as when HOLD runs out, it is a stranger to us
+    // now and comes back as a new player when it next talks to us (internet.js: stranger, 'host' u: 1 → hello)
+    if (P && P.linked && !N.relay) send(P, { t: 'bye', menu: 1 });
     dropMember(N, n);
     return;
   }
@@ -619,11 +746,11 @@ function sendRoom(N, msg, to, opts) {
   }
   const H = hostPeer(N);
   if (!H || !H.linked) return;
-  send(H, to === H.name ? msg : { ...msg, _t: to === undefined ? '*' : to }, opts);
+  send(H, to === H.name ? msg : { ...msg, _t: to === undefined ? EVERYONE : to }, opts);
 }
 
 // A message from P (reliable: it was numbered, see link.js). The host passes on what a guest sent to others:
-// _t says to whom ('*': everyone), _f (only from the host) who wrote it.
+// _t says to whom (EVERYONE: everyone), _f (only from the host) who wrote it.
 function arrive(N, P, m, reliable) {
   if (m.t === '_r') {                                  // the players, from the host
     if (N.role === 'guest' && P.id === N.host && validWire(m.m)) setMembers(N, m.m);
@@ -637,8 +764,8 @@ function arrive(N, P, m, reliable) {
   const to = m._t, from = N.role === 'host' ? P.name : typeof m._f === 'string' ? m._f : P.name;
   delete m._t; delete m._f;
   if (N.role === 'host' && to !== undefined) {
-    for (const Q of linkedPeers(N)) if (Q !== P && (to === '*' || Q.name === to)) send(Q, { ...m, _f: from }, { fast: !reliable });
-    if (to !== '*' && to !== N.name) return;
+    for (const Q of linkedPeers(N)) if (Q !== P && (to === EVERYONE || Q.name === to)) send(Q, { ...m, _f: from }, { fast: !reliable });
+    if (to !== EVERYONE && to !== N.name) return;
   }
   N.emit('message', m, from, reliable);              // (reliable: numbered, so a game's copy that holds it keeps it all)
 }
@@ -676,11 +803,12 @@ export function startWatch(N) {
 }
 
 // The room's status changes (STATUSES): the listeners hear it once, never the same one twice in a row. A room alone,
-// while a player of another library version is on its code (otherVersion), says 'version' instead of 'waiting': what
-// the players need to know is that one of them must update the page.
+// while a player of another library version is on its code (otherVersion), says 'version' instead of 'waiting' or
+// 'peer-left': what the players need to know is that one of them must update the page.
 export function setStatus(N, s) {
   if (!STATUSES.includes(s)) throw new Error('room: not a status: ' + s);
-  if (s === 'waiting' && N.mismatch !== null && !N.linked) s = 'version';
+  if ((s === 'waiting' || s === 'peer-left') && N.mismatch !== null && !N.linked) s = 'version';
+  if (s === 'joining' && N.asked && !N.took) s = 'taken';   // (asked: the hellos wait for the player's answer, room.take)
   if (s === N.status) return;
   N.status = s;
   N.emit('status', s);

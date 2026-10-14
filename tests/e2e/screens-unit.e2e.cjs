@@ -6,7 +6,9 @@
 // by display, visibility or opacity (on today's engine, one whose checkVisibility knows only the old option names,
 // Chromium 105–120, and one without it, Safari before 17.4; opacity .5 is still seen), its pointer events off, scrolled
 // out of the frame's view, covered, only its button covered (one out of view still counts), held while a library
-// dialog is open, two copies, and the event after the rows are in place. Then the dialog's guards: a browser that
+// dialog is open, two copies, and the event after the rows are in place; copies connected, moved and dropped inside the
+// browser's ResizeObserver delivery (from the game's own observer and from a 'showing' listener), pass after pass: the
+// browser has no ResizeObserver loop to report (WebKit reports it as an error). Then the dialog's guards: a browser that
 // knows no inert (Safari before 15.5) keeps Tab and Shift+Tab in the dialog, and a game that pulls the focus into its
 // frame behind a dialog loses it back to the dialog (Escape still closes it). screens is the integration test.
 'use strict';
@@ -58,6 +60,10 @@ window.U = {
     return c;
   },
   drop(c) { c.remove(); S.waitScreen(c, false); },
+  // a copy put (back) into parent, as the element's connected callback says it (a move: drop, then put)
+  put(c, parent, first = false) { parent[first ? 'prepend' : 'append'](c); S.waitScreen(c, true); return c; },
+  // the passes come by themselves, as invite.js runs them when screens.js asks (soon): each one with what fn says
+  passes(fn) { S.initScreens(() => S.show(model(fn()), { release: () => {}, repair: () => {}, update: () => {} })); },
   // the pass: whether a copy holds the rows (then the card says nothing)
   show(key = 'a') { return S.show(model(key), { release: () => {}, repair: () => {}, update: () => {} }); },
   state() { return S.state(); },
@@ -195,6 +201,54 @@ scenario('screens-unit: which copy is seen, and the dialog\'s guards', async () 
   check(r.held && r.inertHeld && !r.after, 'a library dialog open (the stage inert): the holder keeps the rows, covered or not; closed: looked at again', r);
   check(r.keeps && r.takes, 'two copies: the one that holds the rows keeps them; it gone: the other takes them', r);
   check(JSON.stringify(r.heard) === JSON.stringify(['rows link', 'rows link', 'empty null']), '`showing` heard when what is said changed, with the rows (and the attribute) in place', r.heard);
+
+  // (CI, WebKit: «ResizeObserver loop completed with undelivered notifications» on a page of the template game; Chromium
+  // dispatches the same error event, it only does not report it)
+  step('a copy connected and moved from inside the game\'s own ResizeObserver and from a showing listener, many passes: no ResizeObserver loop');
+  r = await run(async () => {
+    const W = document.getElementById('f').contentWindow, d = W.document, loops = [], frame = () => new Promise(res => W.requestAnimationFrame(() => res()));
+    const loop = e => { if (/ResizeObserver loop/.test(e.message || '')) loops.push(e.message); };
+    W.addEventListener('error', loop); window.addEventListener('error', loop);
+    await U.fresh();
+    let k = 0, passes = 0;
+    U.passes(() => { passes++; return ++k < 40 ? (k % 2 ? 'a' : 'b') : 'a'; });   // (a new key each pass for a while: the event each time)
+    // the game: a deep node its own observer watches; each delivery it places a copy (now in a new layer, now in the
+    // page's flow), moves one (the oldest, which may hold the rows), drops one; then it changes that node's size in its
+    // next frame (never inside: that would be the game's own loop). A 'showing' listener moves copies too.
+    const deep = d.getElementById('game').appendChild(d.createElement('section')).appendChild(d.createElement('div')).appendChild(d.createElement('div'));
+    deep.style.cssText = 'height:12px;width:10px;background:#ccc';
+    const copies = [U.add(), U.add({ flow: true })];
+    let n = 0, moved = 0;
+    const onShowing = e => {
+      if (moved++ > 30) return;
+      const c = e.currentTarget;
+      if (!c.isConnected) return;
+      const to = c.parentElement === d.body ? d.querySelector('.layer') || d.body : d.body;
+      U.drop(c); U.put(c, to, moved % 2 === 0);
+    };
+    const watchOne = c => { c.addEventListener('showing', onShowing); return c; };
+    copies.forEach(watchOne);
+    const game = new W.ResizeObserver(() => {
+      if (++n > 30) return;
+      copies.push(watchOne(U.add({ flow: n % 3 === 0, first: n % 2 === 0 })));
+      const old = copies.shift();
+      U.drop(old); U.put(old, n % 2 ? d.body : d.querySelector('.layer') || d.body, n % 4 === 0);
+      copies.push(old);
+      if (copies.length > 4) U.drop(copies.shift());
+      W.requestAnimationFrame(() => { deep.style.width = (10 + n) + 'px'; });
+    });
+    game.observe(deep);
+    for (let i = 0; i < 90 && n <= 30; i++) await frame();
+    for (let i = 0; i < 10; i++) await frame();
+    game.disconnect();
+    W.removeEventListener('error', loop); window.removeEventListener('error', loop);
+    const out = { loops, deliveries: n, passes, moved, held: U.state().held, copies: U.state().copies };
+    await U.fresh();                                       // (no passes by themselves after this)
+    return out;
+  });
+  check(r.deliveries > 30 && r.moved > 10 && r.passes > 20, 'the game\'s observer placed and moved copies in 30 deliveries, a \'showing\' listener moved them, pass after pass', r);
+  check(r.loops.length === 0, 'no ResizeObserver loop: the browser had nothing to report', r.loops);
+  check(r.held, 'and a copy holds the rows', r);
 
   step('the dialog with no inert (Safari before 15.5): Tab and Shift+Tab stay in it');
   await run(() => { delete HTMLElement.prototype.inert; document.getElementById('stage').hidden = true; document.getElementById('shelf').hidden = false; });

@@ -273,6 +273,73 @@ describe('the tab\'s commands and options', { concurrency: 4 }, () => {
     assert.equal(ev[ev.indexOf('leaveOn version') - 1], 'status version', 'in the same call');
   });
 
+  test('join(…, { ask }), near(…, { ask }) and take(): a typed name is asked about while its place\'s device is on the line (taken), take() takes it', T, async t => {
+    const W = world(t, { rtc: true });
+    const [A, B] = await room(W, 'supask01', ['Аня', 'Богдан']);
+    const B2 = await W.tab('p3tab');
+    await B2.join('supask01', 'Богдан', { ask: true });
+    assert.ok(await until(async () => (await B2.state()).status === 'taken', 5000), 'asked: ' + await shows([B2]));
+    await B2.take();
+    assert.ok(await until(settled([A, B2]), 5000), 'it takes the place: ' + await shows([A, B2]));
+    assert.equal((await B.state()).role, 'out');
+    // nearby: the same option reaches joinNearby
+    const H = await W.tab('p4tab'), G = await W.tab('p5tab'), G2 = await W.tab('p6tab');
+    await H.near('Ганна'); await G.near('Гліб');
+    await G.pair('answer', await H.pair('offer')).then(code => H.pair('finish', code));
+    assert.ok(await until(settled([H, G]), 5000), await shows([H, G]));
+    await G2.near('Гліб', { ask: true });
+    await G2.pair('answer', await H.pair('offer')).then(code => H.pair('finish', code));
+    assert.ok(await until(async () => (await G2.state()).status === 'taken', 5000), 'asked: ' + JSON.stringify(await G2.state()));
+  });
+
+  test('lib(…, { ask }): the option reaches startInternet (true: asked, as a name typed in the dialog); by default not asked, as before', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'supask02', ['Аня', 'Богдан'], { lib: {} });
+    const B2 = await W.tab('p3tab');
+    await B2.lib('supask02', 'Богдан', {}, undefined, { ask: true });
+    assert.ok(await until(async () => (await B2.state()).status === 'taken', 5000), 'asked: ' + await shows([B2]));
+    assert.deepEqual([(await B.state()).linked, (await A.state()).players], [true, ['Аня', 'Богдан']], 'nobody moved');
+    const B3 = await W.tab('p4tab');
+    await B3.lib('supask02', 'Богдан');
+    assert.ok(await until(settled([A, B3]), 5000), 'not asked: ' + await shows([A, B3]));
+  });
+
+  test('local: tabs given the same local object are one browser (one localStorage, a change in one is in the others), a reload keeps it; any other tab is a browser of its own', T, async t => {
+    const W = world(t);
+    const L = { 'ihroteka-name': 'Віра' };                  // (its own entries: what that browser holds at first)
+    const A = await W.tab('aaaa1111', {}, { local: L });
+    const has = (X, k, v) => until(async () => (await X.local()).some(([a, b]) => a === k && b === v), 3000);
+    assert.deepEqual(await A.local(), [['ihroteka-name', 'Віра']]);
+    await A.lib('suploc01', 'Аня');                          // (together.js remembers the room and the name)
+    assert.ok(await has(A, 'ihroteka-name', 'Аня') && await has(A, 'ihroteka-room', 'suploc01'), JSON.stringify(await A.local()));
+    const B = await W.tab('bbbb1111', {}, { local: L }), C = await W.tab('cccc1111');
+    assert.ok(await has(B, 'ihroteka-room', 'suploc01'), 'a new tab of that browser starts with it: ' + JSON.stringify(await B.local()));
+    assert.deepEqual(await C.local(), [], 'another browser has none of it');
+    await B.lib('suploc02', 'Богдан');
+    assert.ok(await has(A, 'ihroteka-name', 'Богдан'), 'a change in one tab is in the other: ' + JSON.stringify(await A.local()));
+    assert.ok(!(await C.local()).length, 'not in another browser');
+    await B.close();
+    const A2 = await A.reload();
+    assert.ok(await has(A2, 'ihroteka-room', 'suploc02'), 'the next page in the tab has it too: ' + JSON.stringify(await A2.local()));
+    await C.lib('suploc03', 'Сава');
+    const C2 = await C.reload();
+    assert.ok(await has(C2, 'ihroteka-name', 'Сава'), 'each browser keeps its own: ' + JSON.stringify(await C2.local()));
+    assert.ok(await has(A2, 'ihroteka-name', 'Богдан'), JSON.stringify(await A2.local()));
+  });
+
+  test('reload({ boot: true }): the next page starts the library at the address the page had; after «Оновити» it is back in its room by itself (REJOIN)', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'supboot1', ['Аня', 'Богдан'], { lib: {} });
+    assert.equal((await B.call('address')).search, '?room=supboot1', 'the address names the room (together.js setQuery)');
+    await B.call('updateNow');
+    assert.equal(await B.reloadDone(), 'reload');
+    const B2 = await B.reload({ boot: true });
+    assert.ok(await until(settled([A, B2]), 8000), 'back in the room, nobody asked: ' + await shows([A, B2]));
+    assert.ok((await B2.events()).some(e => e[1] === 'linked'), 'its room is watched as any other');
+    const C = await (await W.tab('p3tab')).reload({ boot: true });
+    assert.equal(await C.state(), null, 'no room in the address, none to go back into');
+  });
+
   test('pagehide({ persisted, lost }) and pageshow({ after }): into the back-forward cache, its goodbye lost or not, and back', T, async t => {
     const W = world(t), S = W.spy();
     const [, B] = await room(W, 'supbfc01', ['Аня', 'Богдан']);

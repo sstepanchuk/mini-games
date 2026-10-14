@@ -13,19 +13,24 @@
 //                                          have one long and the rest short); rtc: fake direct links (fakertc.js)
 //                                          besides the brokers
 //   const A = await W.tab('aaaa1111')      a tab; its session starts with this pid (sessions decide some elections);
-//                                          W.tab(pid, net, { strip, reloadAnswer, initial, … }): a browser without
-//                                          what strip names ('Array.prototype.at' …), see tab.js
-//   await A.join('room01', 'Аня')          a net-level room (library/net joinRoom); A.lib(code, name, seats, wires): the
-//                                          library's room (together.js), and A.open(game), A.game(), A.gsend(m) → true |
-//                                          false, A.snapshot(s), A.share(k, v) …;
-//                                          A.near(name): a nearby one (rtc), paired with A.pair('offer' | 'answer' | 'finish', code);
-//                                          A.libNear(name): the library's nearby room (together.js startNearby), paired so too
+//                                          W.tab(pid, net, { strip, reloadAnswer, initial, local, … }): a browser without
+//                                          what strip names ('Array.prototype.at' …), see tab.js; tabs given the same
+//                                          local object are tabs of one browser (one localStorage); by default each tab
+//                                          is a browser of its own
+//   await A.join('room01', 'Аня')          a net-level room (library/net joinRoom; { ask: true }: a typed name, asked
+//                                          about first while its place's device is on the line: A.take()); A.lib(code,
+//                                          name, seats, wires, { ask }): the library's room (together.js startInternet),
+//                                          and A.open(game), A.game(), A.gsend(m) → true | false, A.snapshot(s), A.share(k, v) …;
+//                                          A.near(name, { ask }): a nearby one (rtc), paired with A.pair('offer' | 'answer' | 'finish', code);
+//                                          A.libNear(name, seats, wires, { ask }): the library's nearby room (together.js
+//                                          startNearby), paired so too
 //   await A.state(), A.events(), A.got(), A.net({ up: false }), A.send(m, opts, then), A.release(n), A.lag(n), A.leave(final, send), A.kill(),
 //   A.listeners(), A.timers() …; A.open(id, { wire }): a game whose copy here speaks this wire;
 //   A.pagehide({ persisted, lost, quiet }), A.pageshow({ after, quiet }): into the back-forward cache and back (quiet: no
 //                                          'offline' / 'online' with them, as browsers do; netState().said counts them); A.throttle({ every }):
 //                                          its timers held back as a hidden tab's (tab.js, the top)
-//   const A2 = await A.reload()            the page reloads in the same tab (its sessionStorage kept), in no room until
+//   const A2 = await A.reload()            the page reloads in the same tab (its sessionStorage kept, and its browser's
+//                                          localStorage: A.local()), in no room until
 //                                          A2.lib(…), as a page that comes back from its room's link; at its game, if
 //                                          it was in one (/<id>/?room=: the shell shows it before the room is back)
 //   await until(async () => …, ms)         poll a condition (truthy → it; deadline → false)
@@ -95,7 +100,30 @@ export function world(t, { scale = 1, timing = null, brokerMs = 25, rtc = false 
     const k = setTimeout(() => res([as + ': no answer in 10 s (a loop that never ends?)']), 10000);
     T.errors().then(e => e.map(x => as + ': ' + x), () => []).then(e => { clearTimeout(k); res(e); });
   });
-  const going = async T => { gone.push(...await ask(T, T.pid + ' (before it went)')); };
+  const going = async T => { const [e] = await Promise.all([ask(T, T.pid + ' (before it went)'), keepLocal(T)]); gone.push(...e); };
+  // Each browser's localStorage (tab.js local): a tab's `local` object stands for its browser. A new tab of a browser
+  // starts with what one of its tabs still there holds, or else what the last of them held as it went (seed: at first,
+  // the object's own entries); its tabs then share each change on a channel of their own (browser).
+  // (A tab that does not answer in 10 s, frozen or stuck, is not asked: its browser keeps what it had.)
+  const browsers = new WeakMap();                        // local object → { name, seed: [[key, value], …], open: Set of its tabs }
+  let nBrowsers = 0;
+  const browserOf = local => {
+    if (!browsers.has(local)) browsers.set(local, { name: bus + ':local:' + (++nBrowsers), seed: Object.entries(local).map(([k, v]) => [k, String(v)]), open: new Set() });
+    return browsers.get(local);
+  };
+  const localOf = T => new Promise(res => {
+    const k = setTimeout(() => res(null), 10000);
+    T.call('localAll').then(v => { clearTimeout(k); res(v); }, () => { clearTimeout(k); res(null); });
+  });
+  const keepLocal = async T => {
+    const B = browserOf(T.browser);
+    B.open.delete(T);
+    B.seed = await localOf(T) || B.seed;
+  };
+  const seedOf = async B => {
+    for (const T of B.open) { const v = await localOf(T); if (v) return v; }
+    return B.seed;
+  };
   let urls = null;
   // the rooms the tabs joined: sealed topic → key; and each sender's highest number on the bus (a spy that speaks as
   // that sender takes one above it: the replay window, seal.js, takes no number twice nor one far below the highest)
@@ -117,9 +145,13 @@ export function world(t, { scale = 1, timing = null, brokerMs = 25, rtc = false 
      *  kept: its sessionStorage to start with, [[key, value], …] (reload); initial: the game its address names (reload);
      *  strip: what this browser does not have ('Array.prototype.at', 'structuredClone' …); reloadAnswer: what the
      *  shell's reload says ('reload': once the offline copy is in place, reloadDone; 'storage', 'failed', 'timeout',
-     *  'same': at once). A tab whose library does not load (its timing refused) → rejects */
-    async tab(pid, net = {}, { library, dev, insecure, kept, initial, strip, reloadAnswer } = {}) {
-      const w = new Worker(TAB, { workerData: { pid, bus, scale, timing, brokerMs, rtc, net, library, dev, insecure, kept, initial, strip, reloadAnswer } });
+     *  'same': at once); local: an object that stands for the tab's browser (tabs given the same one share its
+     *  localStorage; its own entries, the first time: what that holds at first; none: a browser of its own). A tab whose
+     *  library does not load (its timing refused) → rejects */
+    async tab(pid, net = {}, { library, dev, insecure, kept, initial, strip, reloadAnswer, local = {}, search, boot } = {}) {
+      const B = browserOf(local);
+      const w = new Worker(TAB, { workerData: { pid, bus, scale, timing, brokerMs, rtc, net, library, dev, insecure, kept, initial, strip, reloadAnswer,
+        local: await seedOf(B), browser: B.name, search, boot } });
       const waits = new Map();
       let n = 0, dead = null;
       const ready = new Promise((res, rej) => {
@@ -137,12 +169,15 @@ export function world(t, { scale = 1, timing = null, brokerMs = 25, rtc = false 
       const call = (cmd, args) => dead ? Promise.reject(dead) : new Promise((res, rej) => { const id = ++n; waits.set(id, { res, rej }); w.postMessage({ id, cmd, args }); });
       const { session } = await ready;
       const T = {
-        pid, session, worker: w, call,
-        join: (code, name, o = {}) => { know(o.game || 'test', code); return call('join', { code, name, ...o }); },
-        near: (name, o = {}) => call('near', { name, ...o }),     // a nearby room (world rtc), then pair('offer') …
+        pid, session, worker: w, call, browser: local,   // browser: its local object (W.tab(pid, net, { local: A.browser }): a tab of A's browser)
+        join: (code, name, o = {}) => { know(o.game || 'test', code); return call('join', { code, name, ...o }); },   // o: { max, game, ask }
+        near: (name, o = {}) => call('near', { name, ...o }),     // a nearby room (world rtc), then pair('offer') …; o: { max, game, leaveOn, ask }
         pair: (step, code) => call('pair', { step, code }),
-        lib: (code, name, seats, wires) => { know('ihroteka', code); return call('lib', { code, name, seats, wires }); },   // (together.js LIB)
-        libNear: (name, seats, wires) => call('libNear', { name, seats, wires }),   // the library's nearby room (world rtc), then pair(…)
+        take: () => call('take'),                          // after status 'taken': it is them (room.take)
+        // (together.js LIB; o: startInternet's options, { ask })
+        lib: (code, name, seats, wires, o) => { know('ihroteka', code); return call('lib', { code, name, seats, wires, o }); },
+        libNear: (name, seats, wires, o) => call('libNear', { name, seats, wires, o }),   // the library's nearby room (world rtc), then pair(…)
+        local: () => call('localAll'),                     // the browser's localStorage as this page sees it, [[key, value], …]
         state: () => call('state'),
         log: (from, gfrom) => call('log', { from, gfrom }),
         events: async () => (await call('log')).events,
@@ -188,18 +223,22 @@ export function world(t, { scale = 1, timing = null, brokerMs = 25, rtc = false 
         close: async o => { await call('pagehide', o); await going(T); await w.terminate(); },
         // the page reloads: it goes as close does (o), and the next page in this tab (→ its tab: the same pid, a new
         // session, the same browser) starts with what this one kept in sessionStorage (its pagehide's too), at the game
-        // it was in (the address it reloads at), in no room until it joins one (lib)
-        reload: async o => {
-          const initial = await call('view');
+        // it was in (the address it reloads at), in no room until it joins one (lib); o.boot: it starts the library at
+        // once at the address this page had (?room=: the library's own way back into its room, REJOIN; tab.js boot)
+        reload: async (o = {}) => {
+          const initial = await call('view'), at = o.boot ? await call('address') : null;
           await call('pagehide', o);
           const kept = await call('sessionAll');
           await going(T);
           await w.terminate();
-          return W.tab(pid, net, { library, dev, insecure, kept, initial, strip, reloadAnswer });
+          return W.tab(pid, net, { library, dev, insecure, kept, initial, strip, reloadAnswer, local,
+            ...(at && { search: at.search, boot: { seats: at.seats, wires: at.wires } }) });
         },
         onHide: (list, at) => call('onHide', { list, at })
       };
       tabs.push(T);
+      B.open.add(T);
+      w.on('exit', () => B.open.delete(T));
       return T;
     },
     // a spy: knows the code of every room of this world (see the top), or none (stranger)

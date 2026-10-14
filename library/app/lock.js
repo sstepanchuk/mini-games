@@ -145,13 +145,17 @@ function passwordDialog(game) {
 // keyring (the device remembers what it needs: no password). With the offline copy in charge, sw.js answers
 // from one consistent version (it does not install a copy that mixes two), so this happens only when a new version
 // took over while this page was open. Failures carry a message for the player (error.say).
+// A browser without DecompressionStream (Safari before 16.4: iOS 15–16.3) gunzips a game with lib/inflate.js (fflate),
+// loaded only there, by its URL (as qr.js loads lib/qr-scan.js: the build bundles without splitting, and would put it
+// in the library's own file); else the browser's own (undefined: crypto.js gameText).
+const gunzip = async () => typeof globalThis.DecompressionStream === 'undefined' ? (await import(new URL('lib/inflate.js', root).href)).gunzip : undefined;
 async function openSealed(file, aad, game, blob = prefetch(file)) {
   for (let retry = false; ; retry = true) {
     const p = unlock(game), key = await p, kr = await keyring();
     let data;
     try { data = await blob; } catch (e) { throw fail(offline(e) ? MSG.offline : MSG.game, e); }
     if (vault.fileKid(data) === kr.kid) {
-      try { return await vault.gameText(await vault.openFile(key, data, aad)); }
+      try { return await vault.gameText(await vault.openFile(key, data, aad), await gunzip()); }
       catch (e) { throw fail(MSG.game, e); }
     }
     if (retry) throw fail(MSG.updating, new Error(file + ': key id differs from keyring.json'));

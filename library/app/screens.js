@@ -15,10 +15,15 @@
    - The rows are waiting.js's, painted by one renderer for the card and the copies (paint): each row built once per
      key, so each second only its time changes and a focused button keeps its focus. When the rows move (a copy to the
      card, the card to a copy, a copy to another), a focused button's focus goes with them (focused, carry).
-   When it looks again (soon: one pass of invite.js waitNote, deduped in a microtask): a copy connected or gone, the
-   game's page parsed (DOMContentLoaded), the game attached or closed, a size change of a copy or of anything around it
-   (a ResizeObserver of the game's window, its work deferred to the game's next animation frame: a menu panel shown or
-   hidden); and each second (invite.js), for what no observer sees: a layer over the holder, scrolling. No rAF loop.
+   When it looks again (soon: one pass of invite.js waitNote, deduped in a microtask): the game's page parsed
+   (DOMContentLoaded), the game attached or closed; in the game's next animation frame, a copy connected or gone, a size
+   change of a copy or of its parent (a ResizeObserver of the game's window: a menu panel shown or hidden around a copy,
+   any ancestor's display changes the parent's box, and an empty copy has none); and each second (invite.js), for what
+   no observer sees: a layer over the holder, scrolling. No rAF loop. The observer never makes the browser report a
+   "ResizeObserver loop": nothing of ours is observed or changes size inside its delivery of observations (a copy may
+   connect from a game's own observer, or from a 'showing' listener): its callback and a copy that connects or goes only
+   ask for the next frame (frame), where the observations are brought up to date by difference (reconcile) before the
+   pass; a copy that goes is let go of at once (forget).
    While a library dialog is open (the stage inert), the holder stays as it is, with no hit test.
    ===================================================================== */
 import { safe } from './dom.js';
@@ -43,6 +48,7 @@ let copies = new Set(), holder = null;                   // its connected copies
 let isReady = true, took = false;                        // its page has parsed (true with no frame); a copy connected (adopted)
 let told = '', showing = '';                             // the model key last announced (the event); the kinds said now
 let ro = null, raf = 0, queued = false, repaint = null;  // the game's ResizeObserver, its frame; a pass asked; invite's waitNote
+let watched = new Set(), parentOf = new WeakMap();      // what the observer watches; a copy → the parent watched for it
 const warned = new Set();
 const built = new WeakMap();                             // box (a copy, the card) → Map(row key → { node, time })
 const made = new WeakMap();                              // a button of the rows → { key, act }: the same one elsewhere
@@ -63,6 +69,7 @@ export function attachScreens(w) {
 export function detachScreens() {
   try { if (ro) ro.disconnect(); if (raf && win) win.cancelAnimationFrame(raf); } catch (e) {}   // (the window may be gone)
   copies = new Set(); holder = null; win = null; ro = null; raf = 0; took = false; told = ''; showing = ''; isReady = true;
+  watched = new Set(); parentOf = new WeakMap();
   soon();
 }
 export const ready = () => isReady;
@@ -86,22 +93,47 @@ export function waitScreen(el, on) {
     copies.delete(el);
     if (holder === el) holder = null;
     clear(el);                                           // (a copy the game moves arrives empty)
+    forget(el);
   }
-  observe();
-  soon();
+  frame();                                               // (this may run inside the browser's delivery: see the top)
 }
 
-// The copies and everything around them, up to the root: one of them shown or hidden (a menu panel) is a pass, in
-// the game's next animation frame (so nothing changes inside the observer's callback: no "ResizeObserver loop").
-function observe() {
-  if (!win || !win.ResizeObserver) return;
+// The observer's work and what a copy that connects or goes asks for: in the game's next animation frame, never now
+// (now may be inside the browser's delivery of observations): the observations brought up to date, then a pass.
+function frame() {
+  const w = win;
+  try { if (w && !raf) raf = w.requestAnimationFrame(() => { raf = 0; if (win !== w) return; reconcile(); soon(); }); } catch (e) {}
+}
+// What the observer watches: each connected copy and its parent (an empty copy takes no room, so its parent says when
+// a panel around it is shown or hidden). By difference: what is new is observed, what went is let go of; never all of
+// it again (observing again resets what a target last reported: every one, <html> and <body> too, would be due again
+// inside the same delivery, where the browser skips them and reports a loop).
+function reconcile() {
+  const w = win;
+  if (!w || !w.ResizeObserver) return;
   try {
-    const w = win;
-    if (!ro) ro = new w.ResizeObserver(() => { if (!raf && win === w) raf = w.requestAnimationFrame(() => { raf = 0; soon(); }); });
-    ro.disconnect();
-    const seenNodes = new Set();
-    for (const el of copies) for (let n = el; n && !seenNodes.has(n); n = n.parentElement) { seenNodes.add(n); ro.observe(n); }
+    if (!ro) ro = new w.ResizeObserver(() => { if (win === w) frame(); });   // (it only asks for the next frame)
+    const want = new Set();
+    for (const el of copies) {
+      if (!el.isConnected) continue;
+      want.add(el);
+      const p = el.parentElement;
+      if (p) { want.add(p); parentOf.set(el, p); }
+    }
+    for (const n of watched) if (!want.has(n)) { ro.unobserve(n); watched.delete(n); }
+    for (const n of want) if (!watched.has(n)) { ro.observe(n); watched.add(n); }
   } catch (e) {}
+}
+// A copy that goes, and the parent it was watched in, are let go of at once (letting go is safe anywhere): both may
+// change size now, inside a delivery, where one still watched would be skipped. The next frame watches the parent
+// again if another copy is in it.
+function forget(el) {
+  for (const n of [el, parentOf.get(el)]) {
+    if (!n || !watched.has(n)) continue;
+    watched.delete(n);
+    try { ro.unobserve(n); } catch (e) {}
+  }
+  parentOf.delete(el);
 }
 
 // the connected copies, in document order

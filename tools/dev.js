@@ -19,7 +19,7 @@ const text = type => type + (/^(text|application\/json)/.test(type) ? '; charset
 const bundle = async entry => (await esbuild.build({ entryPoints: [entry], bundle: true, write: false, format: 'esm',
   ...(entry.endsWith('.js') && { target: 'es2020' }), sourcemap: 'inline', charset: 'utf8', logLevel: 'silent' })).outputFiles[0].text;
 // the library's own files, as the build makes them (lib/… from library/app)
-const LIB = { '/lib/ihroteka.js': 'index.js', '/lib/ihroteka.css': 'style.css', '/lib/qr-scan.js': 'scan.js' };
+const LIB = { '/lib/ihroteka.js': 'index.js', '/lib/ihroteka.css': 'style.css', '/lib/qr-scan.js': 'scan.js', '/lib/inflate.js': 'inflate.js' };
 // The games mode registers no service worker. One left on this origin by the site (`dev -- site` on this port, or
 // an old dev server) would keep answering from its offline copy and hide every edit: when the browser checks it
 // for an update, it gets this one, which removes itself and the copies and reloads the pages it held.

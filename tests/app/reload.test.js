@@ -11,7 +11,7 @@ const plays = (tabs, names) => until(async () => {
   return g.every(x => x && x.players.join() === names && x.linked) && g;
 }, 8000);
 
-test('the host\'s page reloads with its goodbye lost (back as the room\'s host): it comes back in its game, and the room stays there', { timeout: 60000 }, async t => {
+test('the host\'s page reloads with its goodbye lost (back in the room: a guest hands the room on at once, owner q03): it comes back in its game, and the room stays there', { timeout: 60000 }, async t => {
   const W = world(t, { scale: 0.5 });
   const [A, B] = await room(W, 'reload01', ['Аня', 'Богдан'], { lib: {} });
   await A.open('g');
@@ -22,7 +22,9 @@ test('the host\'s page reloads with its goodbye lost (back as the room\'s host):
   await A.net({ up: false });                                // (its goodbye lost)
   const A2 = await A.reload();
   await A2.lib('reload01', 'Аня');
-  assert.ok(await until(async () => { const s = await A2.state(); return s.role === 'host' && s.linked; }, 15000), 'back as the host: ' + show(await A2.state()));
+  // (her new page asks for the room with her name while her old one is quiet: Богдан takes the room over at once and
+  // lets her in, internet.js heir; before q03 the new page held the room alone until the merge)
+  assert.ok(await until(async () => (await A2.state()).linked, 15000), 'back in the room: ' + show(await A2.state()));
   await sleep(1500);
   const sb = await B.state(), b = await B.game(), a = await A2.game();
   assert.equal(sb.lib.view, 'g', 'Богдан is still in the game');

@@ -122,15 +122,21 @@ input.link{font-size:14px;letter-spacing:0;text-align:left;padding:10px 12px}
 .option-icon{flex:none;width:40px;height:40px;display:grid;place-items:center;font:800 20px var(--display);border:3px solid var(--ink);border-radius:50%;background:var(--yellow)}
 .qr{align-self:center;max-width:100%;height:auto!important;aspect-ratio:1;border:3px solid var(--ink);border-radius:10px;image-rendering:pixelated;background:#fff}
 video.scan{width:100%;max-height:50vh;object-fit:cover;border:3px solid var(--ink);border-radius:12px;background:#000}
+/* the notes at the bottom of the screen (dom.js toast): a column, the newest at the bottom, none over another; over a
+   dialog too (the column is in #layer before any dialog: without z-index a dialog would cover what it says) */
+.toasts{
+  position:fixed;z-index:1;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 22px);transform:translateX(-50%);
+  display:flex;flex-direction:column;gap:8px;align-items:center;width:max-content;max-width:calc(100% - 32px);pointer-events:none;
+}
 .toast{
-  position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 22px);transform:translateX(-50%);
-  max-width:calc(100% - 32px);padding:11px 16px;font-weight:700;text-align:center;
+  max-width:100%;padding:11px 16px;font-weight:700;text-align:center;
   background:var(--ink);color:#fff;border-radius:12px;box-shadow:4px 4px 0 var(--pink);transition:opacity .4s;
 }
 .toast.out{opacity:0}
 /* the card over a game that shows none of its waiting screens (invite.js; the rows: waiting.js, screens.js paint): a row
-   per thing said, the time in even digits, buttons of a finger's size */
-.waiting{position:absolute;left:50%;bottom:max(16px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:2;gap:2px;padding:8px 14px;max-width:calc(100% - 24px);text-align:center}
+   per thing said, the time in even digits, buttons of a finger's size. 16 px above the game on every phone: the stage
+   already keeps out of the unsafe edges (a home bar), unlike .toasts and .backdrop, which are on the page itself */
+.waiting{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:2;gap:2px;padding:8px 14px;max-width:calc(100% - 24px);text-align:center}
 .wait-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 12px}
 .waiting p{margin:0;font-weight:700}
 .waiting .wait-time{font-variant-numeric:tabular-nums}

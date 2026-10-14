@@ -55,7 +55,10 @@
       (clear): a reload, and a page back in it after it left (nearby: a pairing given up leaves its room, the next one
       makes a new one); another room or name drops it. So does every end our copy writes (quit, over, gone, lost) until
       another copy shows it back to us (merged: each copy whose record it changed sends it back to its writer): a page
-      that reloads meanwhile knows that round is over, and ends it again when it sees it on (invariant 3).
+      that reloads meanwhile knows that round is over, and ends it again when it sees it on (invariant 3). The snapshots
+      we keep go into the tab too, with the room's shared state (together.js keepRoom, R.keep): a page reloaded while
+      every other player is away takes them back as if a player greeted it with them (net 'restored': together.js
+      adopt), so its copy runs the round on from its snapshot (or waits for it), never afresh.
    6. Events, to the open game, once per round id: 'start' (a round has just begun: before its first save), then
       exactly one of 'run' (our copy runs it: state null when fresh, else its snapshot) or 'watch' (another copy runs
       it), told again only when the runner changes; 'rejoin' (we run it: one of its players has a new copy of the
@@ -276,9 +279,13 @@ export function rounds(ctx) {
       for (const [game, id] of quits) { const rec = record(game); if (rec && rec.on && rec.id === id && rec.runner === p) sayQuit(game, rec); }
     },
     // someone new, or back: the snapshots of the rounds that are on (the records come in the shared state, before these)
-    greet(p) {
-      const st = ctx.st();
-      for (const [game, s] of saves) { const v = st.get(KEY(game)); if (v && v.on && v.id === s.r) ctx.send(saveMsg(game, s), p); }
+    greet(p) { for (const m of R.keep()) ctx.send(m, p); },
+    // the snapshots we keep of the rounds that are on, as they travel (lib-save): what greet sends, and what the tab
+    // keeps for its next page (together.js keepRoom: a reload while everyone else is away takes them back, as a greeting)
+    keep() {
+      const st = ctx.st(), out = [];
+      for (const [game, s] of saves) { const v = st && st.get(KEY(game)); if (v && v.on && v.id === s.r) out.push(saveMsg(game, s)); }
+      return out;
     },
     // Every second (and when a player left): a round we quit that moved to us, we end (that end is kept in the tab
     // until another copy shows it back: see end); one whose runner is here, we say again every QUIT_AGAIN; a seat gone

@@ -6,15 +6,22 @@
 //
 // Places are by name (room.js): a fresh hello (the player's own act: see room.js, the takeover invariant) with a name
 // the room knows takes that place, from whatever tab (the old one is told 'moved'); with the host's own name, the host
-// steps aside and the new tab gets its place from whoever takes over. A hello a tab says by itself (not fresh) for a
-// place another session holds is told 'moved': a replaced tab never takes its place back. When the host is away for
-// HOST_WAIT (config.js TIMING) or says bye, the first player on the list who is here becomes the host and the others
-// join it: everyone has the same list, so they agree without a word. The host keeps announcing itself now and then
-// even with guests, so two rooms that formed on one code (a broker hiccup at the wrong moment) find each other and
-// merge; a host back from a sleep longer than HOST_WAIT, or from an outage that long (no broker brought it anything:
-// brokers.js deafBack; also one that took the room over alone meanwhile; not one that heard a player of its own all
-// the while, by a direct link: it was not cut off from its room), asks who holds the room, and gives way to
-// whoever does (its guests have moved on), or else goes on as it was (they slept too, or nobody took over). A page back
+// steps aside and the new tab gets its place from whoever takes over. A name the player typed (ask) whose place another
+// device holds that is still on the line (or the host's own) is asked about first: the host answers 'taken' and the
+// player says whether it is them (room.take: the hello again with take) or comes in under another name (owner, q18); a
+// place that is away or weak is taken without a question (a return after dropping out). A hello a tab says by itself
+// (not fresh) for a place another session holds is told 'moved': a replaced tab never takes its place back. When the
+// host is away for HOST_WAIT (config.js TIMING) or says bye, the first player on the list who is here becomes the host
+// and the others join it: everyone has the same list, so they agree without a word; guests that hear another session
+// ask for the room ('who') with their host's name while the host is quiet move on at once (heir: that player went on
+// there, on a new device; owner, q03). The host keeps announcing itself now and then even with guests, so two rooms
+// that formed on one code (a broker hiccup at the wrong moment) find each other and merge, the one that gives way
+// bringing its places along (keepAlong: nobody hears anyone leave); a host back from a sleep longer than HOST_WAIT, or
+// from an outage that long (no broker brought it anything: brokers.js deafBack; also one that took the room over alone
+// meanwhile; not one that heard a player of its own all the while, by a direct link: it was not cut off from its room),
+// asks who holds the room, and gives way to whoever does (its guests have moved on), or else goes on as it was (they
+// slept too, or nobody took over). A fresh page that nobody answers takes back the places the page before it in this
+// tab kept (a reload while everyone else was away: room.js restorePlaces, 'restored'; owner, q29). A page back
 // from the back-forward cache (Safari: its pagehide said bye) says hello again at once as a guest, or asks so as a
 // host (back). The network back ('online', or another network type), the brokers are checked at once, whatever was
 // checked a moment before (link.js kick, force).
@@ -24,8 +31,8 @@
 // (its number: a copy through another broker, or one sent again, is dropped); one with `to` is for that session only.
 //   k      a tab → itself      the brokers echo it: alive, and how fast (brokers.js; the others ignore it)
 //   who    newcomer → all      {n: name, pv} anyone here? The host answers 'host' or 'full'; a tab still looking
-//          | a host            whose session is smaller takes the room and answers 'host'. To one host: in answer to
-//                              its 'host' to all (below)
+//          | a host            whose session is smaller takes the room and answers 'host'; a guest whose host has that
+//                              name and is quiet moves on (heir). To one host: in answer to its 'host' to all (below)
 //   host   host → all | one    {c: players here with it, pv, u?, y?} I hold the room: alone every 2.5 s, with guests
 //                              every 10 s (two rooms on one code merge), and to whoever asks. u: 1, to a tab that
 //                              talks as if linked: I do not know you (or our link must start over), say hello again.
@@ -34,19 +41,25 @@
 //                              Joined or given way to only when said to us (to: our session): one to all, which a
 //                              stranger may have recorded long ago and sent again, is answered with a 'who' to it
 //   full   host → newcomer     no place left (it looks again in 2 s)
-//   hello  guest → host        {n: name, k: attempt, pv, fresh} let me in (every 1.2 s until 'hi'; after 6, it looks
-//                              again). fresh: false once this room has linked (a hello said by itself: after 'host' u: 1,
-//                              'go', a long sleep, the host gone, or the link starting over); missing: fresh. A new k
-//                              from a linked guest: its link starts over (both sides resync, 'relinked'); a hello
-//                              numbered (q) below the one that set the link's k is an older attempt's, late (a slow
-//                              broker, or a stranger sends it again): ignored
+//   hello  guest → host        {n: name, k: attempt, pv, fresh, m?, ask?, take?} let me in (every 1.2 s until 'hi' or
+//                              'taken'; after 6, it looks again). fresh: false once this room has linked (a hello said by
+//                              itself: after 'host' u: 1, 'go', a long sleep, the host gone, or the link starting over);
+//                              missing: fresh. A new k from a linked guest: its link starts over (both sides resync,
+//                              'relinked'); a hello numbered (q) below the one that set the link's k is an older attempt's,
+//                              late (a slow broker, or a stranger sends it again): ignored. m: the list of the room we
+//                              come from, which gave way (giveWay, 'go'; as in _r): the host keeps the places it lacks,
+//                              away (keepAlong). ask: 1, a fresh hello with a typed name: a place of it whose device is
+//                              still on the line is not taken but answered 'taken'; take: 1, the player said it is them
+//                              (room.take): the place is taken as ever
 //   hi     host → guest        {k, n: the host's name, pv} linked, or the link started over (k: of the hello it answers)
+//   taken  host → guest        that name's place is held by a device still on the line (a hello with ask): nobody is
+//                              seated or moved; the guest stops saying hello and asks its player (status 'taken')
 //   go     host → its guests   {h: session} I give way to that host: join it (said twice)
 //   here   guest → its host    are we still together? (every 3 s while the host is quiet)
 //   moved  host → a tab        another tab of your player took your place, or (to a hello not fresh) holds it: step
 //                              aside (role 'out'; from our host only)
-//   bye    a tab → all | one   {menu?, w?} it closes (leave, pagehide); menu: 1, its player left for good (only room.leave
-//                              and «Не чекати»: room.js, the places invariant). To one tab, never menu: it steps aside
+//   bye    a tab → all | one   {menu?, w?} it closes (leave, pagehide); menu: 1, its player left for good (only room.leave;
+//                              «Не чекати» tells the released tab nothing: room.js, the places invariant). To one tab, never menu: it steps aside
 //                              (leaveQuietly), or a guest tells a stranger we are not together. w: [[session, k, [link
 //                              messages]], …], a page's last words (pagehide: brokers.js lastWords), what it meant to send
 //                              each of its links through the brokers; delivered before the bye
@@ -64,8 +77,8 @@
 //   _r     host → guests, rel. {m: [[name, session, away ms], …]} the players
 //   _x     guest → host, rel.  {n} let n's place go («Не чекати»; the host does it only while n is away)
 //   (game) any, fast or rel.   the game's own (t: not one of these, not starting with '_': room.send refuses them).
-//                              A guest sends all of it to the host, with _t: to whom ('*': everyone; none: the host
-//                              only); the host passes it on with _f: its author
+//                              A guest sends all of it to the host, with _t: to whom ('*', room.js EVERYONE: everyone, so
+//                              it is nobody's own name; none: the host only); the host passes it on with _f: its author
 //
 // Versions. pv is the library's wire version (config.js PROTO): who, host, hello and hi from another version are
 // not acted on (no link, no merge); the room says status 'version' and keeps their number (room.versionMismatch,
@@ -80,14 +93,23 @@
 //     only from our host
 //   fresh on hello                ignores it, and an old guest says none: its hellos count as fresh (it takes its
 //                                 place back as it always did)
-//   no final bye where one went   nothing new on the wire: an old library keeps the place, as for any closed tab
-//     (dropAll: none at all; to
-//     a stranger: without menu)
+//   no final bye where one went   nothing new on the wire: an old library keeps the place, as for any closed tab (a tab
+//     (dropAll: none at all; to   released by «Не чекати» that still hears us waits for its host, as after HOLD, and is
+//     a stranger: without menu;   back as a new player once heard)
+//     «Не чекати»: none)
 //   hi to a linked guest's new k  an old guest ignores 'hi' while linked (it never starts its link over by itself)
 //   reliable messages as JSON     nothing on the wire: a message that cannot become JSON is refused at the call
 //     once, before their number   instead of stalling the link
 //   y on host                     ignores it: an old host settles a tie as before (fewer players here, or the session)
 //   a late hello ignored (q)      nothing on the wire: what both send is the same
+//   ask, take on hello; taken     an older host ignores ask and take and seats as ever (it asks nothing); an older guest
+//                                 says no ask: the place moves as ever (and it never hears 'taken')
+//   m on hello                    an older host ignores it: the places of a room that gave way go there until their
+//                                 players come, as before
+//   a guest moves on when another nothing on the wire: an older guest waits HOST_WAIT for its quiet host, as before
+//     session asks with its
+//     host's name (heir)
+//   «*» not taken as our name     nothing on the wire: '*' from an older page is still a name (NAME), only ours is refused
 // Version 2 (phase 5, J2) seals everything on the brokers, on a topic of its own (seal.js), so a library of version 1
 // meets nobody of version 2 there; it hears of us only at the door (door, below): on its own plain topic, the hash of the
 // code, which we listen to but never speak on first. When it asks who holds the room ('who') we answer 'host', when it
@@ -102,7 +124,7 @@ import { roomKeys } from './seal.js';
 import { onRtc } from './rtc.js';
 import { deliver, kick, resetPaths, setWeak } from './link.js';
 import { closePeer, dropMember, guestMembers, hostPeer, linkedPeers, markLinked, memberOf, NAME, newPeer, newRoom,
-  otherVersion, presence, seatMember, setStatus, startWatch, stop, unlink } from './room.js';
+  otherVersion, presence, restorePlaces, seatMember, setStatus, startWatch, stop, unlink, validWire } from './room.js';
 
 const ANNOUNCE = 2500, ANNOUNCE_LINKED = 4;            // the host says it is here every 2.5 s, every 10 s with guests
 
@@ -112,14 +134,17 @@ const ANNOUNCE = 2500, ANNOUNCE_LINKED = 4;            // the host says it is he
  *   code   room code (see newRoomCode / validRoomCode)
  *   name   this player's name (see room.js)
  *   max    players at most, the host included (default and limit: 8)
+ *   ask    true: a name the player typed: a place of that name whose device is still on the line is not taken before
+ *          the player says so (status 'taken', room.take(); room.js newRoom)
  * Returns the room at once; it connects in the background and reports through events.
  */
-export function joinRoom({ game, code, name, max }) {
-  const { N, room } = newRoom({ game, code, name, max, relay: true, mode: {        // (the hooks: room.js)
+export function joinRoom({ game, code, name, max, ask }) {
+  const { N, room } = newRoom({ game, code, name, max, ask, relay: true, mode: {        // (the hooks: room.js)
     peerGone: P => linkGone(N, P), restart: P => restart(N, P), byeFrom: (P, final) => byeFrom(N, P, final),
     onConnected: c => connected(N, c), onMessage: (m, c) => onMessage(N, m, c), onDown: () => signal(N), onLegacy: m => door(N, m),
     close, bye: () => lastWords(N), back: () => back(N), onUnlink: P => listen(N, P, false), probe: (P, now) => probe(N, P, now),
-    hubCheck: now => hubCheck(N, now), longSleep: gap => longSleep(N, gap), deafBack: () => deafBack(N), releaseHost: () => hostGone(N, true)
+    hubCheck: now => hubCheck(N, now), longSleep: gap => longSleep(N, gap), deafBack: () => deafBack(N), releaseHost: () => hostGone(N, true),
+    take: () => take(N)
   } });
 
   // Browsers report a network change even when they only refined a speed estimate: react only when the
@@ -168,6 +193,8 @@ const here = N => {
   const now = performance.now(), heard = P => !!P && P.linked && now - P.lastSeen <= TIMING.WEAK;
   return N.members.filter(m => m.s === me || (!m.a && heard(N.peers.get(m.s)))).length;
 };
+// a link that counts and is not quiet: the device on it is still on the line
+const live = P => !!P && P.linked && !P.weak;
 const who = N => ({ t: 'who', n: N.name, pv: PROTO });
 const hostSays = (N, o) => ({ t: 'host', c: here(N), pv: PROTO, ...(performance.now() < N.yieldUntil && { y: 1 }), ...o });   // (o: to, u)
 const name = n => typeof n === 'string' && NAME.test(n) ? n : null;
@@ -212,6 +239,7 @@ function onMessage(N, m, c) {
         const known = name(m.n) && memberOf(N, m.n);
         pub(N, known || N.members.length < N.max ? hostSays(N, { to: from }) : { t: 'full', to: from });
       } else if (N.role === null && me < from) { becomeHost(N); pub(N, hostSays(N, { to: from })); }
+      else if (N.role === 'guest' && heir(N, m.n, from) && N.role === 'host') pub(N, hostSays(N, { to: from }));   // (we took over: come in)
       break;
     case 'host': {                                     // someone holds the room
       if (otherVersion(N, m)) break;                   // in another library version: not ours to join or merge with
@@ -240,7 +268,10 @@ function onMessage(N, m, c) {
       N.fullTimer = setTimeout(() => { if (!N.closed && !N.linked) discover(N); }, 2000);
       break;
     case 'hello':                                      // a player's tab says hello
-      if (N.role === 'host' && name(m.n) && !otherVersion(N, m)) hello(N, from, m.n, m.k, m.fresh !== false, m.q);
+      if (N.role === 'host' && name(m.n) && !otherVersion(N, m)) hello(N, from, m.n, m.k, m.fresh !== false, m.q, m.m, m.ask === 1 && m.take !== 1);
+      break;
+    case 'taken':                                      // our host asks: that name's place is held by a device still on the line
+      if (N.role === 'guest' && N.host === from && P && !P.linked && !N.took) { stop(N, 'helloTimer'); N.asked = true; setStatus(N, 'taken'); }
       break;
     case 'hi':                                         // our host answers this attempt's hello: linked (or our link started over)
       if (N.role === 'guest' && N.host === from && P && m.k === P.k && name(m.n) && !otherVersion(N, m)) {
@@ -250,6 +281,7 @@ function onMessage(N, m, c) {
           break;
         }
         P.name = m.n;
+        N.along = null;                                // (in: the host has what we brought along)
         guestMembers(N, m.n);
         markLinked(P);
       }
@@ -258,7 +290,7 @@ function onMessage(N, m, c) {
       if (!P || !P.linked) stranger(N, from);
       break;
     case 'go':                                         // our host gives way to another one: join it
-      if (N.role === 'guest' && from === N.host && typeof m.h === 'string' && m.h !== me) becomeGuest(N, m.h);
+      if (N.role === 'guest' && from === N.host && typeof m.h === 'string' && m.h !== me) becomeGuest(N, m.h, true);
       break;
     case 'moved':                                      // this player goes on in another tab (as our host says)
       if (P && from === N.host) leaveQuietly(N);
@@ -310,11 +342,14 @@ function door(N, m) {
 // in this tab, if fresh: see room.js, the takeover invariant); a new one gets a place if there is one. Our own name,
 // fresh: this player goes on in that tab, so we step aside (the guests move on to a new host at once, and that tab
 // gets our place from it). A hello not fresh for a place another session holds (ours too): 'moved'. q: its number on
-// the brokers (one below that of the hello that set the link's attempt is older: see the top).
-function hello(N, from, n, k, fresh, q) {
+// the brokers (one below that of the hello that set the link's attempt is older: see the top). along: the list of a
+// room that gave way to ours (keepAlong). ask: a typed name, not yet said to be the player's (asked first: 'taken').
+function hello(N, from, n, k, fresh, q, along, ask) {
   if (from === me) return;
   const m = memberOf(N, n);
-  if (m && m.s !== from && !fresh) { pub(N, { t: 'moved', to: from }); return; }   // a replaced tab never takes its place back by itself
+  if (m && m.s !== from && !fresh && !m.along) { pub(N, { t: 'moved', to: from }); return; }   // a replaced tab never takes its place back by itself
+  // a typed name (ask) whose place another device holds, still on the line (or ours: we are here): ask first
+  if (fresh && ask && (n === N.name || (m && m.s !== from && !m.along && live(N.peers.get(m.s))))) { pub(N, { t: 'taken', to: from }); return; }
   if (n === N.name) { leaveQuietly(N, true); return; }
   if (!m && N.members.filter(x => x.s !== from).length >= N.max) { pub(N, { t: 'full', to: from }); return; }
   let P = N.peers.get(from);
@@ -327,15 +362,29 @@ function hello(N, from, n, k, fresh, q) {
   // this session's link under another name: that player left for good (its bye lost; see seatMember)
   if (P) { if (P.name !== n && (memberOf(N, P.name) || {}).s === from) dropMember(N, P.name); unlink(P); }
   const old = m && m.s !== from ? N.peers.get(m.s) : null, back = !!m && m.s === from;
-  if (m && m.s !== from) pub(N, { t: 'moved', to: m.s });   // their place, from another tab: that one steps aside
+  if (m && m.s !== from && !m.along) pub(N, { t: 'moved', to: m.s });   // their place, from another tab: that one steps aside
   P = newPeer(N, from, n);
   P.k = k; P.helloQ = q;
   listen(N, P, true);
   pub(N, { t: 'hi', to: from, k, n: N.name, pv: PROTO });
   markLinked(P);                                       // linked first: the list of players that follows goes to them too
+  if (validWire(along)) keepAlong(N, along, n, from);   // (fresh too: a page that took its places back has never linked)
   seatMember(N, n, from);                              // (the new session first: nobody hears the player leave…)
   if (old) unlink(old, { quiet: true });               // (…when the old link goes)
   if (back) N.emit('relinked', n, false);              // the same tab on a new link (it lost ours): the full picture again
+}
+// A tab comes over from a room that gave way to ours (giveWay, 'go'), with that room's list: the places it knew that we
+// lack stay, in its order (up to max), away (since they dropped out there, else from now on) until their players say
+// hello (seatMember), held as any place (HOLD), so nobody hears anyone leave meanwhile. Their sessions are only what
+// that room knew (along: no 'moved' for them, see hello).
+function keepAlong(N, wire, n, from) {
+  const now = performance.now();
+  let room = N.max - N.members.length - (memberOf(N, n) ? 0 : 1);   // (the newcomer's own place comes first)
+  for (const [x, s, a] of wire) {
+    if (x === N.name || memberOf(N, x)) continue;
+    if (x === n) N.members.push({ n, s: from, a: now });   // (its own place, in that order: seated next)
+    else if (room > 0 && s !== me && !N.members.some(y => y.s === s)) { N.members.push({ n: x, s, a: now - Math.max(1, a), along: true }); room--; }
+  }
 }
 
 // Someone talks to us as if we were linked, but we are not (we let them go after a long silence, or they missed
@@ -366,17 +415,20 @@ function discover(N) {
   presence(N);
   pub(N, who(N));
   setTimeout(() => { if (!N.closed && N.role === null) pub(N, who(N)); }, 450);
-  N.whoTimer = setTimeout(() => { if (!N.closed && N.role === null) becomeHost(N); }, 1100);
+  N.whoTimer = setTimeout(() => { if (!N.closed && N.role === null) becomeHost(N, true); }, 1100);
 }
 
 // We hold the room. Every place we know stays (taking over from a host that went away, or still looking: their
-// players come to us).
-function becomeHost(N) {
+// players come to us). unanswered: nobody answered our 'who' (discover): a fresh page takes back the places the page
+// before it in this tab kept (room.js restorePlaces; 'restored').
+function becomeHost(N, unanswered = false) {
   stop(N, 'whoTimer', 'annTimer', 'helloTimer');
   if (N.role !== 'host') dropAll(N);
   N.role = 'host';
+  const restored = unanswered && restorePlaces(N);
   presence(N);
   if (!N.linked) setStatus(N, 'waiting');
+  if (restored) N.emit('restored');
   // Alone: often, so friends find us; with guests: now and then (see the top). Not while we give way (yieldRoom), nor
   // while linked and the watchdog has not yet seen that we slept (longSleep decides first: by our count we would be
   // alone, and the new host would give way to us while we give way to it).
@@ -390,9 +442,13 @@ function becomeHost(N) {
   N.annTimer = setInterval(ann, ANNOUNCE);
 }
 
-// Whoever we were linked with is not told we left: they come along (go, hostGone), or it is our host again.
-function becomeGuest(N, host) {
+// Whoever we were linked with is not told we left: they come along (go, hostGone), or it is our host again. along: we
+// come over from a room that gave way (giveWay, 'go'): its places come with us (N.along, in our hellos: keepAlong).
+function becomeGuest(N, host, along = false) {
   stop(N, 'whoTimer', 'annTimer', 'helloTimer');
+  const now = performance.now();
+  N.along = along ? N.members.map(m => [m.n, m.s, m.a ? Math.max(1, Math.round(now - m.a)) : 0]) : null;
+  N.asked = false;                                     // (a new hello: whoever answers it asks again, if at all)
   dropAll(N);
   N.host = host;
   const H = newPeer(N, host);
@@ -403,16 +459,19 @@ function becomeGuest(N, host) {
   sayHello(N, H);
 }
 const attempt = () => Math.random() * 1e9 | 0;
-// Hello to our host H, every 1.2 s until it answers this attempt (hi). Fresh until this room has linked once (room.js,
-// the takeover invariant). 6 unanswered: we look around again — unless the link counts already (it is starting over,
-// see restart): then on until the host answers, or its silence moves us on (hubCheck: HOST_WAIT).
+// Hello to our host H, every 1.2 s until it answers this attempt (hi), or asks us first ('taken': we wait for the
+// player, room.take). Fresh until this room has linked once (room.js, the takeover invariant); with the places of a room
+// that gave way (m: N.along); a typed name's says ask, or take once the player said it is them. 6 unanswered: we look
+// around again — unless the link counts already (it is starting over, see restart): then on until the host answers,
+// or its silence moves us on (hubCheck: HOST_WAIT).
 function sayHello(N, H) {
   stop(N, 'helloTimer');
   let tries = 0;
   const hello = () => {
     if (N.closed || N.role !== 'guest' || hostPeer(N) !== H) { stop(N, 'helloTimer'); return; }
     if (++tries > 6 && !H.linked) { stop(N, 'helloTimer'); discover(N); return; }   // no answer: look around again
-    pub(N, { t: 'hello', to: H.id, n: N.name, k: H.k, pv: PROTO, fresh: !N.ever });
+    pub(N, { t: 'hello', to: H.id, n: N.name, k: H.k, pv: PROTO, fresh: !N.ever, ...(N.along && { m: N.along }),
+      ...(N.ask && !N.ever && (N.took ? { take: 1 } : { ask: 1 })) });
   };
   hello();
   N.helloTimer = setInterval(hello, 1200);
@@ -424,7 +483,7 @@ function giveWay(N, other) {
   const ids = linkedPeers(N).map(P => P.id), go = () => { for (const id of ids) pub(N, { t: 'go', h: other, to: id }); };
   go(); setTimeout(go, 1000);
   N.yieldUntil = 0;                                    // (given way: done, see longSleep)
-  becomeGuest(N, other);
+  becomeGuest(N, other, true);                         // (our places come along)
 }
 
 // Our host is gone: it left (gone: its place goes too), said bye, or has been away for HOST_WAIT. The first
@@ -441,10 +500,30 @@ function hostGone(N, gone = false) {
     if (!N.linked) setStatus(N, 'peer-left');
   } else becomeGuest(N, next.s);
 }
-// a guest: the host has been away too long
+// a guest: the host has been away too long, or its player went on in another session that asked for the room (heir)
+// while it was quiet, and it has not been heard since
 function hubCheck(N, now) {
   const H = hostPeer(N);
-  if (N.role === 'guest' && H && H.linked && H.weak && now - H.weakAt > TIMING.HOST_WAIT) hostGone(N);
+  if (N.role === 'guest' && H && H.linked && H.weak && (now - H.weakAt > TIMING.HOST_WAIT || N.heirAt > H.lastSeen)) hostGone(N);
+}
+// A guest: another session asks for the room ('who') with our host's name: that player goes on there. A host that hears
+// it steps aside (hello); one that is away cannot, so we move on as for its bye (hostGone, its place kept: the new
+// session takes it from whoever holds the room): now, or as soon as it is weak, unless we hear it again first (hubCheck).
+// → whether we moved on
+function heir(N, n, from) {
+  const H = hostPeer(N);
+  if (!H || !H.linked || from === H.id || name(n) !== H.name) return false;
+  N.heirAt = performance.now();
+  if (!H.weak) return false;
+  hostGone(N);
+  return true;
+}
+
+// The player says it is them (room.take, after 'taken'): our hellos say take: 1 from now on, and one goes at once (the
+// same attempt), so the host gives us the place as ever (the device that held it is told 'moved').
+function take(N) {
+  const H = hostPeer(N);
+  if (N.role === 'guest' && H && !H.linked) { setStatus(N, 'joining'); sayHello(N, H); }
 }
 
 // A tab closes (its player's place is kept: maybe a reload), or the player leaves for good (final).
@@ -546,4 +625,5 @@ function dropAll(N) {
   for (const P of [...N.peers.values()]) unlink(P);
   N.peers.clear();
   N.host = null;
+  N.heirAt = 0;
 }
