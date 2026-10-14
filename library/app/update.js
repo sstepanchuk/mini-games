@@ -1,9 +1,9 @@
 /* The offline copy brought up to date, before the page reloads into a newer version (shell.js reload: a friend runs
-   one, together.js versionCheck; or the player asks, «Оновити»). The service worker (sw.js) looks for a newer
-   version of the site and installs it whole, or keeps the copy it has. A reload is worth it only once a newer copy
-   is in place (or there is no offline copy: the network serves the page): one before it would open this version
-   again, and an update that cannot happen (no room on the device, no network) would reload for nothing, each time.
-   tests/update.test.js pins it. */
+   one, together.js versionCheck; or the player asks, «Оновити»); and whether the site has a newer version than the
+   page at all (newerThanPage). The service worker (sw.js) looks for a newer version of the site and installs it
+   whole, or keeps the copy it has. A reload is worth it only once a newer copy is in place (or there is no offline
+   copy: the network serves the page): one before it would open this version again, and an update that cannot happen
+   (no room on the device, no network) would reload for nothing, each time. tests/update.test.js pins it. */
 
 // the worker that served this page (null: the network did); another one active means the copy is newer than the page
 // (an update in the background took over meanwhile: sw.js claims the pages). A page the network served (the first
@@ -46,6 +46,20 @@ export function updateCopy(reg, { ms = 30000, served = SERVED, later } = {}) {
     if (out === 'timeout' && later) work.then(later);   // (it goes on: a worker that finishes later still counts)
     return out;
   });
+}
+
+// Whether the site has a newer version than this page (shell.js newer: which of two pages is the older when a game is
+// on one shelf and not the other, owner decision 36): a newer copy took over since the page loaded (another worker
+// active than the one that served it, see SERVED), or an update check finds a new version installing or waiting (or
+// already in charge). No offline copy (reg null: the dev server, a browser without service workers), or the check
+// failed: false (nothing tells). A page the network served whose first offline copy is still on its way (none active
+// yet: the first visit) has nothing newer in it: that first worker stores the page's own version (see SERVED).
+export async function newerThanPage(reg, { served = SERVED } = {}) {
+  if (!reg) return false;
+  const tookOver = () => !!served && !!reg.active && reg.active !== served;
+  if (tookOver()) return true;
+  try { await reg.update(); } catch (e) { return false; }
+  return (!!(reg.installing || reg.waiting) && (!!served || !!reg.active)) || tookOver();
 }
 
 // a new worker activated, or went redundant (its install failed): its state now, or as it changes

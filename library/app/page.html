@@ -41,6 +41,9 @@
 <link rel="modulepreload" href="{{base}}lib/ihroteka.js">
 </head>
 <body>
+<!-- #busy: «Відкриваю Ігротеку…» as the page starts; or why the library did not open, with «Спробувати ще» under it
+     (ihrotekaStuck below; index.js stuck). The stage: the open game's frame, under a note while it opens or when it did
+     not («Спробувати ще» / «Ввести пароль»: shell.js) or broke («Скопіювати звіт»). -->
 <p class="busy" id="busy">Відкриваю Ігротеку…</p>
 <noscript><p class="err">Без JavaScript бібліотека не відкриється.</p></noscript>
 
@@ -52,18 +55,34 @@
   <div class="games" id="games"></div>
   <p class="fine" id="install" hidden></p>
   <button class="btn ghost" id="sign-out" type="button" hidden>Забути пароль на цьому пристрої</button>
+  <p class="fine err" id="sign-out-err" role="alert"></p>
 </section>
 
 <section class="stage" id="stage" hidden>
-  <div class="stage-note" id="stage-note"><p id="stage-text"></p><button class="btn" id="stage-report" type="button" hidden>Скопіювати звіт</button><button class="btn ghost" id="stage-back" type="button">До бібліотеки</button></div>
+  <div class="stage-note" id="stage-note"><p id="stage-text"></p><button class="btn" id="stage-report" type="button" hidden>Скопіювати звіт</button><button class="btn" id="stage-retry" type="button" hidden>Спробувати ще</button><button class="btn ghost" id="stage-back" type="button">До бібліотеки</button></div>
 </section>
 <div id="layer"></div>
 
 <script>
-  // the library is a module: if this browser cannot run it, say so instead of spinning forever
-  setTimeout(function () { if (!window.__ihrotekaBooted) document.getElementById('busy').textContent = 'Цей браузер застарий для бібліотеки. Онови його або відкрий в іншому.'; }, 8000);
+  // The library is a module: if it does not come (the network failed) or this browser cannot run it, say so instead of
+  // spinning forever (no spinner; told to a screen reader); retry: a «Спробувати ще» that loads the page again. Not once
+  // the library started (it says the rest itself: index.js), nor over what was said already.
+  function ihrotekaStuck(text, retry) {
+    var b = document.getElementById('busy');
+    if (window.__ihrotekaBooted || !b || b.className !== 'busy') return;
+    b.className = 'err';
+    b.setAttribute('role', 'alert');
+    b.textContent = text;
+    if (!retry) return;
+    var r = document.createElement('button');
+    r.className = 'btn'; r.type = 'button'; r.id = 'busy-retry'; r.textContent = 'Спробувати ще';
+    r.onclick = function () { location.reload(); };
+    b.parentNode.insertBefore(r, b.nextSibling);
+    r.focus();
+  }
+  setTimeout(function () { ihrotekaStuck('Цей браузер застарий для бібліотеки. Онови його або відкрий в іншому.'); }, 8000);
 </script>
-<script type="module">
+<script type="module" onerror="ihrotekaStuck('Не вдалося завантажити. Перевір інтернет і спробуй ще.', true)">
   import { boot } from '{{base}}lib/ihroteka.js';
   boot({{bootArgs}});
 </script>

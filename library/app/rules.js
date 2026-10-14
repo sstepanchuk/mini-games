@@ -1,7 +1,10 @@
 /* =====================================================================
    The room's rules for an open game, as pure functions: who plays it and who waits, whose copy runs the round,
-   who is away and why, when the round moves to another copy, and what the game hears when its players change; and
-   those of the round layer (round.js, at the end): frozen seats, our part in a round, who runs it on or ends it.
+   who is away and why, when the round moves to another copy, and what the game hears when its players change; the
+   facts of the waiting screens (waiting.js says them: whom we wait for, «Не чекати» and «З’єднатися знову» only where
+   they work, a nearby guest's hub) and of versions (which gap counts where: the shelf any, over a game its own; whether
+   the older page reloads itself or is offered «Оновити»); and those of the round layer (round.js, at the end): frozen
+   seats, our part in a round, who runs it on or ends it.
    together.js and round.js hold the state and call these with it; tests/rules.test.js pins them.
    No DOM, no state of its own: everything comes in as arguments. `f` is the room as it is now:
      me, players          our name; everyone in the room, in the order they came (ours too)
@@ -12,7 +15,8 @@
                           game not open there yet as far as we know (see arrivesLoading)
      away(p)              the room's word: p dropped out (their place is kept), for how long, ms (0: here). A player
                           whose link went quiet is away too (net/room.js presence): the room says so at once
-     nearby, role, host   a nearby room (no internet); 'host' or 'guest' in the room; the room's host (a name)
+     nearby, role, host   a nearby room (no internet); 'host' or 'guest' in the room; the room's host (a name: nearby,
+                          the hub, the phone that holds the room)
      hold                 how long a place is kept (net HOLD)
      now                  the clock of `loading` (performance.now()); away(p) is already a duration
    ===================================================================== */
@@ -37,32 +41,52 @@ export const sameWire = (mine, theirs) => (mine ?? 1) === (theirs ?? 1);
 
 // A friend's library or game is another version than ours (owner, decision 9: they are not linked or seated
 // together, and the older page updates itself). proto: the other library's PROTO the room met (room.versionMismatch,
-// null: none; ours: mine.proto); wires: each other player's wire numbers by game (their wire: key), against ours
-// (mine.wires, by game; a game one of us does not have does not count). → null | { why: 'proto' | 'wire', game,
-// theirs, older: ours is the lower number (this page should update), key: what it is about, for reloadNow }
-export function versionGap(mine, proto, wires) {
+// null: none; ours: mine.proto), first; then the games' wire numbers: others, the other players in the room, each
+// { name, wires: their wire numbers by game (their wire: key; undefined: a library from before it says nothing), here:
+// the game their here: names (or null) }, against ours (mine.wires, by game). Which gap counts (opts):
+//   - only: over an open game, that game's (its copies and the library: owner, q09); none: any game (the shelf)
+//   - a wire gap that makes us the older page first: that is the one to update for
+//   - then a game one shelf has and another does not, once the room has it open (owner, q10): the room's view a game
+//     our shelf lacks, which a player whose wire: lists it has open (missing 'ours', who: they); or our open game,
+//     which the wire: of players in the room lacks (missing 'theirs', who: they). Shelves cannot tell a game added by
+//     the site from one taken off it: which page is older the site decides (older null: together.js asks the shell)
+//   - else a wire gap that makes us the newer page. (A game one of us does not have and nobody has open says nothing.)
+// → null | { why: 'proto' | 'wire' | 'game', game, theirs, older: ours is the lower number, this page should update
+// (null: unknown yet), key: what it is about, for reloadNow; a game's: missing, who }
+export function versionGap(mine, proto, others, { only = null, view = null, open = null } = {}) {
   if (Number.isSafeInteger(proto) && proto !== mine.proto) return { why: 'proto', game: null, theirs: proto, older: proto > mine.proto, key: 'proto:' + proto };
+  const told = others.filter(o => !!o && !!o.wires && typeof o.wires === 'object');
+  const counts = game => only == null || game === only;
   let gap = null;
-  for (const w of wires) {
-    for (const [game, theirs] of Object.entries(w || {})) {
+  for (const o of told) {
+    for (const [game, theirs] of Object.entries(o.wires)) {
       const ours = mine.wires(game);
-      if (ours === undefined || sameWire(ours, theirs)) continue;
-      // one that makes us the older page first: that is the one to update for
+      if (!counts(game) || ours === undefined || sameWire(ours, theirs)) continue;
       if (!gap || (theirs > ours && !gap.older)) gap = { why: 'wire', game, theirs, older: theirs > ours, key: 'wire:' + game + ':' + theirs };
     }
   }
+  if (gap && gap.older) return gap;
+  if (view != null && counts(view) && mine.wires(view) === undefined) {
+    const has = told.filter(o => o.wires[view] !== undefined && o.here === view);
+    if (has.length) return { why: 'game', game: view, theirs: has[0].wires[view], older: null, key: 'game:' + view, missing: 'ours', who: has.map(o => o.name) };
+  }
+  if (open != null && counts(open)) {
+    const lack = told.filter(o => o.wires[open] === undefined);
+    if (lack.length) return { why: 'game', game: open, theirs: null, older: null, key: 'game:' + open, missing: 'theirs', who: lack.map(o => o.name) };
+  }
   return gap;
 }
-// Whether the older page reloads itself now (to the newer version, after updating its offline copy): only while no
-// round may run here (playing: a game is open, where a round may run, with others or alone: the library cannot see
-// one played alone), never in a nearby room (a reload would end it: the phones would have to pair again), and once
-// per version and session (done: the keys already reloaded for), so a reload that did not bring the newer version (its
-// files not out yet) never loops.
-export const reloadNow = (gap, { nearby, playing, done }) => !!gap && gap.older && !nearby && !playing && !done.has(gap.key);
+// Whether the older page reloads itself now (to the newer version, after updating its offline copy): only once it is
+// known to be the older one (older true), while no round may run here (playing: a game is open, where a round may run,
+// with others or alone: the library cannot see one played alone), never in a nearby room (a reload would end it: the
+// phones would have to pair again), not while the player types the password (busy: a reload would throw away what was
+// typed, and ask again), and once per version and session (done: the keys already reloaded for), so a reload that did
+// not bring the newer version (its files not out yet) never loops.
+export const reloadNow = (gap, { nearby, playing, busy = false, done }) => !!gap && gap.older === true && !nearby && !playing && !busy && !done.has(gap.key);
 // Whether the note offers to update now (a reload, whatever runs here): only on the older page (the newer one has
-// nothing newer to get), and never in a nearby room (a reload would end it for every phone, and with no internet it
-// brings back the same version).
-export const offerUpdate = (gap, { nearby }) => !!gap && gap.older && !nearby;
+// nothing newer to get; not before it is known which one is), and never in a nearby room (a reload would end it for
+// every phone, and with no internet it brings back the same version).
+export const offerUpdate = (gap, { nearby }) => !!gap && gap.older === true && !nearby;
 
 // The first `seats` of them play; anyone after them waits for a seat. We play with the others who are seated,
 // and with nobody while we wait ourselves. While a round of the round layer is on (frozen: its players, round.js),
@@ -169,6 +193,14 @@ export const goneForGood = (was, players, me) => was.some(p => p !== me && !play
 // release), and anyone can stop waiting for the host itself. A guest cut off from the room's host can do only that:
 // its word for anyone else would reach the host later, if ever, when that player may well be back.
 export const canRelease = (f, p) => f.role === 'host' || p === f.host || (f.role === 'guest' && !!f.host && !f.away(f.host));
+// Whether «З’єднатися знову» (pairing again, nearby) can work from here (owner, q05): the hub pairs any guest again; a
+// guest never pairs others, and pairs again only while its own link to the hub is broken (nearby.js begin refuses
+// anything else; with no hub, looking for the room again, it may). Through the internet, never: the room links again
+// by itself.
+export const canRepair = f => !!f.nearby && (f.role === 'host' || !f.host || f.away(f.host) > 0);
+// The hub a guest is cut off from (its link to it broken), or null: such a guest hears nobody else (a star), so the
+// screens name only the hub (owner, q05)
+export const cutOffFrom = f => f.role === 'guest' && f.host && f.away(f.host) > 0 ? f.host : null;
 
 // For the screens: the players we wait for (of those we play with: dropped out, their seat kept, or still opening
 // the game) → [{ name, left: ms until their place goes (f.hold; loading: until they go stale), why: 'link' | 'loading',
@@ -177,17 +209,24 @@ export const waitingFor = (f, others) => others.flatMap(p => {
   const a = absence(f, p);
   return a ? [{ name: p, left: Math.max(0, f.hold - awayMs(f, p)), why: a.why, release: a.why === 'link' && canRelease(f, p) }] : [];
 });
-// For the screens: a round of ours is on (seats: its players; null when none is on for us) and nobody we play with has
-// the game open (others empty: in a game for two, the other player's game is closed). The round's other players in the
-// room who are not in the game with us → [{ name, left, why: 'link' (dropped out: as waitingFor, with the time and
-// release) | 'closed' (their game closed, another game open there, or a new tab of theirs that never opened it: stale),
-// release, round: true }]. Not one whose here: names this game and who is not stale: their copy speaks another wire
-// (the version row says so). Nobody while we have no seat in it, or while someone we play with has the game open (in
-// a game for 3+ seats the round goes on without them: the game's own rule, owner decision 1).
-export const roundWaits = (f, game, seats, inGame, others) => !seats || others.length || !seats.includes(f.me) ? [] : seats.flatMap(p => {
+// For the screens, nearby: a guest whose hub (the phone that holds the room) is away hears nobody, and nothing goes on
+// for anyone without the hub (owner, decision 5), whoever we play with and whether we have a seat (q06: a guest that
+// waits for a seat is told too). Its row, as waitingFor's (release: «Не чекати» ends the room here), unless a row
+// names it already (rows: the others; together.js passes none: the hub's row is then the only one, cutOffFrom).
+export const hubWaits = (f, rows) => { const hub = f.nearby ? cutOffFrom(f) : null; return !hub || rows.some(x => x.name === hub) ? [] : waitingFor(f, [hub]); };
+// For the screens: a round of ours is on (seats: its players; null when none is on for us). The round's other players
+// in the room who are not in the game with us → [{ name, left, why: 'link' (dropped out: as waitingFor, with the time
+// and release) | 'closed' (their game closed, another game open there, or a new tab of theirs that never opened it:
+// stale), release, round: true, on }]. Not one whose here: names this game and who is not stale: their copy speaks
+// another wire (the version row says so). Nobody while we have no seat in it. Also while someone we play with has the
+// game open (others; in a game for 3+ seats the round may go on without them: the game's own rule, owner decision 1):
+// then on, they are named as not in the game now (owner, q26), but for the round's runner (runner), without whom
+// nobody runs the round (decision 3): it is waited for as when nobody plays with us.
+export const roundWaits = (f, game, seats, inGame, others, runner = null) => !seats || !seats.includes(f.me) ? [] : seats.flatMap(p => {
   if (p === f.me || !f.players.includes(p) || inGame.includes(p)) return [];
-  if (f.away(p) > 0) return [{ name: p, left: Math.max(0, f.hold - awayMs(f, p)), why: 'link', release: canRelease(f, p), round: true }];
-  return f.here(p) === game && !stale(f, p) ? [] : [{ name: p, left: 0, why: 'closed', release: false, round: true }];
+  const on = others.length > 0 && p !== runner;
+  if (f.away(p) > 0) return [{ name: p, left: Math.max(0, f.hold - awayMs(f, p)), why: 'link', release: canRelease(f, p), round: true, ...(on && { on }) }];
+  return f.here(p) === game && !stale(f, p) ? [] : [{ name: p, left: 0, why: 'closed', release: false, round: true, ...(on && { on }) }];
 });
 // Who plays now, for a player who waits for a seat: while a round is on (frozen: its seats), its players still in the
 // room (one whose game is closed keeps their seat); between rounds, who is seated.

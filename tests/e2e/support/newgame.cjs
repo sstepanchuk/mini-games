@@ -1,5 +1,6 @@
 // A game made by `cli new` in a scratch copy of the repository (IHROTEKA_ROOT: no keyring, no password), served by a
-// dev server of its own on a free port: for the scenarios that try the template (newgame, newgame3, template, screens).
+// dev server of its own on a free port: for the scenarios that try the template (newgame, newgame3, template, screens,
+// nearby3cut).
 // The scratch copy and the server go when the scenario's process exits, a signal too (SIGINT, SIGTERM, SIGHUP:
 // scenario.cjs exitOnSignals).
 //   const G = await newGame('demo2', ['--title', 'Демо два'], { devnet: true })
@@ -12,6 +13,8 @@
 //   const L = await scratchLibrary('demo', ['alice'])
 //   L.made: all of it was made (L.out: what the tools said, the passwords cut out); L.up: its server answers at L.url
 //   (http://localhost:<port>/, as the server says: one origin, one sign-in); L.passwords.alice; L.log: the server
+//   L.cli(args, password, input): one more of its tools (the password: VAULT_PASSWORD; input: what is typed) → whether
+//   it worked; after `user passwd`, L.passwords has the new one (what the tools said keeps every password cut out)
 // The scratch copy and the server go when the scenario's process exits, a signal too.
 // The template's page in a library page p: templateFrame(p, sel) waits for its frame and sel visible in it (#lobby,
 // or main: #lobby is hidden mid-round); templateView(f) is what a player sees there (null: the frame is gone).
@@ -63,16 +66,19 @@ async function scratchLibrary(id = 'demo', names = ['alice']) {
   const env = { ...process.env, IHROTEKA_ROOT: root };
   delete env.VAULT_PASSWORD;
   delete env.VAULT_PASSWORDS;
-  const passwords = {}, said = [];
-  const hide = t => Object.values(passwords).reduce((x, pw) => x.split(pw).join('…'), t);
-  const cli = (args, password) => {
-    const r = spawnSync(process.execPath, [CLI, ...args], { env: password === undefined ? env : { ...env, VAULT_PASSWORD: password }, encoding: 'utf8' });
+  const passwords = {}, said = [], ever = new Set();     // ever: every password seen (an old one is cut out too)
+  const hide = t => [...ever].reduce((x, pw) => x.split(pw).join('…'), t).replace(/(New password: )\S+/g, '$1…');
+  const cli = (args, password, input = '') => {
+    const r = spawnSync(process.execPath, [CLI, ...args], { env: password === undefined ? env : { ...env, VAULT_PASSWORD: password }, input, encoding: 'utf8' });
     if (args[0] === 'init') for (const m of r.stdout.matchAll(/^\s+(\S+)\s+(\S+)$/gm)) if (names.includes(m[1])) passwords[m[1]] = m[2];
+    const fresh = /New password: (\S+)/.exec(r.stdout);   // (user passwd: the new one, after the prompt, on its line)
+    if (args[0] === 'user' && args[1] === 'passwd' && fresh) passwords[Object.keys(passwords).find(n => passwords[n] === password)] = fresh[1];
+    for (const pw of Object.values(passwords)) ever.add(pw);
     said.push('$ cli ' + args.join(' ') + '\n' + hide(r.stdout + r.stderr));
     return r.status === 0;
   };
   const log = [];
-  const L = { made: false, up: false, url: null, port: null, passwords, get out() { return said.join('\n'); }, get log() { return Buffer.concat(log).toString(); } };
+  const L = { made: false, up: false, url: null, port: null, passwords, cli, get out() { return said.join('\n'); }, get log() { return Buffer.concat(log).toString(); } };
   L.made = cli(['init', ...names]) && names.every(n => passwords[n]) && cli(['new', id]) && cli(['build', '--no-tests'], passwords[names[0]]) && cli(['site']);
   if (!L.made) return L;
   L.port = await freePort();

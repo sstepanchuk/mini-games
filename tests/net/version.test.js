@@ -8,7 +8,8 @@
 // the door (internet.js), where this one says its version and nothing else, and only once the old page spoke there.
 // And the release before this one of the same wire version (release.js previousRelease): what this one added to that
 // wire is ignored by it, and the two still play as before (a typed name's question, ask: an older host asks nothing, an
-// older guest says no ask: the place moves as ever).
+// older guest says no ask: the place moves as ever; or, once the release before knows the question too, it asks as this
+// one does).
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -21,6 +22,17 @@ import { settled, shows, sleep, states, until, world } from '../support/world.js
 const T = { timeout: 40000 };
 const LIB = fileURLToPath(new URL('../../library', import.meta.url));
 let dir, next, prev, why, same, whySame;
+
+// whether a library knows a typed name's question (ask, status 'taken': phase A on)
+const asks = lib => readFileSync(join(lib, 'net', 'internet.js'), 'utf8').includes("'taken'");
+// the question asked (B2's status 'taken'), nobody moved meanwhile; «Так, це я» (take): the place moves
+async function askedThenMoves(A, B, B2) {
+  assert.ok(await until(async () => (await B2.state()).status === 'taken', 8000), 'asked: ' + await shows([A, B, B2]));
+  assert.equal((await B.state()).role, 'guest', 'nobody moves before the answer');
+  await B2.take();
+  assert.ok(await until(settled([A, B2]), 8000), 'it is them: the place moves: ' + await shows([A, B2]));
+  assert.equal((await B.state()).role, 'out');
+}
 
 // this library with PROTO + 1
 function nextVersion() {
@@ -152,6 +164,7 @@ describe('library versions in one room', { concurrency: 3 }, () => {
     assert.ok(await until(settled([A, B]), 8000), await shows([A, B]));
     const B2 = await W.tab('p3tab');
     await B2.join('ver7', 'Богдан', { ask: true });
+    if (asks(same.library)) { await askedThenMoves(A, B, B2); return; }   // (that host knows the question: it asks as this one)
     const s = await until(settled([A, B2]), 8000);
     assert.ok(s, 'the place moves as ever: ' + await shows([A, B2]));
     assert.equal((await B.state()).role, 'out');
@@ -167,7 +180,8 @@ describe('library versions in one room', { concurrency: 3 }, () => {
     await B.join('ver8', 'Богдан');
     assert.ok(await until(settled([A, B]), 8000), await shows([A, B]));
     const B2 = await W.tab('p3tab', {}, { library: same.library });
-    await B2.join('ver8', 'Богдан', { ask: true });          // (that library has no ask: its hello says none)
+    await B2.join('ver8', 'Богдан', { ask: true });          // (a library with no ask: its hello says none)
+    if (asks(same.library)) { await askedThenMoves(A, B, B2); return; }   // (one that knows it says ask as this one)
     const s = await until(settled([A, B2]), 8000);
     assert.ok(s, 'the place moves as ever: ' + await shows([A, B2]));
     assert.equal((await B.state()).role, 'out');

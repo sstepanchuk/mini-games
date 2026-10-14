@@ -1,7 +1,7 @@
 // What the library says about players is gender-neutral (owner, decision 41: a player may be anyone; the word
 // «друг» and decision 9's sentence stay). Every string and template literal with Cyrillic in the files below is
 // read from the source (nothing is run) and must not use a gendered pronoun or past-tense verb about a player.
-// The texts the owner keeps as they are: KEPT. (Phase B adds shell.js to FILES.)
+// The texts the owner keeps as they are: KEPT.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -10,9 +10,10 @@ import { fileURLToPath } from 'node:url';
 import * as espree from 'espree';                      // ESLint's own parser (it comes with eslint)
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const FILES = ['library/app/invite.js', 'library/app/dom.js', 'library/app/qr.js', 'library/app/together.js', 'library/app/waiting.js'];
+const FILES = ['library/app/invite.js', 'library/app/dom.js', 'library/app/qr.js', 'library/app/together.js', 'library/app/waiting.js',
+  'library/app/shell.js', 'library/app/lock.js'];
 // a whole word (Ukrainian letters and the apostrophe ’ make up a word)
-const GENDERED = /(^|[^а-яіїєґ’])(він|зайшов|вийшов|приєднався|відпав|скопіював|той, хто)([^а-яіїєґ’]|$)/i;
+const GENDERED = /(^|[^а-яіїєґ’])(він|зайшов|вийшов|приєднався|відпав|скопіював|відкрив|той, хто)([^а-яіїєґ’]|$)/i;
 const KEPT = [
   'Друг вийшов. Посилання діє далі — чекаю…',         // the link screen's status 'peer-left' (owner, decision 28)
   /^На одному з пристроїв увімкнено VPN/              // (not about a player: «він» is the VPN)
@@ -41,13 +42,15 @@ function texts(file) {
 
 test('the files say something to players (the check reads their texts)', () => {
   assert.ok(texts('library/app/invite.js').length > 50, 'invite.js: its texts are read');
-  for (const f of ['library/app/together.js', 'library/app/waiting.js']) assert.ok(texts(f).length, f + ': its texts are read');
+  for (const f of ['library/app/together.js', 'library/app/waiting.js', 'library/app/shell.js', 'library/app/lock.js']) assert.ok(texts(f).length, f + ': its texts are read');
 });
 
 test('the check itself: it finds a gendered word, and lets the neutral ones and longer words go', () => {
-  for (const bad of ['«Аня» щойно зайшов у кімнату', 'щойно він відкриє', 'Один гравець вийшов', 'До вас приєднався ще один', 'Богдан — відпав', 'код, який друг скопіював', 'додає той, хто показував'])
+  for (const bad of ['«Аня» щойно зайшов у кімнату', 'щойно він відкриє', 'Один гравець вийшов', 'До вас приєднався ще один', 'Богдан — відпав', 'код, який друг скопіював', 'додає той, хто показував',
+    'Друг відкрив цю гру. Щоб грати, потрібен пароль.'])
     assert.match(bad, GENDERED, bad);
-  for (const ok of ['Під іменем «Аня» щойно увійшли', 'Тепер вас 3', 'Одне місце звільнилося', '— зв’язок зник, місце чекає', 'Вийти', 'вийшовши', 'Вінниця', 'вінок'])
+  for (const ok of ['Під іменем «Аня» щойно увійшли', 'Тепер вас 3', 'Одне місце звільнилося', '— зв’язок зник, місце чекає', 'Вийти', 'вийшовши', 'Вінниця', 'вінок',
+    'Цю гру відкрили в кімнаті. Щоб грати, потрібен пароль.', 'Відкрий її за звичайним посиланням.', 'відкрити'])
     assert.doesNotMatch(ok, GENDERED, ok);
 });
 

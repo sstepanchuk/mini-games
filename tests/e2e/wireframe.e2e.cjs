@@ -3,15 +3,16 @@
 // code that runs). Аня's shelf is as it is (it was read when her page loaded), but the game her frame loads now speaks
 // one wire more (its page rewritten on the way: what an open page gets once the game changed on the site); Богдан's
 // page is as it is. Her copy says the wire of its own code (ihroteka.game.wire), and the library seats it by that:
-// not with Богдан's. Both see «Онови сторінку — у друга інша версія», «Оновити» on Богдан's page only (his copy is
-// the older), and his page does not reload by itself while the game is open (a round may run in it). Needs the dev
+// not with Богдан's. Each page says its part (decision 37): Богдан's (his copy is the older) «У друга новіша версія —
+// онови сторінку» with «Оновити», Аня's «У друга старіша версія — хай оновить сторінку»; and his page does not reload
+// by itself while the game is open (a round may run in it). Needs the dev
 // server with the plaintext games (npm run unlock), or with the probe (npm run dev -- --probe, E2E_GAME=probe).
 'use strict';
 const { U, w, launch, watch, scenario, check, until, GAME } = require('./support/scenario.cjs');
 const { openPage, createLink, frameOf, libState, waitShown } = require('./support/pages.cjs');
 const { fakeNet } = require('./support/fakenet.cjs');
 
-const UPDATE = /Онови сторінку — у друга інша версія/;
+const OLDER = 'У друга новіша версія — онови сторінку', NEWER = 'У друга старіша версія — хай оновить сторінку';
 
 scenario('wireframe: the game code that runs is a newer wire than the shelf says', async () => {
   const ctx = await (await launch()).newContext();       // (one context: the fake network is shared by its pages)
@@ -40,7 +41,7 @@ scenario('wireframe: the game code that runs is a newer wire than the shelf says
   const [ga, gb] = [(await libState(pa)).game, (await libState(pb)).game];
   check(ga.players.join() === 'Аня' && gb.players.join() === 'Богдан' && !ga.linked && !gb.linked, 'not seated together', [ga, gb]);
   const note = async p => { const x = await waitShown(p); return x.where === 'both' ? '' : x.text; };   // (two messages: none to count)
-  check(await until(async () => UPDATE.test(await note(pa)) && UPDATE.test(await note(pb)), 5000), 'both see «Онови сторінку — у друга інша версія»', [await waitShown(pa), await waitShown(pb)]);
+  check(await until(async () => (await note(pa)).startsWith(NEWER) && (await note(pb)).startsWith(OLDER), 5000), 'each its part: Аня «' + NEWER + '», Богдан «' + OLDER + '»', [await waitShown(pa), await waitShown(pb)]);
   const offered = async p => (await waitShown(p)).buttons.includes('Оновити');
   check(await offered(pb) && !await offered(pa), '«Оновити» on Богдан\'s page only (the older copy)', { Аня: await offered(pa), Богдан: await offered(pb) });
   await w(3000);                                         // (the library checks the versions every second)

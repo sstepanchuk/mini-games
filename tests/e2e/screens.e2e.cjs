@@ -3,14 +3,14 @@
 // on the template (`cli new demo5`, a dev server of its own), three players at 360×640: never two messages (a sampler
 // in every library page, every 100 ms: the card and a copy of the game's screen both showing rows, or two copies with
 // rows). Віра, third in a game for two, waits for a seat: her screen says so and who plays now, her live region too.
-// Богдан drops out: Аня's screen «Чекаємо на Богдан… m:ss» with «Не чекати», built once (only the time changes, the
+// Богдан drops out: Аня's screen «Чекаємо, поки повернеться Богдан… m:ss» with «Не чекати», built once (only the time changes, the
 // focus stays, the live region says nothing new); a button of a finger's size, nothing wider than the frame. The copy
 // hidden: the card says the same at once (no new word for the screen reader); shown again: the screen within the
 // second's tick; covered by a layer of the game's: the card, uncovered: the screen (a focused «Не чекати» moves with
 // its row, there and back); only its «Не чекати» covered: the card, too; a second copy: the first keeps the
 // rows (no churn), gone: the second takes them. «Не чекати» pressed in the game's screen: his place goes, Віра plays,
 // nothing said, the game heard `showing`. A round on, the room to the shelf and back while Віра's game is slow to open:
-// after the grace (not at once) «Чекаємо на Віра — зараз не в грі», nothing to press; her game open: nothing, the same
+// after the grace (not at once) «Віра зараз не в грі — чекаємо», nothing to press; her game open: nothing, the same
 // round. The game opened while Віра is away, its page slow to parse before its copy: nothing meanwhile (only the version
 // would be said there), the card never shown; then her row in the screen, and the game hears `showing` once, with the
 // rows in place. Runs on its own server: E2E_URL is only checked to be up, by run.cjs.
@@ -67,10 +67,10 @@ scenario('screens: the waiting screens in a game (<ihroteka-wait>): one message,
 
   step('Богдан drops out');
   await pb.evaluate(() => window.__net(false));
-  const away = /^Чекаємо на Богдан… \d+:\d\d Не чекати$/;   // (the line, its time, its button)
+  const away = /^Чекаємо, поки повернеться Богдан… \d+:\d\d Не чекати$/;   // (the line, its time, its button)
   a = await until(async () => { const x = await waitShown(pa); return x.where === 'screen' && away.test(x.text) && x; }, 10000);
-  check(a, 'Аня’s screen: «Чекаємо на Богдан… m:ss»', await waitShown(pa));
-  check(a && a.buttons.join() === 'Не чекати' && a.showing === 'link' && a.say === 'Чекаємо на Богдан…', '«Не чекати»; `showing` link; the live region says who', a);
+  check(a, 'Аня’s screen: «Чекаємо, поки повернеться Богдан… m:ss»', await waitShown(pa));
+  check(a && a.buttons.join() === 'Не чекати' && a.showing === 'link' && a.say === 'Чекаємо, поки повернеться Богдан…', '«Не чекати»; `showing` link; the live region says who', a);
   check((await waitShown(pv)).text === SEAT, 'Віра’s: the same (his seat is still his)', await waitShown(pv));
   await watchSay(pa);
   await fa.evaluate(() => {
@@ -167,8 +167,8 @@ scenario('screens: the waiting screens in a game (<ihroteka-wait>): one message,
   let early = false;
   while (Date.now() - t0 < 1000) { if (/зараз не в грі/.test((await waitShown(pa)).text)) early = true; await w(100); }
   check(!early, 'not at once (following the room into a game takes a moment)');
-  a = await until(async () => { const x = await waitShown(pa); return x.where === 'screen' && x.text === 'Чекаємо на Віра — зараз не в грі' && x; }, 4000, 100);
-  check(a && !a.buttons.length && a.showing === 'closed', 'then Аня’s screen: «Чекаємо на Віра — зараз не в грі», nothing to press', a || await waitShown(pa));
+  a = await until(async () => { const x = await waitShown(pa); return x.where === 'screen' && x.text === 'Віра зараз не в грі — чекаємо' && x; }, 4000, 100);
+  check(a && !a.buttons.length && a.showing === 'closed', 'then Аня’s screen: «Віра зараз не в грі — чекаємо», nothing to press', a || await waitShown(pa));
   const back = async () => { const s = await libState(pa); return (await waitShown(pa)).where === null && s.game && s.game.linked && s.game.round.id === id; };
   check(await until(back, 15000), 'her game open: nothing to say, the same round goes on', [await waitShown(pa), (await libState(pa)).game?.round]);
   await pv.unroute('**/demo5/**');
@@ -194,8 +194,8 @@ scenario('screens: the waiting screens in a game (<ihroteka-wait>): one message,
   const unparsed = await until(async () => { const s = await pa.evaluate(() => document.querySelector('iframe.frame') && window.__ihroteka.screens()); return s && !s.ready && s; }, 5000, 25);
   check(unparsed && !unparsed.adopted, 'the game attached, its page not parsed yet (no copy so far)', unparsed);
   check((await waitShown(pa)).where === null, 'meanwhile nothing: whom we wait for waits for the game\'s screen', await waitShown(pa));
-  a = await until(async () => { const x = await waitShown(pa); return x.where === 'screen' && /^Чекаємо на Віра… \d+:\d\d Не чекати$/.test(x.text) && x; }, 8000, 100);
-  check(a && a.buttons.join() === 'Не чекати', 'Аня’s screen: «Чекаємо на Віра… m:ss», «Не чекати»', a || await waitShown(pa));
+  a = await until(async () => { const x = await waitShown(pa); return x.where === 'screen' && /^Чекаємо, поки повернеться Віра… \d+:\d\d Не чекати$/.test(x.text) && x; }, 8000, 100);
+  check(a && a.buttons.join() === 'Не чекати', 'Аня’s screen: «Чекаємо, поки повернеться Віра… m:ss», «Не чекати»', a || await waitShown(pa));
   check((await pa.evaluate(() => window.__unhid)).length === 0, 'the card never showed meanwhile', await pa.evaluate(() => window.__unhid));
   const ev = await (await frameOf(pa)).evaluate(() => window.__ev);
   check(ev && ev.length === 1 && ev[0].rows && ev[0].showing === 'link', 'the game heard `showing` once its page had parsed, with the rows in place', ev);

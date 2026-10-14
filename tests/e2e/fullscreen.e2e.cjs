@@ -4,11 +4,13 @@
 // page shows, and while it is fullscreen the browser keeps the rest of the page inert. So a library dialog leaves
 // fullscreen as it opens (owner, decision 51; dom.js modal): «Грати разом» from the game (ihroteka.invite()) is on top
 // and its name field has the focus; Escape closes it and the focus is back in the game. The same for a dialog the
-// library opens by itself («Ти граєш деінде»: the same player came in from another tab). And the card «Чекаємо на …»
+// library opens by itself («Ти граєш деінде»: the same player came in from another tab). And the card «Чекаємо, поки повернеться …»
 // over a game that shows none of its waiting screens (invite.js) leaves fullscreen too; a game whose own screen says it
-// stays fullscreen. Chromium (WebKit's element fullscreen is not checked here). E2E_GAME: any game (the probe on CI).
+// stays fullscreen. A game that breaks as it starts (an error within START of its page loading), on the whole screen:
+// the page leaves fullscreen, and «Гра зламалася» is on top with the focus on «Скопіювати звіт». Chromium (WebKit's
+// element fullscreen is not checked here). E2E_GAME: any game (the probe on CI).
 'use strict';
-const { U, launch, scenario, check, step, until, GAME } = require('./support/scenario.cjs');
+const { U, launch, errs, forgive, scenario, check, step, until, GAME } = require('./support/scenario.cjs');
 const { openPage, createLink, frameOf, libState, short, waitShown } = require('./support/pages.cjs');
 
 // what the page shows now: the fullscreen element (page and game), the dialog, what is at the dialog's centre, the focus
@@ -87,4 +89,23 @@ scenario('fullscreen: a library dialog over a game on the whole screen', async (
   check(w && /Чекаємо.*Кіра/.test(w.text), 'Поля waits for Кіра', w);
   if (w && w.where === 'card') check(await until(() => P.evaluate(() => !document.fullscreenElement), 3000, 50), 'the card: out of fullscreen (the game says nothing itself)', await seen(P, g));
   else check(await P.evaluate(() => !!document.fullscreenElement), 'the game’s own screen says it: still on the whole screen', await seen(P, g));
+  await P.close(); await Q.close();
+
+  step('a game that breaks as it starts, on the whole screen');
+  const B = await openPage(ctx, 'bbbbbbbbbbbb', U, { label: 'Богдан' });
+  await B.click('a.game[href*="/' + GAME + '/"]');
+  const h = await frameOf(B);
+  check(await enterFs(B, h), 'the game is on the whole screen', await seen(B, h));
+  const e0 = errs.length;
+  await h.evaluate(() => { setTimeout(() => { throw new TypeError('the game broke'); }); });   // (well within START)
+  const note = () => B.evaluate(() => {
+    const n = document.getElementById('stage-note'), r = n.getBoundingClientRect(), t = document.getElementById('stage-text');
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2), a = document.activeElement;
+    return { text: n.hidden ? '' : t.textContent, fs: !!document.fullscreenElement, hit: !!hit && n.contains(hit) ? 'note' : hit && hit.tagName + '.' + hit.className, focus: a ? a.id || a.tagName : null };
+  });
+  const b = await until(async () => { const x = await note(); return x.text === 'Гра зламалася' && !x.fs && x.focus === 'stage-report' && x; }, 5000, 50);
+  check(b && !b.fs, '«Гра зламалася»: out of fullscreen', await note());
+  check(b && b.hit === 'note', '… on top (what is at its centre is the note)', await note());
+  check(b && b.focus === 'stage-report', '… the focus on «Скопіювати звіт»', await note());
+  forgive(e0, /TypeError: the game broke/);           // (the error made here)
 }, { timeout: 150000 });

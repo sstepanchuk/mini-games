@@ -1,7 +1,7 @@
 // tags: @ci
 // safearea: a phone with a home bar (iPhone: env(safe-area-inset-bottom) 34 px, 21 px in landscape; Chromium
 // emulates it through the DevTools protocol). The open game's stage already keeps out of the unsafe edges, so the card
-// «Чекаємо на …» over a game (invite.js, inside the stage) is 16 px above the game's bottom edge as on any phone (owner,
+// «Чекаємо, поки повернеться …» over a game (invite.js, inside the stage) is 16 px above the game's bottom edge as on any phone (owner,
 // decision 40: before, the inset counted twice: 34 px above the stage, 68 above the screen), and the notes at the
 // bottom of the screen (dom.js toast: on the page itself) keep 22 px above the bar. Chromium only.
 'use strict';
@@ -15,7 +15,7 @@ const measure = p => p.evaluate(() => {
   const st = document.getElementById('stage');
   st.hidden = false; document.getElementById('shelf').hidden = true;
   const c = Object.assign(document.createElement('div'), { className: 'waiting card', id: 'xcard' });
-  c.innerHTML = '<div class="wait-row"><p>Чекаємо на Богдан… <span class="wait-time">2:45</span></p><button type="button" class="btn ghost">Не чекати</button></div>';
+  c.innerHTML = '<div class="wait-row"><p>Чекаємо, поки повернеться <bdi>Богдан</bdi>… <span class="wait-time">2:45</span></p><button type="button" class="btn ghost">Не чекати</button></div>';
   st.append(c);
   const t = Object.assign(document.createElement('div'), { className: 'toast', textContent: 'Ви разом!' });
   (document.querySelector('#layer > .toasts') || document.getElementById('layer')).append(t);

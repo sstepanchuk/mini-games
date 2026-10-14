@@ -1,21 +1,30 @@
 /* =====================================================================
    The games are encrypted; everything else is public. Here: downloading, the password (asked only when a game
-   is opened, and only once per device: but a private window, a device whose storage does not answer, and Safari
-   (for a site not added to the home screen, after 7 days of use without a visit) remember nothing, so it is asked
-   again), and decrypting a game's page.
+   is opened, and only once per device — except where the device remembers nothing: a private window, storage that
+   failed, and Safari for a site not added to the home screen after 7 days of use without a visit; and after the
+   library stopped taking the remembered key: the person was removed, or their password changed, which the dialog
+   then says), and decrypting a game's page. Storage that does not answer in time is not «nothing remembered»: the
+   dialog shows, and closes by itself when the key comes after all (device.js recallLater).
    ===================================================================== */
 import * as vault from '../crypto.js';
 import * as device from './device.js';
 import { btn, el, modal, para, root } from './dom.js';
 
-const MSG = {
+export const MSG = {
   offline: 'Не вдалося завантажити. Перевір інтернет і спробуй ще.',
   broken: 'Не вдалося відкрити бібліотеку. Онови сторінку трохи згодом.',
   insecure: 'Ця сторінка працює лише через https. Відкрий її за звичайним посиланням.',
   failed: 'Щось пішло не так. Перевір інтернет і спробуй ще.',
   wrong: 'Не той пароль.',
   updating: 'Бібліотеку щойно оновили. Спробуй за кілька хвилин.',
-  game: 'Не вдалося відкрити гру. Онови сторінку.'
+  game: 'Не вдалося відкрити гру. Онови сторінку.',
+  // the password dialog's first line: as usual, or why the device no longer has the key (device.js note)
+  intro: 'Ігри в Ігротеці відкриваються за паролем. Цей пристрій його запам’ятає.',
+  removed: 'Доступ до ігор із цим паролем закрили. Якщо тобі дали новий пароль — введи його.',
+  changed: 'Твій пароль змінили. Введи новий.',
+  // under «Відкрити» while the password is checked (one key derivation per person: a cheap phone may take seconds)
+  unlocking: 'Відмикаю…',
+  slow: 'Відмикаю… Це може тривати кілька секунд.'
 };
 // the network itself failed (fetchBytes marks it): not an HTTP error, an odd body or a bug
 const offline = e => e?.offline === true;
@@ -50,21 +59,37 @@ function keyring(cache) {
   return keyringP;
 }
 
-// the shelf: which games there are
-export const openShelf = () => fetchBytes('library.json').then(b => JSON.parse(vault.text(b)), e => { throw fail(offline(e) ? MSG.offline : MSG.broken, e); });
+// the shelf: which games there are (anything but a list of them, as a portal's page, is a broken download)
+export const openShelf = () => fetchBytes('library.json').then(b => {
+  const games = JSON.parse(vault.text(b));
+  if (!Array.isArray(games)) throw new Error('library.json: not a list of games');
+  return games;
+}).catch(e => { throw fail(offline(e) ? MSG.offline : MSG.broken, e); });
 
 /* ---------- the key ---------- */
 async function libraryKey(id, priv) {
   const raw = await vault.libraryKey(await keyring(), id, priv);
   return raw && vault.importKey(raw);
 }
-// key from what this device remembers; null → ask for the password
+// key from what this device remembers → the key, null (ask for the password) or device.TROUBLE (the storage did not
+// answer: ask, and take the key if it comes meanwhile)
 async function rememberedKey() {
   const me = await device.recall();
-  if (!me) return null;
-  await keyring();                                   // network errors and an unreadable keyring propagate: never forget a key for them
-  const key = await libraryKey(me.id, me.priv).catch(() => null);
-  if (!key) await device.forget();                   // removed from the library, or the stored key no longer fits
+  return me && me !== device.TROUBLE ? keyOf(me) : me;
+}
+// the library key from a remembered sign-in, or null. Network errors and an unreadable keyring propagate: never forget
+// a key for them. One the library no longer takes is forgotten, with why (for the dialog): the person is not in the
+// keyring (asked once more past every cache first: a copy from before they were added is not a removal), or their box
+// does not open with it (their password changed).
+async function keyOf(me) {
+  let kr = await keyring();
+  let key = await libraryKey(me.id, me.priv).catch(() => null);
+  const there = () => kr.people.some(p => p.id === me.id);
+  if (!key && !there()) {
+    kr = await keyring('reload');
+    key = await libraryKey(me.id, me.priv).catch(() => null);
+  }
+  if (!key) await device.forget(there() ? 'changed' : 'removed');
   return key;
 }
 // the password → { who, key } (who: { person, priv }), or null: nobody's password. Remembers nothing: the dialog
@@ -86,41 +111,70 @@ export function unlock(game) {
   }
   return keyP;
 }
-export const whenSignedIn = fn => { onKey = fn; device.recall().then(me => { if (me) fn(); }); };
+export const whenSignedIn = fn => {
+  onKey = fn;
+  device.recall().then(me => me === device.TROUBLE ? device.recallLater() : me).then(me => { if (me) fn(); });
+};
 // → false when the key may still be on this device (device.js forget)
 export function signOut() { keyP = null; return device.forget(); }
 
 async function askKey(game = {}) {
-  if (!globalThis.crypto?.subtle) throw fail(MSG.insecure);
-  try {
-    const key = await rememberedKey();
-    if (key) return key;
-  } catch (e) { throw fail(offline(e) ? MSG.offline : MSG.broken, e); }
-  return passwordDialog(game);
+  if (!globalThis.crypto?.subtle) throw Object.assign(fail(MSG.insecure), { final: true });   // (trying again cannot help)
+  let key;
+  try { key = await rememberedKey(); } catch (e) { throw fail(offline(e) ? MSG.offline : MSG.broken, e); }
+  if (key && key !== device.TROUBLE) return key;
+  return passwordDialog(game, device.note(), key === device.TROUBLE ? laterKey : null);
+}
+// the key, once the storage that did not answer does (null: it has none, it no longer fits, or the wait ended)
+async function laterKey(signal) {
+  const me = await device.recallLater(signal);
+  return me && !signal.aborted ? keyOf(me) : null;
 }
 
+// A password dialog is open (a password being checked in it too): the page does not reload itself under it (shell.js
+// busy, together.js versionCheck: what was typed would be lost).
+let asking = 0;
+export const askingPassword = () => asking > 0;
+
 // "this game is locked": a password, or cancel (rejects with error.cancelled). Closed while «Відмикаю…» (Скасувати,
-// Escape, a tap outside): the password checked after it is not remembered.
+// Escape, a tap outside): the password checked after it is not remembered. why: the device's note of why its key went
+// (device.js note), said first. later(signal) → the key, when the device's storage did not answer: if it comes before
+// a password was sent, the dialog closes by itself and opens with it (Cancel, a password sent or the dialog closing
+// stop the wait).
 let dialogs = 0;
-function passwordDialog(game) {
+function passwordDialog(game, why, later) {
   return new Promise((resolve, reject) => {
     let done = false, closed = false;
-    const m = modal(() => { closed = true; if (!done) { const e = new Error('cancelled'); e.cancelled = true; reject(e); } });
+    const wait = new AbortController();
+    asking++;
+    const m = modal(() => {
+      closed = true; asking--; wait.abort();
+      if (!done) { const e = new Error('cancelled'); e.cancelled = true; reject(e); }
+    });
     const pw = el('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Пароль', required: true });
     pw.setAttribute('aria-label', 'Пароль');
     const err = para('', 'err'), go = el('button', { className: 'btn', type: 'submit', textContent: 'Відкрити' });
     err.id = 'lock-err-' + ++dialogs;
     err.setAttribute('role', 'alert');                 // a screen reader says what goes wrong
     pw.setAttribute('aria-describedby', err.id);
-    const form = el('form', {}, el('input', { type: 'text', name: 'username', value: 'Ігротека', autocomplete: 'username', hidden: true }), pw, go, err);
+    // (while the password is checked: told to a screen reader as it changes; empty, not hidden, until then, so that
+    // the first words are heard too: a live region must be there before it speaks. style.css keeps it out of sight)
+    const busy = el('p', { className: 'busy' });
+    busy.setAttribute('role', 'status');
+    const intro = para(MSG[why] || MSG.intro);
+    const form = el('form', {}, el('input', { type: 'text', name: 'username', value: 'Ігротека', autocomplete: 'username', hidden: true }), pw, go, busy, err);
     form.addEventListener('submit', async e => {
       e.preventDefault();
       if (!pw.value) return;
-      err.textContent = ''; pw.removeAttribute('aria-invalid'); go.disabled = true; go.textContent = 'Відмикаю…';
+      wait.abort();                                    // (a password sent: no key from the storage any more)
+      err.textContent = ''; pw.removeAttribute('aria-invalid'); go.disabled = true;
+      busy.textContent = MSG.unlocking;
+      const slow = setTimeout(() => { busy.textContent = MSG.slow; }, 1000);
       let found = null;
       try { found = await passwordKey(pw.value); } catch (x) { err.textContent = offline(x) ? MSG.failed : MSG.broken; }
+      finally { clearTimeout(slow); busy.textContent = ''; }
       if (closed) return;
-      go.disabled = false; go.textContent = 'Відкрити';
+      go.disabled = false;
       if (found) {
         done = true;
         m.close();
@@ -133,9 +187,16 @@ function passwordDialog(game) {
     });
     m.show(...(game.image ? [el('img', { className: 'cover', src: new URL(game.id + '/' + game.image, root).href, alt: '' })] : []),
       el('h2', { textContent: game.title || 'Ігротека' }),
-      para('Ігри в Ігротеці відкриваються за паролем. Цей пристрій його запам’ятає.'),
+      intro,
       form, btn('Скасувати', () => m.close(), 'btn ghost'));
     pw.focus();
+    if (later) later(wait.signal).then(key => {
+      if (closed || done) return;
+      if (!key) { const now = device.note(); if (now) intro.textContent = MSG[now]; return; }   // (one that no longer fits went: why)
+      done = true;
+      m.close();
+      resolve(key);
+    }, () => {});
   });
 }
 

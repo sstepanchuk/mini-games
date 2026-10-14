@@ -6,7 +6,8 @@
 // by display, visibility or opacity (on today's engine, one whose checkVisibility knows only the old option names,
 // Chromium 105–120, and one without it, Safari before 17.4; opacity .5 is still seen), its pointer events off, scrolled
 // out of the frame's view, covered, only its button covered (one out of view still counts), held while a library
-// dialog is open, two copies, and the event after the rows are in place; copies connected, moved and dropped inside the
+// dialog is open, two copies, and the event after the rows are in place; a name that writes right to left, or carries
+// direction controls, in an isolate of its own (the time's digits in order after it); copies connected, moved and dropped inside the
 // browser's ResizeObserver delivery (from the game's own observer and from a 'showing' listener), pass after pass: the
 // browser has no ResizeObserver loop to report (WebKit reports it as an error). Then the dialog's guards: a browser that
 // knows no inert (Safari before 15.5) keeps Tab and Shift+Tab in the dialog, and a game that pulls the focus into its
@@ -67,6 +68,29 @@ window.U = {
   // the pass: whether a copy holds the rows (then the card says nothing)
   show(key = 'a') { return S.show(model(key), { release: () => {}, repair: () => {}, update: () => {} }); },
   state() { return S.state(); },
+  // a link row for this name, in the copy that holds it: its line as read and the text the row says, the names
+  // isolated in it, where each digit of its time stands and the right edge of the name (left to right, px)
+  named(n) {
+    const m = screen({ waits: [{ name: n, left: 150000, why: 'link', release: true }] });
+    const held = S.show(m, { release: () => {}, repair: () => {}, update: () => {} });
+    const c = [...f.contentDocument.querySelectorAll('ihroteka-wait')].find(x => x.firstElementChild);
+    const p = c && c.querySelector('.wait-row p'), t = p && p.querySelector('.wait-time');
+    if (!t) return { held };
+    const d = p.ownerDocument, box = (node, a, b) => { const r = d.createRange(); r.setStart(node, a); r.setEnd(node, b); return r.getBoundingClientRect(); };
+    const xs = [];
+    for (let i = 0; i < t.firstChild.length; i++) if (/\\d/.test(t.firstChild.data[i])) xs.push(Math.round(box(t.firstChild, i, i + 1).left));
+    // the name as the row shows it, wherever it stands in the line's text (its characters' boxes, together)
+    const shown = n.replace(/\\p{Bidi_Control}/gu, ''), texts = [], tw = d.createTreeWalker(p, 4);
+    for (let x = tw.nextNode(); x; x = tw.nextNode()) if (!t.contains(x)) texts.push(x);
+    let all = '', right = null;
+    const starts = texts.map(x => { const s = all.length; all += x.data; return s; }), at = all.indexOf(shown);
+    if (at >= 0) for (let i = at; i < at + shown.length; i++) {
+      let k = starts.length - 1;
+      while (starts[k] > i) k--;
+      right = Math.max(right ?? -Infinity, box(texts[k], i - starts[k], i - starts[k] + 1).right);
+    }
+    return { held, line: p.textContent, text: m.rows[0].text, isolated: [...p.querySelectorAll('bdi')].map(b => b.textContent), xs, nameRight: right && Math.round(right) };
+  },
   // the game's engine, as old browsers have it: 'today', 'old names' (checkVisibility knows only checkOpacity and
   // checkVisibilityCSS: Chromium 105–120), 'none' (no checkVisibility: Safari before 17.4)
   engine(kind) {
@@ -201,6 +225,18 @@ scenario('screens-unit: which copy is seen, and the dialog\'s guards', async () 
   check(r.held && r.inertHeld && !r.after, 'a library dialog open (the stage inert): the holder keeps the rows, covered or not; closed: looked at again', r);
   check(r.keeps && r.takes, 'two copies: the one that holds the rows keeps them; it gone: the other takes them', r);
   check(JSON.stringify(r.heard) === JSON.stringify(['rows link', 'rows link', 'empty null']), '`showing` heard when what is said changed, with the rows (and the attribute) in place', r.heard);
+
+  step('names that write right to left, or carry direction controls (names-and-3plus-03): isolated, the time in order');
+  r = await run(async () => {
+    const out = {};
+    for (const [k, n] of [['odd', 'Бо⁩‮гдан'], ['rtl', 'محمد'], ['plain', 'Богдан']]) { await U.fresh(); U.add({ layer: 'font-size:10px' }); out[k] = U.named(n); }
+    return out;
+  });
+  const inOrder = x => x.xs && x.xs.length === 3 && x.xs.every((v, i) => !i || v > x.xs[i - 1]) && x.nameRight != null && x.nameRight <= x.xs[0];
+  check(r.odd.held && inOrder(r.odd), 'a name with a stray isolate end and a right-to-left override: the time reads 2:30, after the name', r.odd);
+  check(JSON.stringify(r.odd.isolated) === '["Богдан"]' && !/\p{Bidi_Control}/u.test(r.odd.line), 'that name without its controls, in an isolate of its own', r.odd);
+  check(inOrder(r.rtl) && JSON.stringify(r.rtl.isolated) === '["محمد"]', 'a name written right to left (no controls): in an isolate, the time after it', r.rtl);
+  check(inOrder(r.plain) && JSON.stringify(r.plain.isolated) === '["Богдан"]' && r.plain.line === r.plain.text + ' 2:30', 'an ordinary name reads exactly as the row says it', r.plain);
 
   // (CI, WebKit: «ResizeObserver loop completed with undelivered notifications» on a page of the template game; Chromium
   // dispatches the same error event, it only does not report it)

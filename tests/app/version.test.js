@@ -1,11 +1,14 @@
 // Friends on different versions (owner, decision 9): of the library (config.js PROTO: the room does not link them,
-// it says status 'version') or of a game (game.json "wire": they are not seated together). Both sides learn it
-// («Онови сторінку — у друга інша версія»), and the older page updates itself when no game is open there (a round may
-// run in one, even alone) and the room is not nearby (the shell does it: shell.reload; here, the decision shows in
-// state().version.reloading, and reloadDone says what the shell does once the offline copy is in place; an update that
-// brings nothing to reload into, the tab's reloadAnswer, shows in state().version.failed). A copy is seated by the
-// wire of the game code that runs (open(id, { wire })), whatever its shelf says. A library or a game that says no
-// number is as old as the number: version 1. In worker tabs (tests/support).
+// it says status 'version') or of a game (game.json "wire": they are not seated together), or a game that one shelf has
+// and another not (decision 36: which page is the older, the site says: the shell's newer()). Each side learns its part
+// (decision 37: the older «У друга новіша версія — онови сторінку», the newer «У друга старіша версія — хай оновить
+// сторінку»), over a game only of that game or the library (decision 35), and the older page updates itself when no game
+// is open there (a round may run in one, even alone), the password is not being typed (decision 38: the shell's busy())
+// and the room is not nearby (the shell does it: shell.reload; here, the decision shows in state().version.reloading,
+// and reloadDone says what the shell does once the offline copy is in place; an update that brings nothing to reload
+// into, the tab's reloadAnswer, shows in state().version.failed). A copy is seated by the wire of the game code that runs
+// (open(id, { wire })), whatever its shelf says. A library or a game that says no number is as old as the number:
+// version 1. In worker tabs (tests/support).
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -168,11 +171,15 @@ describe('friends on different versions', { concurrency: 3 }, () => {
     const v = await until(async () => { const x = (await A.state()).lib.version; return x.failed && x; }, 3000);
     assert.deepEqual(v, { gap: { why: 'wire', game: 'g', theirs: 2, older: true, key: 'wire:g:2' }, reloading: null, offer: true, failed: 'storage' },
       JSON.stringify((await A.state()).lib.version));
-    assert.deepEqual((await A.call('facts')).gap, { key: 'wire:g:2', older: true, failed: 'storage' }, 'the screens\' facts say why too');
+    assert.deepEqual((await A.call('facts')).gap, { key: 'wire:g:2', older: true, failed: 'storage', why: 'wire', game: 'g' }, 'the screens\' facts say why too');
     assert.deepEqual(await A.call('reloads'), ['storage'], 'one try');
     await sleep(2500);                                       // (the check runs every second)
     assert.deepEqual(await A.call('reloads'), ['storage'], 'no second try by itself');
     assert.deepEqual(await A.stored('ihroteka-reloaded'), before, 'not noted as reloaded');
+    await A.open('g');                                       // over the game (Аня alone in it): why, and «Спробувати ще» (decision 37)
+    const row = await until(async () => ((await A.state()).lib.game?.screen.rows || []).find(r => r.kind === 'version'), 3000);
+    assert.deepEqual(row && [row.text, row.acts.map(a => a.act)],
+      ['Бракує місця на пристрої для нової версії Ігротеки: звільни трохи місця й натисни «Спробувати ще»', ['retry']], JSON.stringify(row));
     await A.call('updateNow');                               // «Оновити»
     assert.ok(await until(async () => (await A.call('reloads')).length === 2, 3000), 'the player\'s «Оновити» tries again');
     assert.equal((await A.state()).lib.version.failed, 'storage');
@@ -345,5 +352,172 @@ describe('friends on different versions', { concurrency: 3 }, () => {
     assert.ok(!a.linked && !b.linked, 'not linked');
     assert.deepEqual([a.lib.version.gap.older, a.lib.version.reloading, a.lib.version.offer], [false, null, false], 'Аня (newer) waits, and has no «Оновити»');
     assert.deepEqual([b.lib.version.gap.why, b.lib.version.gap.older, b.lib.version.reloading], ['proto', true, 'proto:' + (+m[1] + 1)], 'Богдан (older) updates');
+  });
+
+  // the older page is the one that opened the room (its «Через посилання» screen up, waiting for the friend): that
+  // screen is not busy (decision 38: only the password dialog is), the reload is what lets the friend in
+  test('another library version, the older page holds the room: it reloads itself back into the room', T, async t => {
+    const src = fs.readFileSync(path.join(LIBRARY, 'net/config.js'), 'utf8'), m = /export const PROTO = (\d+);/.exec(src);
+    if (!m) { t.skip('config.js has no PROTO yet'); return; }
+    const newer = path.join(tmp(), 'library');
+    fs.cpSync(LIBRARY, newer, { recursive: true });
+    fs.writeFileSync(path.join(newer, 'net/config.js'), src.replace(m[0], 'export const PROTO = ' + (+m[1] + 1) + ';'));
+    const W = world(t);
+    const A = await W.tab('p1tab');
+    await A.lib('ver16', 'Аня');
+    assert.ok(await until(async () => (await A.state()).role === 'host', 5000));
+    const B = await W.tab('p2tab', {}, { library: newer });
+    await B.lib('ver16', 'Богдан');
+    const a = await until(async () => { const s = await A.state(); return s.lib.version.reloading && s; }, 8000);
+    assert.ok(a, 'the older page updates itself: ' + JSON.stringify((await A.state()).lib.version));
+    assert.deepEqual([a.lib.status, a.lib.linked, a.lib.version.reloading], ['version', false, 'proto:' + (+m[1] + 1)]);
+    assert.equal(await A.reloadDone(), 'reload');
+    const back = await A.stored('ihroteka-rejoin');
+    assert.deepEqual([back?.code, back?.name], ['ver16', 'Аня'], 'back into the room after it');
+  });
+
+  /* ---------- the password dialog (decision 38): the page does not reload itself under it ---------- */
+  async function pair(W, code) {
+    const A = await W.tab('p1tab'), B = await W.tab('p2tab');
+    await A.lib(code, 'Аня', {});
+    assert.ok(await until(async () => (await A.state()).role === 'host', 5000));
+    await B.lib(code, 'Богдан', {});
+    assert.ok(await until(settled([A, B]), 10000), await shows([A, B]));
+    return [A, B];
+  }
+  const newerOf = (B, g = 2) => B.send({ t: 'lib-state', e: [['wire:Богдан', { v: { g }, c: Date.now() + 1000, a: 'Богдан' }]] });
+  const busy = (X, on) => X.call('shellBusy', { on });
+
+  test('the password dialog over a game being opened: no reload until it closes, then at once', T, async t => {
+    const W = world(t);
+    const [A, B] = await pair(W, 'ver17');
+    await A.call('gameSlow', { on: true });                  // her game's page is not there yet (the dialog is up)
+    await busy(A, true);
+    await A.open('g');
+    await newerOf(B);
+    assert.ok(await until(async () => (await A.state()).lib.version.gap?.older, 3000), 'Аня knows she is the older');
+    await sleep(2500);                                       // (the check runs every second)
+    assert.equal((await A.state()).lib.version.reloading, null, 'no reload under the dialog');
+    assert.equal(await A.reloadDone(), null, 'nothing asked of the shell');
+    await busy(A, false);                                    // the dialog closed (the password given: the game still opening)
+    assert.equal(await until(async () => (await A.state()).lib.version.reloading, 4000), 'wire:g:2');
+    assert.equal(await A.reloadDone(), 'reload');
+  });
+
+  test('the dialog opens while the offline copy is still on its way: the reload is called off, and asked again once it closes', T, async t => {
+    const W = world(t);
+    const [A, B] = await pair(W, 'ver18');
+    const before = await A.stored('ihroteka-reloaded');
+    await newerOf(B);
+    assert.equal(await until(async () => (await A.state()).lib.version.reloading, 3000), 'wire:g:2');
+    await busy(A, true);                                     // (the shell's reload waits for the service worker: up to 30 s)
+    assert.equal(await A.reloadDone(), 'stay', 'still() says no: the dialog is open');
+    assert.equal((await A.state()).lib.version.reloading, null);
+    assert.deepEqual(await A.stored('ihroteka-reloaded'), before, 'not noted as reloaded');
+    await sleep(1500);
+    assert.equal((await A.state()).lib.version.reloading, null, 'not again while it is open');
+    await busy(A, false);
+    assert.equal(await until(async () => (await A.state()).lib.version.reloading, 4000), 'wire:g:2', 'asked again');
+    assert.equal(await A.reloadDone(), 'reload');
+  });
+
+  test('control: no dialog, a game being opened (its page loading): the reload goes', T, async t => {
+    const W = world(t);
+    const [A, B] = await pair(W, 'ver19');
+    await A.call('gameSlow', { on: true });
+    await A.open('g');
+    await newerOf(B);
+    assert.equal(await until(async () => (await A.state()).lib.version.reloading, 3000), 'wire:g:2');
+    assert.equal(await A.reloadDone(), 'reload');
+  });
+
+  /* ---------- over a game, that game's version or the library's only (decision 35) ---------- */
+  const rowsOf = s => s.lib.game ? s.lib.game.screen.rows.map(r => r.kind + (r.acts.length ? '+' + r.acts.map(a => a.act).join(',') : '')) : null;
+  // tabs for these players ([name, the shelf's wires]), the first holds the room → the tabs, linked
+  async function libRoom(W, code, list, { near = false } = {}) {
+    const tabs = [];
+    for (const [i, [name, wires, newer]] of list.entries()) {
+      const X = await W.tab('p' + (i + 1) + 'tab');
+      if (newer) await X.call('shellNewer', { value: true });     // (the site has a newer version than this page's)
+      if (near) await X.libNear(name, {}, wires); else await X.lib(code, name, {}, wires);
+      if (near && i) { const H = tabs[0]; await H.pair('finish', await X.pair('answer', await H.pair('offer'))); }
+      tabs.push(X);
+      if (!i && !near) assert.ok(await until(async () => (await X.state()).role === 'host', 5000));
+      else if (i) assert.ok(await until(settled(tabs), 8000), await shows(tabs));
+    }
+    return tabs;
+  }
+
+  test('another version of another game: nothing said over this one (they play it together); the older page still updates on the shelf', T, async t => {
+    const W = world(t);
+    const [A, B] = await libRoom(W, 'ver20', [['Аня', { g: 1, h: 1 }], ['Богдан', { g: 1, h: 2 }]]);
+    assert.ok(await until(async () => (await A.state()).lib.version.reloading === 'wire:h:2', 3000), 'on the shelf Аня (older in h) updates');
+    await A.open('g');
+    assert.ok(await until(async () => (await A.game())?.linked && (await B.game())?.linked, 5000), 'they play g together');
+    assert.equal(await A.reloadDone(), 'stay', 'called off: a game opened');
+    await sleep(1500);
+    const [a, b] = await states([A, B]);
+    assert.deepEqual([rowsOf(a), rowsOf(b)], [[], []], 'nothing said over g');
+    assert.deepEqual([a.lib.version.gap?.game, a.lib.version.offer], ['h', true], 'the page still knows h: ' + JSON.stringify(a.lib.version));
+    await A.open(null);
+    assert.ok(await until(async () => (await A.state()).lib.version.reloading === 'wire:h:2', 3000), 'back on the shelf: it updates for h');
+    assert.equal(await A.reloadDone(), 'reload');
+  });
+
+  test('over the game, a third player whose copy of it is newer: the row stays over it, «Оновити» for the older', T, async t => {
+    const W = world(t);
+    const [A, B, C] = await libRoom(W, 'ver21', [['Аня', { g: 1, h: 1 }], ['Богдан', { g: 1, h: 1 }], ['Сава', { g: 2, h: 1 }]]);
+    await A.open('g');
+    assert.ok(await until(async () => (await A.game())?.linked && (await B.game())?.linked, 5000), 'Аня and Богдан play g');
+    const r = await until(async () => { const x = (await states([A, B, C])).map(rowsOf); return x.every(y => y && y.length) && x; }, 5000);
+    assert.deepEqual(r, [['version+update'], ['version+update'], ['version']], JSON.stringify((await states([A, B, C])).map(rowsOf)));
+  });
+
+  test('the game whose versions differ, opened: the row over it', T, async t => {
+    const W = world(t);
+    const [A, B] = await libRoom(W, 'ver22', [['Аня', { g: 1, h: 1 }], ['Богдан', { g: 1, h: 2 }]]);
+    await A.open('h');
+    assert.ok(await until(async () => (await B.game())?.view === 'h', 5000));
+    const r = await until(async () => { const x = (await states([A, B])).map(rowsOf); return x.every(y => y && y.length) && x; }, 5000);
+    assert.deepEqual(r, [['version+update'], ['version']]);
+  });
+
+  /* ---------- a game one shelf has and another not (decision 36): the site says which page is the older ---------- */
+  test('a game added by a deploy: the page without it (the site has newer) updates itself; over the game, the friend is named', T, async t => {
+    const W = world(t);
+    const [A, B] = await libRoom(W, 'ver23', [['Аня', { g: 1 }, true], ['Богдан', { g: 1, n: 1 }]]);
+    await B.open('n');
+    const v = await until(async () => { const x = (await A.state()).lib.version; return x.reloading && x; }, 5000);
+    assert.ok(v, 'Аня\'s page updates itself: ' + JSON.stringify((await A.state()).lib.version));
+    const g = v.gap;
+    assert.deepEqual([g.why, g.game, g.older, g.key, g.missing, g.who], ['game', 'n', true, 'game:n', 'ours', ['Богдан']], JSON.stringify(g));
+    assert.deepEqual([(await A.state()).lib.myHere, await A.reloadDone()], [null, 'reload'], 'on the shelf (the game is not on hers): it reloads');
+    const row = await until(async () => ((await B.state()).lib.game?.screen.rows || []).find(r => r.kind === 'version'), 5000);
+    assert.deepEqual(row && [row.text, row.acts], ['Аня не може відкрити цю гру: там інша версія Ігротеки', []], 'Богдан, over the game: ' + JSON.stringify(row));
+    assert.deepEqual([(await B.state()).lib.version.gap?.older, (await B.state()).lib.version.reloading, await B.reloadDone()], [false, null, null], 'Богдан\'s page (the site has nothing newer) never reloads');
+  });
+
+  test('a game taken off by a deploy: the page that still has it is offered «Оновити» (no reload while it plays); the other never reloads', T, async t => {
+    const W = world(t);
+    const [A, B] = await libRoom(W, 'ver24', [['Аня', { g: 1, old: 1 }, true], ['Богдан', { g: 1 }]]);
+    await A.open('old');
+    const row = await until(async () => ((await A.state()).lib.game?.screen.rows || []).find(r => r.kind === 'version'), 5000);
+    assert.deepEqual(row && [row.text, row.acts.map(a => a.act)], ['Богдан не може відкрити цю гру: там інша версія Ігротеки', ['update']], 'Аня, over the game: ' + JSON.stringify(row));
+    assert.ok(await until(async () => (await B.state()).lib.version.gap?.why === 'game', 3000), 'Богдан knows: ' + JSON.stringify((await B.state()).lib.version));
+    await sleep(1500);                                       // (the check runs every second)
+    const [a, b] = await states([A, B]);
+    assert.deepEqual([a.lib.version.reloading, await A.reloadDone()], [null, null], 'Аня plays: no reload by itself');
+    assert.deepEqual([b.lib.version.gap.missing, b.lib.version.gap.older, b.lib.version.reloading, await B.reloadDone()], ['ours', false, null, null], 'Богдан\'s page, the newest, never reloads');
+  });
+
+  test('a game one shelf has, nearby: said, no reload either way', T, async t => {
+    const W = world(t, { rtc: true });
+    const [A, B] = await libRoom(W, '', [['Аня', { g: 1 }, true], ['Богдан', { g: 1, n: 1 }]], { near: true });
+    await B.open('n');
+    assert.ok(await until(async () => (await A.state()).lib.version.gap?.why === 'game', 5000), 'Аня knows: ' + JSON.stringify((await A.state()).lib.version));
+    await sleep(1500);
+    const [a, b] = await states([A, B]);
+    assert.deepEqual([a.lib.version.gap.older, a.lib.version.reloading, a.lib.version.offer, await A.reloadDone()], [true, null, false, null], 'Аня (older): nearby, no reload, nothing to press');
+    assert.deepEqual([b.lib.version.reloading, await B.reloadDone()], [null, null]);
   });
 });

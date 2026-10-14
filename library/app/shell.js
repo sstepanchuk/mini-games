@@ -4,17 +4,22 @@
    (together.js) lives on from game to game. Addresses stay real: <root> is the shelf, <root><id>/ a game.
    A game that breaks while it starts (an error in its window or its listeners before START ms after its page loaded)
    leaves no empty screen: the stage says «Гра зламалася» and offers the report (together.js report) to copy.
+   A game that did not open says why over it, with «Спробувати ще» (or «Ввести пароль» after a cancelled password):
+   it opens that game again on this device only, without taking the room anywhere. A cancelled password takes the room
+   back to the shelf only from the player who opened the game (together.js ownView); anyone else stays over it.
    A game's copy speaks the wire of its own code (api), which a page open since before a deploy may not have on its
-   shelf; and the page reloads into a newer version only once its offline copy is in place (reload, update.js).
+   shelf; and the page reloads into a newer version only once its offline copy is in place (reload, update.js), never
+   under the password dialog (busy).
    ===================================================================== */
 import { $, copy, el, root, safe } from './dom.js';
 import { initInvite, openDialog } from './invite.js';
 import { attachScreens, detachScreens, waitScreen, state as screens } from './screens.js';
-import { attachGame, detachGame, gameError, initTogether, leave, openRound, pageError, query, report, state, viewChanged } from './together.js';
+import { attachGame, detachGame, gameError, initTogether, leave, openRound, ownView, pageError, query, report, state, viewChanged } from './together.js';
 import * as trace from './trace.js';
-import { updateCopy } from './update.js';
+import { newerThanPage, updateCopy } from './update.js';
 
 let games = [], current, frame = null, load = null, loads = 0;   // current: the open game id, null on the shelf (undefined before the first view)
+let again = null;                                       // the open that failed, to try again («Спробувати ще»); null: none
 const START = 5000;                                      // an error this soon after the game's page loaded (or before) is a broken start
 let loaded = 0, broke = false;                           // the open game's page: when it loaded (0: not yet); whether it broke starting
 // Going back to the shelf is history.back() when the shelf is the entry before (Back then works as expected);
@@ -27,11 +32,16 @@ let backing = false, following = false, queued = null;
  *               not given; camera, microphone: true when its frame may use it, game.json "camera", "microphone")
  * initial       the game this page was opened at, if any
  * loader        game → Promise<{ srcdoc } | { src }>: its page (decrypted, or in dev from disk); rejects with
- *               error.cancelled when the player does not give the password
- * signOut       () → Promise: forget the password on this device
+ *               error.cancelled when the player does not give the password, else with error.say (what to tell the
+ *               player) and error.final (trying again cannot help)
+ * signOut       () → Promise<boolean>: forget the password on this device (false: it may still be remembered)
  * whenSignedIn  (fn) → calls fn once this device knows the password
+ * busy          () → whether the password dialog is open (the page then does not reload itself: together.js)
+ * The views it gives together.js and invite.js: current(), follow(id), invite(), address(), seats(id), wires(),
+ * reload(still, later), gameError(), busy(), newer() → Promise<boolean> (whether the site has a newer version than this
+ * page: update.js newerThanPage; false with no offline copy: the dev server).
  */
-export function startShell({ games: list, initial, loader, signOut, whenSignedIn }) {
+export function startShell({ games: list, initial, loader, signOut, whenSignedIn, busy }) {
   games = list; load = loader;
   // the game's page asks for the library API (see game-api.js), and says where its waiting screens are (<ihroteka-wait>:
   // screens.js); state, screens and trace: for checks from the console and tests
@@ -43,9 +53,19 @@ export function startShell({ games: list, initial, loader, signOut, whenSignedIn
   $('stage-report').addEventListener('click', e => copy(report(), e.target));
   $('games').replaceChildren(...games.map(card));
   $('stage-back').addEventListener('click', () => go(null));
+  $('stage-retry').addEventListener('click', () => { const f = again; again = null; if (f) f(); });   // (this device only: no go())
   if (signOut) {
-    $('sign-out').addEventListener('click', async () => { leave(); await signOut(); $('sign-out').hidden = true; });
-    whenSignedIn(() => { $('sign-out').hidden = false; });
+    // «Забути пароль на цьому пристрої»: gone once the device forgot; when it may still remember, it stays and says so
+    const out = $('sign-out'), said = $('sign-out-err');
+    out.addEventListener('click', async () => {
+      out.disabled = true; said.textContent = '';
+      leave();
+      const ok = await signOut();
+      out.disabled = false;
+      if (ok === false) said.textContent = 'Не вдалося забути пароль. Закрий вкладку й спробуй ще раз.';
+      else out.hidden = true;
+    });
+    whenSignedIn(() => { out.hidden = false; said.textContent = ''; });
   }
   addEventListener('popstate', () => {
     const byPeer = following || !!(queued && queued[1]);   // a friend's newer choice came meanwhile: the shelf on the way is not ours to announce
@@ -56,7 +76,8 @@ export function startShell({ games: list, initial, loader, signOut, whenSignedIn
   });
   $('busy').hidden = true;
   const views = { current: () => current ?? null, follow: id => go(id, true), invite: openDialog, address: () => address(current), seats: id => find(id)?.players?.max || 2,
-    wires: () => Object.fromEntries(games.map(g => [g.id, wireOf(g)])), reload, gameError: () => { if (frame && (!loaded || performance.now() - loaded < START)) broken(); } };
+    wires: () => Object.fromEntries(games.map(g => [g.id, wireOf(g)])), reload, gameError: () => { if (frame && (!loaded || performance.now() - loaded < START)) broken(); },
+    busy: () => !!(busy && busy()), newer };
   initInvite(views);
   initTogether(views);
   show(initial && find(initial) ? initial : null);
@@ -80,6 +101,12 @@ async function reload(still, later) {
   if (still && !still()) return 'stay';
   location.reload();
   return 'reload';
+}
+// whether the site has a newer version than this page (update.js newerThanPage; no offline copy here: false)
+async function newer() {
+  let reg = null;
+  try { reg = await navigator.serviceWorker?.getRegistration(root.href); } catch (e) {}
+  return newerThanPage(reg);
 }
 const fromAddress = () => { const id = location.pathname.slice(root.pathname.length).split('/')[0]; return find(id) ? id : null; };
 const address = id => new URL((id ? id + '/' : '') + query(), root).href;
@@ -115,18 +142,28 @@ function show(id, byPeer = false) {
   if (g) openFrame(g, byPeer);
 }
 
-// byPeer: the friend opened it (then a cancelled password keeps us here, instead of taking the friend away too)
+// byPeer: the friend opened it. A cancelled password takes the room back to the shelf only from the one who opened
+// the game (we followed, or the room's view is someone else's: a page that came back to the game's address in a room,
+// or a room link made over a game; together.js ownView); anyone else stays over it, and the room stays in the game.
+// A failure that trying again may mend offers «Спробувати ще» («Ввести пароль» after a cancelled password): the same
+// game, opened again here only (the room's view is not said again).
 async function openFrame(g, byPeer) {
-  const t = ++loads, note = $('stage-note'), say = (text, cls) => { $('stage-text').textContent = text; $('stage-text').className = cls; };
+  const t = ++loads, note = $('stage-note'), retry = $('stage-retry'), say = (text, cls) => { $('stage-text').textContent = text; $('stage-text').className = cls; };
   loaded = 0; broke = false; note.classList.remove('over'); $('stage-report').hidden = true;
+  again = null; retry.hidden = true;
   say('Відкриваю гру…', 'busy'); note.hidden = false;
   let page;
   try { page = await load(g); }
   catch (e) {
     if (t !== loads || current !== g.id) return;
-    if (e.cancelled && !byPeer) { go(null); return; }  // no password: back to the shelf
+    if (e.cancelled && !byPeer && ownView(g.id)) { go(null); return; }   // no password: back to the shelf
     if (!e.cancelled) console.error(e);
-    say(e.cancelled ? 'Друг відкрив цю гру. Щоб грати, потрібен пароль.' : e.say || 'Не вдалося відкрити гру. Онови сторінку.', 'err');
+    say(e.cancelled ? 'Цю гру відкрили в кімнаті. Щоб грати, потрібен пароль.' : e.say || 'Не вдалося відкрити гру. Онови сторінку.', 'err');
+    if (e.final) return;
+    again = () => openFrame(g, byPeer);
+    retry.textContent = e.cancelled ? 'Ввести пароль' : 'Спробувати ще';
+    retry.hidden = false;
+    safe(() => retry.focus());
     return;
   }
   if (t !== loads || current !== g.id) return;          // switched elsewhere meanwhile (or reopened: a newer load is on its way)
@@ -144,19 +181,26 @@ async function openFrame(g, byPeer) {
 const ASKED = ['camera', 'microphone'];
 const allowOf = g => ['fullscreen', 'screen-wake-lock', 'autoplay', 'gamepad', ...ASKED.map(f => g[f] === true ? f : f + " 'none'")].join('; ');
 
-// The open game broke while it started: the note over it says so, with the report to copy and the way back.
+// The open game broke while it started: the note over it says so, with the report to copy and the way back (out of
+// fullscreen: the game has nothing to show there, and its frame in the browser's top layer would cover the note).
 function broken() {
   if (broke) return;
   broke = true;
+  const report = $('stage-report'), t = loads;
+  again = null; $('stage-retry').hidden = true;
   $('stage-text').textContent = 'Гра зламалася'; $('stage-text').className = 'err';
-  Object.assign($('stage-report'), { hidden: false, textContent: 'Скопіювати звіт' });
+  Object.assign(report, { hidden: false, textContent: 'Скопіювати звіт' });
   $('stage-note').classList.add('over');
   $('stage-note').hidden = false;
-  safe(() => $('stage-report').focus());
+  // (the focus on the report; out of fullscreen, tried each frame until it lands: the page may stay inert a moment)
+  const focus = (n = 10) => { if (t !== loads) return; safe(() => report.focus()); if (n && document.activeElement !== report) requestAnimationFrame(() => focus(n - 1)); };
+  if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().then(() => focus(), () => {});
+  focus(0);
 }
 
 function closeFrame() {
   loads++;                                               // a load still running is for nothing now
+  again = null;                                          // (a retry never opens a game the room has left)
   if (!frame) return;
   detachGame();
   detachScreens();

@@ -6,9 +6,15 @@
 // value, so everyone ends up with the same, whatever order the changes arrive in, and nothing depends on who passes
 // the messages on. Pure data: together.js sends the changes around.
 //
-//   view           the game everyone looks at (null: the shelf)
+//   view           the game everyone looks at (null: the shelf); who wrote it last says whose choice it is (by:
+//                  together.js ownView)
 //   here:<name>    the game this player has open (null: none); only they write it
+//   wire:<name>    the wire number of each game this player has ({ game: number }); only they write it
 //   auth:<game>    whose copy of the game runs the round, once it moved (see together.js)
+//   round:<game>   the game's round record (round.js); only its runner writes it
+//   quit:<name>    this player's quits of rounds still on ({ game: round id }, round.js), so they follow the player to
+//                  another tab or device; only they write it
+//   g:<game>:<key> a game's shared value (room.share)
 //
 // A clock from elsewhere counts only if it is a whole number (a safe integer) at most a year ahead of our own wall
 // clock: one wild value (1e300, or 2^52 - 1, from a broken or hostile library) would otherwise carry every clock
@@ -23,6 +29,8 @@ export function roomState(me) {
   let clock = Date.now();
   return {
     get: k => doc.has(k) ? doc.get(k).v : undefined,
+    // who wrote the key's value we have (undefined: none)
+    by: k => doc.has(k) ? doc.get(k).a : undefined,
     // our change → the entry to send to the others
     set(k, v) {
       const e = { v, c: ++clock, a: me };

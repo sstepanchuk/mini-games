@@ -4,8 +4,9 @@
 // on or ends it, a snapshot on no device.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { absence, arrivesLoading, awayMs, canRelease, everyoneHere, goneForGood, inGame, offerUpdate, onlineSince, paused, playersChange, playingNow, reloadNow, roleOf,
-  roundPart, roundTaker, roundWaits, roundWriter, runnerOf, sameWire, seating, seatsGone, snapFits, snapshotLost, stale, takeOver, versionGap, waitingFor } from '../library/app/rules.js';
+import { absence, arrivesLoading, awayMs, canRelease, canRepair, cutOffFrom, everyoneHere, goneForGood, hubWaits, inGame, offerUpdate, onlineSince, paused, playersChange,
+  playingNow, reloadNow, roleOf, roundPart, roundTaker, roundWaits, roundWriter, runnerOf, sameWire, seating, seatsGone, snapFits, snapshotLost, stale, takeOver, versionGap,
+  waitingFor } from '../library/app/rules.js';
 
 const G = 'dragons', WAIT = 10000, HOLD = 180000, NOW = 1000000;   // AUTH_WAIT and HOLD as the library has them
 // The room as together.js shows it to the rules. here: the game each player has open (everyone: G, unless given);
@@ -223,14 +224,51 @@ test('«Не чекати» only where it works: the host for anyone; a guest fo
   assert.equal(canRelease(three({ away: { Аня: 5000 } }), 'Аня'), true);
 });
 
-// (owner, decision 6 (c): the screens name a player of our round whose game is closed, while nobody we play with has it
-// open; one who dropped out meanwhile is waited for as one who dropped out: their place is running out)
-test('the round\'s waits: nobody with no round on for us, without a seat in it, or while someone we play with has the game open', () => {
+// (owner, q05: «З’єднатися знову» only where it works: the hub pairs any guest again; a guest only itself, while its own
+// link to the hub is broken; nearby.js begin refuses anything else)
+test('«З’єднатися знову» only where it works: nearby, the hub; a guest only while cut off from the hub (and which hub)', () => {
+  const near = o => room({ me: 'Кіра', players: ['Ганна', 'Гліб', 'Кіра'], nearby: true, role: 'guest', host: 'Ганна', ...o });
+  const both = f => [canRepair(f), cutOffFrom(f)];
+  assert.deepEqual(both(near({ me: 'Ганна', role: 'host', away: { Кіра: 5000 } })), [true, null], 'the hub');
+  assert.deepEqual(both(near({ away: { Гліб: 5000 } })), [false, null], 'a guest that hears the hub: another guest dropped out');
+  assert.deepEqual(both(near({ away: { Ганна: 5000, Гліб: 5000 } })), [true, 'Ганна'], 'a guest cut off from the hub');
+  assert.deepEqual(both(near({ role: null, host: null, away: { Ганна: 5000 } })), [true, null], 'looking for the room again: no hub to name');
+  assert.deepEqual(both(room({ me: 'Кіра', players: ['Ганна', 'Гліб', 'Кіра'], role: 'guest', host: 'Ганна', away: { Ганна: 5000 } })), [false, 'Ганна'], 'through the internet: no pairing');
+  assert.deepEqual(both(room({ away: { Богдан: 5000 } })), [false, null], 'through the internet, the host');
+});
+
+// (owner, q06: nearby, a guest whose hub is away hears nobody: also one who waits for a seat is told, with the hub's row)
+test('the hub\'s row: nearby, a guest whose hub is away and that no row names yet (a seat-waiter too)', () => {
+  const near = o => room({ me: 'Кіра', players: ['Ганна', 'Гліб', 'Кіра'], nearby: true, role: 'guest', host: 'Ганна', away: { Ганна: 15000, Гліб: 15000 }, ...o });
+  assert.deepEqual(hubWaits(near(), []), [{ name: 'Ганна', left: 165000, why: 'link', release: true }], 'a seat-waiter: its rows say nothing of the hub');
+  assert.deepEqual(hubWaits(near({ me: 'Ганна', role: 'host', away: { Кіра: 5000 } }), []), [], 'the hub itself');
+  assert.deepEqual(hubWaits(near({ nearby: false }), []), [], 'through the internet');
+  assert.deepEqual(hubWaits(near({ away: { Гліб: 15000 } }), []), [], 'the hub is here');
+  assert.deepEqual(hubWaits(near(), [{ name: 'Ганна', why: 'link' }]), [], 'a row names it already');
+});
+
+// (owner, decision 6 (c): the screens name a player of our round whose game is closed; one who dropped out meanwhile is
+// waited for as one who dropped out: their place is running out)
+test('the round\'s waits: nobody with no round on for us, or without a seat in it', () => {
   const f = room({ here: { Аня: G, Богдан: null } }), mine = inGame(f, G, G);
   assert.deepEqual(roundWaits(f, G, null, mine, []), []);
   assert.deepEqual(roundWaits(f, G, ['Богдан', 'Сава'], mine, []), [], 'we have no seat in it');
-  assert.deepEqual(roundWaits(room({ players: ['Аня', 'Богдан', 'Сава'], here: { Аня: G, Богдан: null, Сава: G } }), G, ['Аня', 'Богдан', 'Сава'], ['Аня', 'Сава'], ['Сава']), [],
-    'a game for three: Сава plays on with us (the game\'s own rule)');
+});
+
+// (owner, q26: a round player whose game is closed is always named; while someone still plays with us, as one who is not
+// in the game now (on): in a game for 3+ seats the round may go on without them, the game's own rule)
+test('the round\'s waits: while someone plays with us, a round player whose game is closed is named too (on)', () => {
+  const three = o => room({ players: ['Аня', 'Богдан', 'Сава'], ...o });
+  assert.deepEqual(roundWaits(three({ here: { Аня: G, Богдан: null, Сава: G } }), G, ['Аня', 'Богдан', 'Сава'], ['Аня', 'Сава'], ['Сава']),
+    [{ name: 'Богдан', left: 0, why: 'closed', release: false, round: true, on: true }], 'a game for three: Сава plays on with us, Богдан\'s game is closed');
+  // its runner: nobody runs the round without it (owner, decision 3), so it is waited for as with nobody else (no on)
+  assert.deepEqual(roundWaits(three({ here: { Аня: G, Богдан: null, Сава: G } }), G, ['Аня', 'Богдан', 'Сава'], ['Аня', 'Сава'], ['Сава'], 'Богдан'),
+    [{ name: 'Богдан', left: 0, why: 'closed', release: false, round: true }], 'the runner\'s game is closed');
+  // one who dropped out with the game closed: the time their place is kept and «Не чекати», also while others play on
+  assert.deepEqual(roundWaits(three({ here: { Аня: G, Богдан: null, Сава: G }, away: { Богдан: 5000 } }), G, ['Аня', 'Богдан', 'Сава'], ['Аня', 'Сава'], ['Сава'], 'Аня'),
+    [{ name: 'Богдан', left: HOLD - 5000, why: 'link', release: true, round: true, on: true }]);
+  // in a game for two nobody else plays with us: the rows as before (no on)
+  assert.deepEqual(roundWaits(room({ here: { Аня: G, Богдан: null } }), G, ['Аня', 'Богдан'], ['Аня'], [], 'Аня'), [{ name: 'Богдан', left: 0, why: 'closed', release: false, round: true }]);
 });
 
 test('the round\'s waits: a player of it in the room with the game closed, another game open, or never opened in a new tab (stale): closed', () => {
@@ -453,11 +491,51 @@ test('versions: another library version (PROTO) the room met; ours older when th
   assert.deepEqual(versionGap(mine(2, {}), 1, []), { why: 'proto', game: null, theirs: 1, older: false, key: 'proto:1' });
 });
 
+// the other players as together.js shows them to versionGap: their wire: map (undefined: their library does not say),
+// and the game their here: names
+const told = (...l) => l.map((wires, i) => ({ name: 'P' + i, wires, here: null }));
 test('versions: a game\'s wire, for a game both libraries have; the one that makes us older first', () => {
   const m = mine(1, { [G]: 2, other: 1 });
-  assert.equal(versionGap(m, null, [{ [G]: 2 }, undefined, { other: 1, notOurs: 5 }]), null);
-  assert.deepEqual(versionGap(m, null, [{ [G]: 1 }]), { why: 'wire', game: G, theirs: 1, older: false, key: 'wire:dragons:1' });
-  assert.deepEqual(versionGap(m, null, [{ [G]: 1 }, { other: 3 }]), { why: 'wire', game: 'other', theirs: 3, older: true, key: 'wire:other:3' });
+  assert.equal(versionGap(m, null, told({ [G]: 2 }, undefined, { other: 1, notOurs: 5 })), null);
+  assert.deepEqual(versionGap(m, null, told({ [G]: 1 })), { why: 'wire', game: G, theirs: 1, older: false, key: 'wire:dragons:1' });
+  assert.deepEqual(versionGap(m, null, told({ [G]: 1 }, { other: 3 })), { why: 'wire', game: 'other', theirs: 3, older: true, key: 'wire:other:3' });
+});
+
+// (owner, q09: over an open game, its own copies and the library; another game's gap is said on the shelf only)
+test('versions: over an open game (only), that game\'s wire and the library\'s version only', () => {
+  const m = mine(2, { g: 1, h: 1 });
+  assert.equal(versionGap(m, null, told({ g: 1, h: 2 }), { only: 'g' }), null, 'h is another version: nothing over g');
+  assert.deepEqual(versionGap(m, null, told({ g: 1, h: 2 }), { only: 'h' }), { why: 'wire', game: 'h', theirs: 2, older: true, key: 'wire:h:2' });
+  assert.deepEqual(versionGap(m, null, told({ g: 3, h: 2 }), { only: 'g' }), { why: 'wire', game: 'g', theirs: 3, older: true, key: 'wire:g:3' }, 'the open game\'s own');
+  for (const only of [undefined, null, 'g', 'h']) assert.deepEqual(versionGap(m, 3, told({ g: 1, h: 2 }), { only }), { why: 'proto', game: null, theirs: 3, older: true, key: 'proto:3' }, 'the library: ' + only);
+  assert.deepEqual(versionGap(m, null, told({ g: 1, h: 2 })), { why: 'wire', game: 'h', theirs: 2, older: true, key: 'wire:h:2' }, 'no only: any game (the shelf)');
+});
+
+// (owner, q10: a game one shelf has and another does not is a version gap once the room has it open; which page is
+// older, the site decides: older null here, until together.js asks)
+test('versions: the game the room has open, on one shelf and not another', () => {
+  const m = mine(2, { g: 1 });
+  const P = (name, wires, here = null) => ({ name, wires, here });
+  // the room's view is a game our shelf lacks, and whoever has it open has it
+  assert.deepEqual(versionGap(m, null, [P('Аня', { g: 1, fresh: 1 }, 'fresh'), P('Сава', { g: 1, fresh: 1 }, null)], { view: 'fresh' }),
+    { why: 'game', game: 'fresh', theirs: 1, older: null, key: 'game:fresh', missing: 'ours', who: ['Аня'] });
+  assert.equal(versionGap(m, null, [P('Аня', { g: 1, fresh: 1 }, null)], { view: 'fresh' }), null, 'nobody has it open (yet)');
+  assert.equal(versionGap(m, null, [P('Аня', { g: 1 }, 'g')], { view: 'g' }), null, 'a game we have');
+  // our open game lacks from a friend's shelf (only where their wire: map is known)
+  const mo = mine(2, { g: 1, old: 1 });
+  assert.deepEqual(versionGap(mo, null, [P('Богдан', { g: 1 }), P('Віра', { g: 1, old: 1 }, 'old'), P('Гліб', { g: 1 })], { open: 'old', only: 'old' }),
+    { why: 'game', game: 'old', theirs: null, older: null, key: 'game:old', missing: 'theirs', who: ['Богдан', 'Гліб'] });
+  assert.equal(versionGap(mo, null, [P('Богдан', undefined)], { open: 'old', only: 'old' }), null, 'a friend with no wire: map (a library from before it) says nothing');
+  assert.equal(versionGap(mo, null, [P('Богдан', { g: 1, old: 1 })], { open: 'old' }), null, 'they have it');
+  assert.equal(versionGap(mine(2, { g: 1, notOurs: 5 }), null, told({ g: 1 }), {}), null, 'no view, no open game: a game one of us lacks says nothing');
+  // precedence: the library's version first; a wire gap that makes us older; then a game; then a wire gap that makes us newer
+  const both = [P('Аня', { g: 2, fresh: 1 }, 'fresh')];
+  assert.equal(versionGap(m, 3, both, { view: 'fresh' }).why, 'proto');
+  assert.deepEqual(versionGap(mine(2, { g: 1 }), null, both, { view: 'fresh' }), { why: 'wire', game: 'g', theirs: 2, older: true, key: 'wire:g:2' }, 'an older wire gap first');
+  assert.equal(versionGap(mine(2, { g: 3 }), null, both, { view: 'fresh' }).why, 'game', 'a wire gap that makes us the newer page: the game first (the site may find us the older)');
+  assert.equal(versionGap(mine(2, { g: 3 }), null, both, {}).why, 'wire', 'no game gap: the newer wire gap');
+  // over an open game, another game's gap is not said (only)
+  assert.equal(versionGap(m, null, [P('Аня', { g: 1, fresh: 1 }, 'fresh')], { view: 'fresh', only: 'g' }), null, 'over g, the room\'s view fresh');
 });
 
 test('versions: the older page reloads only with no round here, never nearby, once per version', () => {
@@ -469,6 +547,14 @@ test('versions: the older page reloads only with no round here, never nearby, on
   assert.equal(reloadNow(older, { nearby: false, playing: true, done: none }), false);
   assert.equal(reloadNow(older, { nearby: false, playing: false, done: new Set(['proto:2']) }), false);
   assert.equal(reloadNow(older, { nearby: false, playing: false, done: new Set(['proto:3']) }), true);
+  assert.equal(reloadNow({ ...older, older: null }, { nearby: false, playing: false, done: none }), false, 'not before the site says which page is older');
+});
+
+// (owner, q12: a reload under the password dialog would throw away what the player typed)
+test('versions: no reload while the player types the password (busy); once it is closed, as before', () => {
+  const older = { why: 'wire', older: true, key: 'wire:g:2' }, none = new Set();
+  assert.equal(reloadNow(older, { nearby: false, playing: false, busy: true, done: none }), false);
+  assert.equal(reloadNow(older, { nearby: false, playing: false, busy: false, done: none }), true);
 });
 
 test('versions: the note offers «Оновити» only on the older page, and never nearby', () => {
@@ -478,6 +564,7 @@ test('versions: the note offers «Оновити» only on the older page, and n
   assert.equal(offerUpdate({ ...older, older: false }, { nearby: false }), false);   // the newer page has nothing newer to get
   assert.equal(offerUpdate(older, { nearby: true }), false);                         // a reload would end the room for every phone
   assert.equal(offerUpdate(null, { nearby: false }), false);
+  assert.equal(offerUpdate({ ...older, older: null }, { nearby: false }), false, 'not before the site says which page is older');
 });
 
 /* ---------- the round layer (round.js) ---------- */

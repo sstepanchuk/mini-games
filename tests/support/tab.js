@@ -173,6 +173,7 @@ let broke = 0;                                           // how often together.j
 // scripted, done(out) } (see shellUp)
 const reloads = [];
 let reloadAs = reloadAnswer;
+let busy = false, newer = false;                         // the shell's busy() (the password dialog is open) and newer() (cmds.shellBusy, shellNewer)
 // Go to a view (null: the shelf; else a game, which opens a moment later, as its frame would). byPeer: following;
 // w: the wire its copy speaks (open). A game this tab's shelf does not have: the shelf (as shell.js go does).
 function go(id, byPeer = false, w = null) {
@@ -212,7 +213,7 @@ async function topics(g, code) {
 // The shell's reload(still) answers as shell.js does: once the newer offline copy is in place (here: when the test says
 // so, reloadDone) 'reload' if still() lets it, else 'stay'; or at once what the tab's reloadAnswer scripts ('storage',
 // 'failed', 'timeout', 'same': there is no newer copy to reload into), without asking still(); one that said 'timeout'
-// hears later how it ended after all (reloadLater).
+// hears later how it ended after all (reloadLater). Its busy() and newer() say what the test set (shellBusy, shellNewer).
 async function shellUp(seats, wires) {
   T = T || await import(lib('app/together.js'));
   seatsOf = seats;
@@ -224,7 +225,7 @@ async function shellUp(seats, wires) {
     if (R.scripted) R.done(reloadAs);
   });
   T.initTogether({ current: () => view, follow: id => go(id, true), invite() {}, address: () => globalThis.location.href, seats: id => seatsOf[id] || 2, askName() {},
-    reload, gameError: () => { broke++; }, ...(wires && { wires: () => wires }) });
+    reload, gameError: () => { broke++; }, busy: () => busy, newer: () => Promise.resolve(newer), ...(wires && { wires: () => wires }) });
   // (what the open game's screens say changed, and the versions: together.js 'waiting' and 'version', in the events as
   // 'lib:waiting' and 'lib:version')
   if (T.onChange) T.onChange(what => { if (what === 'waiting' || what === 'version') events.push([ms(), 'lib:' + what]); });
@@ -389,6 +390,13 @@ const cmds = {
   reloadLater: ({ out }) => { const R = reloads.findLast(x => x.out === 'timeout'); if (!R || !R.later) return false; R.later(out); return true; },
   // the player asks for the newer version («Оновити»: together.js updateNow)
   updateNow: () => { T.updateNow(); },
+  // the shell's password dialog is open (on) or closed: its busy() (shell.js; together.js reloads nothing under it)
+  shellBusy: ({ on }) => { busy = !!on; },
+  // whether the site has a newer version than this page's: what the shell's newer() resolves (default false; set it
+  // before lib() for what the library asks as it starts)
+  shellNewer: ({ value }) => { newer = value; },
+  // whether the room shows game id because this page opened it (together.js ownView; no room: true)
+  ownView: ({ id }) => T.ownView(id),
   // what the screens are made of (together.js waitFacts: whom we wait for and why, a version gap and why our update to
   // it did not happen: gap.failed)
   facts: () => T.waitFacts(),

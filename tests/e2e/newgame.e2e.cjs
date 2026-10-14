@@ -6,7 +6,8 @@
 // ihroteka.round) to its end (turns, the other's buttons off, the same number on both screens, one winner). Midway the
 // tab of the copy that does not run the round reloads and gets it back; then the runner's: the round goes on from its
 // snapshot ('run' with it). Meanwhile the other one sees whom the round waits for in the library's waiting screen under
-// the game's title (<ihroteka-wait>, README "Waiting screens": «Чекаємо на …»), and never in the library's card over
+// the game's title (<ihroteka-wait>, README "Waiting screens": «Чекаємо, поки повернеться …» or «… повертається в
+// гру»), and never in the library's card over
 // the game (sampled every 100 ms on both pages). Runs on its own server: E2E_URL is only checked to be up, by run.cjs.
 'use strict';
 const { launch, scenario, check, step, until } = require('./support/scenario.cjs');
@@ -70,14 +71,15 @@ scenario('newgame: cli new, then two devnet tabs play it without internet', asyn
   const count = async n => { const s = await sampled(P[n]); for (const [k, x] of Object.entries(s || {})) tally[n][k] = (tally[n][k] || 0) + x; };
   for (const [name, what] of [[guest, 'the other copy'], [runner, 'the copy that runs the round']]) {
     step(name + '\'s tab (' + what + ') reloads mid-round');
-    const other = NAMES.find(n => n !== name), says = new RegExp('^Чекаємо на ' + name + '(… \\d+:\\d\\d( Не чекати)?| — повертається в гру)$');
+    const other = NAMES.find(n => n !== name), says = new RegExp('^(Чекаємо, поки повернеться ' + name + '… \\d+:\\d\\d( Не чекати)?|' + name + ' повертається в гру)$');
     await count(name);
     await P[name].reload();
     const waits = await until(async () => { const x = await waitShown(P[other]); return x.where === 'screen' && says.test(x.text) && x; }, 10000);
-    check(waits && waits.say === waits.text.replace(/ \d+:\d\d( Не чекати)?$/, ''), other + '\'s game, meanwhile: «Чекаємо на ' + name + '…» in its waiting screen (a screen reader hears it, not the time)',
+    check(waits && waits.say === waits.text.replace(/ \d+:\d\d( Не чекати)?$/, ''), other + '\'s game, meanwhile: whom it waits for («Чекаємо, поки повернеться ' + name + '…» or «' + name + ' повертається в гру») in its waiting screen (a screen reader hears it, not the time)',
       waits || await waitShown(P[other]));
     await enterName(P[name], name);                         // (the room's link asks for the name again)
-    F[name] = await frame(P[name]);
+    // (its lobby, or the round already back from its snapshot: a page under load may never show the lobby first)
+    F[name] = await frame(P[name], ':is(#lobby, #play):not([hidden])');
     const back = async () => { const x = await views(); return NAMES.every(n => x[n] && x[n].play && x[n].total === total) && await turns() && await nothing() && x; };
     check(await until(back, 30000), 'the round goes on' + (name === runner ? ' from its snapshot' : '') + ': ' + total + ' on both, a turn to play, nothing to wait for',
       [await views(), await short(A), await short(B), await waitShown(P[other])]);

@@ -23,7 +23,10 @@
      dropped out keeps their seat while the room keeps their place, and one who is back (in a new tab or device, or
      after their place dropped) keeps it while their game opens there: the game pauses, and the library says whom we
      wait for and why (waitFacts; the game's screens, or its card: invite.js, screens.js), with a way not to wait for
-     one who dropped out.
+     one who dropped out. A player of our round whose game is closed is always named, in a game for 3+ also while the
+     others play on (owner, decision 52); nearby, «З’єднатися знову» is offered only where pairing again works, and a
+     guest cut off from the phone that holds the room is told only of that one, also while it waits for a seat
+     (decisions 31, 32); the others of a round its runner restores are told who does (decision 58).
    - A round outlives the device that runs it: the game hands the library snapshots (room.snapshot) and every
      player keeps the latest. If the player whose copy runs the round has been away for AUTH_WAIT, the next one
      here runs it on from the snapshot (event 'resume'); whoever comes back simply plays on. A game closed mid-round
@@ -31,13 +34,20 @@
      snapshot, if the same players are seated (owner, decision 3). A round is over for good when the game says so
      (snapshot(null)) or one of its players left the room for good: the snapshot becomes a tombstone ({ s: null }
      with its version), so an older copy that someone still keeps can never bring it back.
-   - Versions (owner, decision 9): a friend whose library (config.js PROTO: the room does not link us) or whose copy of
-     a game (game.json "wire": we are not seated together) is another version sees «Онови сторінку — у друга інша
-     версія»; the older page updates its offline copy and reloads itself when no round may run here (no game open),
-     never in a nearby room, and once per version and session. A copy's wire is that of the game code that runs (its
-     own page says it: shell.js api), not the shelf's the page loaded with (a deploy while the page stayed open). A
-     reload happens only once the newer copy is in place (update.js): one that cannot be stored or fetched leaves the
-     page as it is, and is not tried again by itself for that version (the note's «Оновити» tries again).
+   - Versions (owner, decisions 9, 35–38): a friend whose library (config.js PROTO: the room does not link us) or whose
+     copy of a game (game.json "wire": we are not seated together) is another version, or who has open a game one of
+     our shelves lacks (a deploy added it or took it off: the site says which page is the older, the shell's newer()),
+     is told so, each page its own part (waiting.js versionWords: the older to update, with «Оновити», the newer that
+     the friend should; nearby, «…, коли буде інтернет»); over a game only a gap in that game or in the library is said
+     (versionGap's only; on the shelf, any). The older page updates its offline copy and reloads itself when no round
+     may run here (no game open) and the player is not typing the password (the shell's busy()), never in a nearby
+     room, and once per version and session. A copy's wire is that of the game code that runs (its own page says it:
+     shell.js api), not the shelf's the page loaded with (a deploy while the page stayed open). A reload happens only
+     once the newer copy is in place (update.js): one that cannot be stored or fetched leaves the page as it is, says
+     why, and is not tried again by itself for that version («Спробувати ще» tries again). A page in an internet room
+     whose offline copy was updated under it reloads back into the room (reloadHere, index.js).
+   - A cancelled password takes the room back to the shelf only from the page that opened the game (ownView, shell.js;
+     owner, decision 39).
    - The game's side is bounded (A1): a reliable message and a snapshot up to CAP bytes (UTF-8, as JSON), a shared
      value up to SHARE_BYTES, SHARE_KEYS keys per game; what is not JSON is a TypeError at the call; send, share and
      snapshot say whether they did it (true/false; on the dev server, once per reason, why not). The library's own
@@ -55,8 +65,9 @@
      lib-state { e: entries }   the shared state, or a change to it (roomstate.js); greet sends all of it in chunks of
                                 up to CAP bytes. Keys: view, here:<name>, auth:<game>, wire:<name> (a player's game wire
                                 numbers, { game: number }; only they write it), round:<game> (round.js; only the round's
-                                runner writes it), g:<game>:<key> (room.share); any other key is dropped (it would be
-                                passed on for ever)
+                                runner writes it), quit:<name> (round.js: a player's quits of rounds still on, { game:
+                                round id }; only they write it: validQuits), g:<game>:<key> (room.share); any other key is
+                                dropped (it would be passed on for ever)
      lib-snap { v: game, s: snapshot | null, c: version, a: writer, p: [players seated] }   a round's latest (room.snapshot);
                                 greet sends these before the rest of lib-state, so the update that links a game already
                                 has the snapshot
@@ -78,7 +89,7 @@
 import { cleanName, HOLD, joinNearby, joinRoom, NAME, nameShows, ownName, PROTO, TIMING, validRoomCode } from '../net/index.js';
 import { safe } from './dom.js';
 import { roomState, validClock } from './roomstate.js';
-import { rounds, validRecord } from './round.js';
+import { RESTORE_SHOW, rounds, validQuits, validRecord } from './round.js';
 import * as rules from './rules.js';
 import * as trace from './trace.js';
 import { screen } from './waiting.js';
@@ -113,7 +124,10 @@ const session = { get: k => { try { return JSON.parse(sessionStorage.getItem(k))
 
 let shell = null;                                        // { current(), follow(id), invite(), address(), seats(id), askName(...),
                                                          //   wires() → { game: wire } (the shelf's), reload(still?, later?) →
-                                                         //   Promise of what it did (see attempt), gameError() (each optional) }
+                                                         //   Promise of what it did (see attempt), gameError(), busy() (the
+                                                         //   password dialog is open: see versionCheck), newer() → Promise of
+                                                         //   whether the site has a newer version than this page's (see
+                                                         //   versionGap) (each optional) }
 let room = null;                                         // the room (see ../net: room.kind, room.status)
 let st = null;                                           // its shared state (roomstate.js)
 let myHere = null;                                       // the game we have open and listening
@@ -224,7 +238,7 @@ export function rejoinAs(name) {
 }
 export function leave() {
   const r = room;
-  room = null; st = null; snaps.clear(); loading.clear(); R.clear(); gapKey = ''; closedSince.clear();
+  room = null; st = null; snaps.clear(); loading.clear(); R.clear(); gapKey = ''; sites.clear(); closedSince.clear(); restore = null;
   session.set(REJOIN, null);                             // (a reload under way does not bring us back: we left)
   hold(false);
   if (r) { r.leave(); setQuery(null); trace.note('left the room'); forgetRoom(); }
@@ -244,11 +258,12 @@ export const state = () => ({ site: SITE, trace: trace.read(), kind: room && roo
   rounds: st ? Object.fromEntries(st.entries().filter(([k]) => k.startsWith('round:')).map(([k, e]) => [k.slice(6), e.v])) : {},   // game → its round record (round.js)
   saves: R.state(),                                     // game → the latest snapshot of its round we keep (round.js)
   version: versionState() });
-// (failed: why the update for this version did not happen, see attempt; null: it did not fail)
-const versionState = () => { const gap = versionGap(); return { gap, reloading, offer: offerUpdate(), failed: failedWhy(gap) }; };
+// (any game's version gap, as the self-update sees it; failed: why the update for this version did not happen, see
+// attempt; null: it did not fail)
+const versionState = () => { const gap = versionGap(); return { gap, reloading, offer: offerUpdate(null), failed: failedWhy(gap) }; };
 
 function wire(r) {
-  room = r; st = roomState(r.me); snaps.clear(); loading.clear(); R.clear(); replaced = null; gapKey = ''; closedSince.clear();
+  room = r; st = roomState(r.me); snaps.clear(); loading.clear(); R.clear(); replaced = null; gapKey = ''; sites.clear(); closedSince.clear(); restore = null;
   trace.note('room: ' + r.kind + ', as ' + r.me);
   // Which game we have open. A new tab of a player who is in a game says nothing yet: it follows the room into
   // that game in a moment, and a "not in the game" meanwhile would end the round for everyone (see staleHere).
@@ -385,6 +400,7 @@ function knownEntry([k, e]) {
   if (k.startsWith('wire:')) return e.a === k.slice(5) && WIRES(e.v);
   if (k.startsWith('auth:')) return /^auth:[a-z0-9-]{1,40}$/.test(k) && (e.v === null || NAME.test(e.v));
   if (k.startsWith('round:')) return validRecord(k, e);
+  if (k.startsWith('quit:')) return e.a === k.slice(5) && validQuits(e.v);
   return /^g:[a-z0-9-]{1,40}:[\w-]{1,40}$/.test(k);
 }
 
@@ -405,7 +421,8 @@ function onLibMessage(m, from, reliable) {
     const back = [...new Set(said)].filter(p => loading.delete(p));
     R.merged(keys, known);                                // (round records: an end is final whatever its clock, round.js)
     if (keys.length) update();
-    if (keys.some(k => k.startsWith('wire:'))) versionCheck();
+    // (a game one of our shelves lacks that the room has open is a version gap too: the view and where players are count)
+    if (keys.some(k => k.startsWith('wire:') || k === 'view' || k.startsWith('here:'))) versionCheck();
     if (ch) {
       for (const p of back) if (ch.others.includes(p) && st.get('here:' + p) === ch.id) ch.emit('relinked', p);
       const pre = 'g:' + ch.id + ':';
@@ -436,6 +453,11 @@ export function viewChanged(id, byPeer) {
   if (!byPeer && room) publish(st.set('view', id));
   if (room) staleHere(id);
 }
+// Whether the room looks at this game because this page chose it (we wrote the room's view: roomstate.js by; with no
+// room, always): only then may a cancelled password take the room back to the shelf (shell.js, owner decision 39). A
+// page that opened at a game's address in a room (a reload, the version's or by hand; a room link made over a game)
+// shows it without saying so, as a follower: whatever the room's state says yet, it is not this page's view.
+export const ownView = id => !room || (st.get('view') === id && st.by('view') === room.me);
 // The others may know our wire numbers from our previous page (before it reloaded into a newer version; its clock may
 // run ahead of ours), or from the shelf before the game's code that runs said its own (attachGame): ours win.
 function staleWires() {
@@ -601,24 +623,64 @@ const running = new Map();                               // game → the wire it
 const shelfWires = () => { if (wires === undefined) { const w = shell && shell.wires && safe(shell.wires); wires = WIRES(w) ? w : null; } return wires; };
 const myWires = () => running.size ? { ...(shelfWires() || {}), ...Object.fromEntries(running) } : shelfWires();
 const myWire = game => running.has(game) ? running.get(game) : shelfWires() ? shelfWires()[game] : 1;
-// A friend's library or game is another version (rules.versionGap) → null | { why, game, theirs, older, key }
-export function versionGap() {
+// A friend's library or game is another version (rules.versionGap): their library (PROTO, the room met it), their
+// copy of a game (its wire: number), or a game one of our shelves has and the other not, that the room has open (the
+// room's view, or our open game). only: a game, over which only that game's version (and the library's) counts (owner,
+// decision 35: over a game, a gap in another one says nothing; on the shelf, any game's does).
+// → null | { why: 'proto' | 'wire' | 'game', game, theirs, older, key, missing?, who? } (older, for a 'game' gap: as the
+// site says, see siteSays; null until it has)
+function versionGap(only) {
   if (!room || !st) return null;
-  const others = room.players.filter(p => p !== room.me).map(p => st.get('wire:' + p));
-  return rules.versionGap({ proto: PROTO, wires: myWire }, room.versionMismatch, others);
+  const others = room.players.filter(p => p !== room.me).map(p => ({ name: p, wires: st.get('wire:' + p), here: st.get('here:' + p) ?? null }));
+  return siteSays(rules.versionGap({ proto: PROTO, wires: myWire }, room.versionMismatch, others, { only, view: st.get('view'), open: myHere }));
+}
+// A game one shelf has and another not (owner, decision 36): which page is the older the shelves cannot tell (a deploy
+// adds games and takes them off); the site says it: the shell's newer() (true: this page is not the site's latest
+// version), asked once per gap (sites: key → true | false; null while it has not answered: the page then neither
+// reloads nor offers «Оновити», and says only what it sees). A shell without it (the dev server, worker tabs): false.
+// With true, it goes as a wire gap does (the older page updates itself, the note offers «Оновити»; nearby, words only).
+const sites = new Map();
+function siteSays(gap) {
+  if (!gap || gap.why !== 'game') return gap;
+  const key = gap.key;
+  if (!sites.has(key)) {
+    sites.set(key, null);
+    const r = room;
+    Promise.resolve(shell && shell.newer ? safe(shell.newer) : false).then(v => v === true, () => false).then(v => {
+      if (room !== r || sites.get(key) !== null) return;
+      sites.set(key, v);
+      trace.note('versions: ' + key + ', the site has ' + (v ? 'a newer version' : 'nothing newer'));
+      versionCheck();
+      update();
+    });
+  }
+  const older = sites.get(key);
+  return older === null ? gap : { ...gap, older };
+}
+// the open game, or the one the shell is opening (its page not attached yet); null on the shelf
+const shownGame = () => ch ? ch.id : shell && shell.current ? safe(shell.current) ?? null : null;
+// The version gap as the screens say it where the player is (over a game: of that game or the library; on the shelf:
+// any), with why our update to it did not happen (failed, see attempt) → null | the facts' gap (waiting.js screen)
+export function gapFacts(only = shownGame()) {
+  const gap = versionGap(only);
+  return gap && { key: gap.key, older: gap.older, failed: failedWhy(gap), why: gap.why, game: gap.game, ...(gap.missing && { missing: gap.missing, who: gap.who }) };
 }
 // The older page updates itself (rules.reloadNow): its offline copy first, then a reload (shell.reload), back into
 // the same room without asking the name again (REJOIN). Asked whenever the versions or the rounds may have changed;
 // the screens hear 'version' once a pass. Only while no game is open here: a round may run in it, even one played
-// alone, which the library cannot see (the note over the game offers «Оновити» instead); and only if the page can note
-// that it reloaded (RELOADED, noted as the reload really happens): one that cannot (site data blocked) would reload
-// again on every visit, so it leaves it to the player. The offline copy may take a while (up to 30 s): if meanwhile a
-// game opened or we left the room, the reload is called off (and tried again once the page is free). An update that
-// brought nothing to reload into (see attempt) is not tried again by itself for that version.
+// alone, which the library cannot see (the note over the game offers «Оновити» instead); not while the player types
+// the password (busy: the shell's password dialog is open, a reload would throw what was typed away, owner decision
+// 38; the «Через посилання» screen is not busy: there the reload is what lets the friend in); and only if the page can
+// note that it reloaded (RELOADED, noted as the reload really happens): one that cannot (site data blocked) would
+// reload again on every visit, so it leaves it to the player. The offline copy may take a while (up to 30 s): if
+// meanwhile a game opened, the password dialog did or we left the room, the reload is called off (and tried again
+// once the page is free: the check runs every second). An update that brought nothing to reload into (see attempt) is
+// not tried again by itself for that version.
 let gapKey = '', reloading = null;
+const busy = () => !!(shell && shell.busy && safe(shell.busy));
 function versionCheck() {
   if (!room) return;
-  const gap = versionGap(), key = gap ? gap.key + (gap.older ? '<' : '>') : '';
+  const gap = versionGap(), key = gap ? gap.key + (gap.older === true ? '<' : gap.older === false ? '>' : '?') : '';
   const news = key !== gapKey;
   if (news) { gapKey = key; trace.note('versions: ' + (key || 'the same')); }
   const started = selfUpdate(gap);
@@ -626,28 +688,37 @@ function versionCheck() {
 }
 // whether the older page starts updating itself now
 function selfUpdate(gap) {
-  if (reloading || !gap || !gap.older || failedFor(gap)) return false;
+  if (reloading || !gap || gap.older !== true || failedFor(gap)) return false;
   const was = session.get(RELOADED), done = new Set(Array.isArray(was) ? was : []);
-  if (!rules.reloadNow(gap, { nearby: room.kind === 'nearby', playing: !!ch, done })) return false;
+  if (!rules.reloadNow(gap, { nearby: room.kind === 'nearby', playing: !!ch, busy: busy(), done })) return false;
   if (!session.set(RELOADED, was)) return false;         // (can it note it? as it was, for now)
   reloading = gap.key;
   const r = room, key = gap.key;
   attempt(key, () => {
-    if (room === r && !ch && session.set(RELOADED, [...done, key])) return true;
+    if (room === r && !ch && !busy() && session.set(RELOADED, [...done, key])) return true;
     reloading = null;                                    // (not now: tried again once the page is free)
     changed('version');
     return false;
   });
   return true;
 }
-// whether the note offers «Оновити»: on the older page only (rules.offerUpdate)
-export const offerUpdate = () => rules.offerUpdate(versionGap(), { nearby: !!room && room.kind === 'nearby' });
-// the newer version now (the note's «Оновити»: also after an update that failed), back into this room after it
+// whether to offer «Оновити»: on the older page only (rules.offerUpdate); only: as for versionGap (by default the game
+// the player sees: over a game, of that game or the library; on the shelf, any)
+export const offerUpdate = (only = shownGame()) => rules.offerUpdate(versionGap(only), { nearby: !!room && room.kind === 'nearby' });
+// the newer version now (the note's «Оновити», or «Спробувати ще» after an update that failed), back into this room
+// after it
 export function updateNow() {
-  const gap = versionGap();
+  const gap = versionGap(shownGame());
   updateFailed = null; quietFor = null;
   clearTimeout(sameTimer);
   attempt(gap ? gap.key : '', null);
+}
+// The page reloads now (index.js: a newer offline copy took over under it, and the page is idle on the shelf, owner
+// decision 38): from an internet room, straight back into it under the same name (REJOIN, as a version reload does:
+// the others see it «повертається» for a moment); else as it is.
+export function reloadHere() {
+  if (room && room.kind === 'internet') session.set(REJOIN, { code: room.code, name: room.me, at: Date.now() });
+  location.reload();
 }
 // One try at the newer version (shell.reload: the offline copy first, update.js; then the reload, unless still, asked
 // once the copy is in place, says no). What came of it: 'reload' (the page goes), 'stay' (still said no), or, with no
@@ -789,8 +860,10 @@ function channel(id, seats) {
   const refuse = why => c.refuse(why);
   // What a game that starts listening late missed, as update() would have told it: who plays ('players'), its part in
   // the round of ihroteka.round ('run' or 'watch', round.js), the round it runs on ('resume'), that it plays with
-  // someone ('linked'), that it waits ('weak'); then the messages kept for it until it listened. One pass for every
-  // listener added meanwhile (the room's and the round's), in this order whatever order they came in.
+  // someone ('linked'), that it waits ('weak'), the end of a round it was in that it has not heard (round.js news: after
+  // 'linked', whose handler may wipe what the game shows, owner decision 49); then the messages kept for it until it
+  // listened. One pass for every listener added meanwhile (the room's and the round's), in this order whatever order
+  // they came in.
   const replay = () => {
     const fresh = late.splice(0), to = name => fresh.filter(([n]) => n === name).map(([, fn]) => fn);
     if (c.disposed) return;
@@ -800,6 +873,7 @@ function channel(id, seats) {
     if (to('resume').length) c.maybeResume();
     if (api.linked) for (const fn of to('linked')) play(fn);
     if (c.weak) for (const fn of to('weak')) play(fn, true);
+    c.round.news(to);
     c.deliverKept();
   };
   const api = {
@@ -904,8 +978,10 @@ function recount(c) {
 
 // Tell the open game who plays now: 'players', then what changed for the round (rules.playersChange: 'peer-gone'
 // and 'linked', or 'leave' and 'join'), then whose copy runs it ('role', and 'resume' with the snapshot for the
-// new one), then 'weak'. A round that goes on in our copy as we start to play with someone hears 'resume' before
-// 'linked' (so the game knows it runs the round on when it hears it plays); and only while we play with someone.
+// new one), then 'weak', then the end of a round it was in that it has not heard yet (round.js news: last, so a
+// game's 'linked' handler does not wipe what the end shows, owner decision 49). A round that goes on in our copy as
+// we start to play with someone hears 'resume' before 'linked' (so the game knows it runs the round on when it hears it
+// plays); and only while we play with someone.
 // (Once at a time: what the game does on an event, say a round it starts or ends, comes in a pass of its own right
 // after this one, never in the middle of it.)
 let updating = false, again = false;
@@ -938,6 +1014,8 @@ function updateOnce() {
   c.maybeResume();
   const weak = c.api.linked && rules.paused(facts, c.others);
   if (weak !== c.weak) { c.weak = weak; c.emit('weak', weak); }
+  if (ch !== c) return;
+  c.round.news();
   // (what the screens say: whom we wait for and why, our seat, the version; the 1 s watchRunner update crosses
   // CLOSED_GRACE and RESTORE_SHOW)
   const wait = screen(waitFacts()).key;
@@ -952,23 +1030,46 @@ export function waitingFor() {
   if (!ch || !room || !ch.api.linked) return [];
   return rules.waitingFor(facts, ch.others);
 }
-// For the screens (waiting.js screen; invite.js, screens.js): whom the open game waits for and why (waitingFor of whom
-// we play with; rules.roundWaits while nobody we play with has it open, a 'closed' one only after CLOSED_GRACE), our
-// copy waiting for its round's snapshot (round.js restoring), a seat we wait for and who plays now, another version
-// (gap.failed: why our update to it did not happen, see attempt; the screens say nothing of it yet)
-// → { waits, restoring, seat, gap, offer, nearby } (waiting.js screen's facts)
+// For the screens (waiting.js screen; invite.js, screens.js): whom the open game waits for and why, and what can be
+// done there (waitingFor of whom we play with; rules.roundWaits of our round's players not in the game with us, a
+// 'closed' one only after CLOSED_GRACE: in a game for 3+ also while others play with us, owner decision 52), our copy
+// waiting for its round's snapshot (round.js restoring) or another one restoring it (restorer), a seat we wait for and
+// who plays now, another version (gapFacts: over the open game, of that game or the library, decision 35; why our
+// update to it did not happen, see attempt) and whether to offer «Оновити» there. Nearby (owner, decisions 31, 32): a
+// link row offers «З’єднатися знову» only where pairing again works (rules.canRepair: the hub, or a guest whose own link
+// to it broke); a guest cut off from the hub hears nobody without it (the others are away only for that: net/room.js
+// presence), so its screen names the hub alone (rules.hubWaits; cut: why, when someone else is in the room), whether it
+// plays or waits for a seat (classic, so a game without its screens shows it in the card), and host names the hub for
+// the other guests' words. → { waits, restoring, seat, gap, offer, nearby, host } (waiting.js screen's facts)
 export function waitFacts() {
-  const gap = versionGap();
-  const f = { waits: [], restoring: false, seat: null, gap: gap && { key: gap.key, older: gap.older, failed: failedWhy(gap) }, offer: offerUpdate(), nearby: !!room && room.kind === 'nearby' };
-  if (!ch || !room) { closedSince.clear(); return f; }
+  const open = shownGame(), gap = gapFacts(open), nearby = !!room && room.kind === 'nearby';
+  const f = { waits: [], restoring: false, seat: null, gap, offer: offerUpdate(open), nearby, host: room ? room.host : null };
+  if (!ch || !room) { closedSince.clear(); restore = null; return f; }
   const now = performance.now(), r = ch.round.api;
-  const round = rules.roundWaits(facts, ch.id, r.active ? r.seats : null, ch.inGame, ch.others);
+  const round = rules.roundWaits(facts, ch.id, r.active ? r.seats : null, ch.inGame, ch.others, r.active ? r.runner : null);
   for (const p of [...closedSince.keys()]) if (!round.some(x => x.name === p && x.why === 'closed')) closedSince.delete(p);
   for (const x of round) if (x.why === 'closed' && !closedSince.has(x.name)) closedSince.set(x.name, now);
-  f.waits = [...waitingFor(), ...round.filter(x => x.why !== 'closed' || now - closedSince.get(x.name) >= CLOSED_GRACE)];
-  f.restoring = ch.round.restoring(now);
+  const hub = rules.hubWaits(facts, []), repair = rules.canRepair(facts);
+  // (why it hears nobody else, only when there is someone else: two phones say what they always did, decision 5)
+  const cut = hub.length > 0 && room.players.some(p => p !== room.me && p !== room.host);
+  f.waits = hub.length ? hub.map(x => ({ ...x, repair, ...(cut && { cut }) }))
+    : [...waitingFor(), ...round.filter(x => x.why !== 'closed' || now - closedSince.get(x.name) >= CLOSED_GRACE)].map(x => x.why === 'link' ? { ...x, repair } : x);
+  f.restoring = ch.round.restoring(now) || restorer(now);
   if (!ch.api.seated && ch.waiting.includes(room.me)) f.seat = { players: rules.playingNow(R.frozen(ch.id), room.players, ch.seated) };
   return f;
+}
+// Another copy restores our round (owner, decision 58): a round of ours that is on and was saved, whose runner is here
+// with the game open (its copy waits for the round's snapshot, round.js restoring), while ours watches it and keeps no
+// snapshot of it (else ours would send it: greet) → { by: the runner } once that has lasted RESTORE_SHOW (the runner's
+// own screen says it then too), until the round goes on or ends (lost, round.js LOST_WAIT); else false.
+let restore = null;                                      // { id: the round, since }
+function restorer(now) {
+  const rec = R.record(ch.id), me = room.me;
+  const on = !!rec && rec.on && rec.saved && ch.round.api.active && rec.seats.includes(me) && rec.runner !== me && room.players.includes(rec.runner) &&
+    !awayMs(rec.runner) && ch.inGame.includes(rec.runner) && !R.has(ch.id, rec.id);
+  if (!on) { restore = null; return false; }
+  if (!restore || restore.id !== rec.id) restore = { id: rec.id, since: now };
+  return now - restore.since >= RESTORE_SHOW && { by: rec.runner };
 }
 // nobody waits for this player any longer: their place goes
 export const release = p => { if (room) room.release(p); };

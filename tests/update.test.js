@@ -3,7 +3,7 @@
 // reloads only on 'activated' (or 'none': no offline copy); anything else and it stays as it is (app-core-05).
 import { afterEach, beforeEach, describe, mock, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { updateCopy } from '../library/app/update.js';
+import { newerThanPage, updateCopy } from '../library/app/update.js';
 
 const SCOPE = 'https://example.org/games/';
 // a service worker: its state, and 'statechange' as it moves on
@@ -150,5 +150,49 @@ describe('the offline copy brought up to date (update.js updateCopy)', () => {
     mock.timers.tick(30000);
     await peek(Promise.resolve());
     assert.deepEqual(heard, []);
+  });
+});
+
+// Whether the site has a newer version than this page (shell.js newer, for a game one shelf has and another not:
+// together.js asks it once per such gap, owner decision 36).
+describe('a newer version than this page (update.js newerThanPage)', () => {
+  test('no offline copy (the dev server, a browser without service workers): false, nothing asked', async () => {
+    assert.equal(await newerThanPage(undefined), false);
+    assert.equal(await newerThanPage(null), false);
+  });
+
+  test('a newer worker took over since the page loaded: true, at once', async () => {
+    const old = new Worker('redundant'), reg = registration();
+    assert.equal(await newerThanPage(reg, { served: old }), true);
+    assert.equal(reg.updates, 0, 'no need to ask the site');
+  });
+
+  test('the site has a new version on its way (update() finds one installing, or waiting): true', async () => {
+    const reg = registration(r => { r.installing = new Worker('installing'); });
+    assert.equal(await newerThanPage(reg, { served: reg.active }), true);
+    assert.equal(reg.updates, 1);
+    const w = registration(r => { r.waiting = new Worker('installed'); });
+    assert.equal(await newerThanPage(w, { served: w.active }), true);
+  });
+
+  test('a new version that took over during the check: true', async () => {
+    const reg = registration(r => { r.active = new Worker('activated'); });
+    assert.equal(await newerThanPage(reg, { served: reg.active }), true);
+  });
+
+  test('nothing newer, or the check failed (no network): false', async () => {
+    const reg = registration();
+    assert.equal(await newerThanPage(reg, { served: reg.active }), false);
+    assert.equal(reg.updates, 1);
+    assert.equal(await newerThanPage(registration(() => { throw new TypeError('Failed to update a ServiceWorker'); }), { served: null }), false);
+  });
+
+  test('a page the network served (no worker of its own yet): only a worker after the first to claim it is newer', async () => {
+    assert.equal(await newerThanPage(registration(), { served: null }), false, 'the first worker stored the page\'s own version');
+    // the first visit: the offline copy is still being made (the first worker installs, or waits: none active yet)
+    assert.equal(await newerThanPage(registration(r => { r.installing = new Worker('installing'); }, null), { served: null }), false, 'the first copy installing is the page\'s own version');
+    assert.equal(await newerThanPage(registration(r => { r.waiting = new Worker('installed'); }, null), { served: null }), false);
+    // one in place already (not claimed this page yet): another one installing after it is newer
+    assert.equal(await newerThanPage(registration(r => { r.installing = new Worker('installing'); }), { served: null }), true);
   });
 });

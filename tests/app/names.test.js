@@ -119,14 +119,15 @@ describe('a name already in play, and «*»', { concurrency: 2 }, () => {
     assert.ok(g, 'back in its seat: ' + JSON.stringify(await B2.game()) + ' ' + show(await B2.state()));
     assert.equal((await B2.state()).me, raw, 'as it was');
     assert.deepEqual((await A.state()).players, ['Богдан', raw], 'the same player');
-    // a quit said while the round's runner is away is kept in the tab under that name, and goes on after the next reload
+    // a quit said while the round's runner is away is kept in the browser under that name (round.js: localStorage, one
+    // entry per room and name), and goes on after the next reload
     await A.net({ up: false });
     assert.ok(await until(async () => (await B2.state()).away.includes('Богдан'), 5000), 'the runner is away');
     assert.equal(await B2.call('rquit'), true);
     const B3 = await update(B2);
     assert.ok(await until(async () => (await B3.state())?.me === raw, 5000), 'back as ' + raw + ': ' + show(await B3.state()));
-    const k = await B3.stored('ihroteka-quits');
-    assert.deepEqual([k && k.room, k && k.q], [JSON.stringify(['internet', 'nmr1', raw]), { g: id }], 'the quit kept: ' + JSON.stringify(k));
+    const v = (await B3.local()).find(([x]) => x === 'ihroteka-quits'), k = v && JSON.parse(v[1])[JSON.stringify(['internet', 'nmr1', raw])];
+    assert.deepEqual(k && k.q, { g: id }, 'the quit kept under that name: ' + (v && v[1]));
     await A.net({ up: true });
     const r = await until(async () => { const x = await rec(A); return x && !x.on && x; }, 15000);
     assert.ok(r, 'the runner hears it: ' + JSON.stringify(await rec(A)));

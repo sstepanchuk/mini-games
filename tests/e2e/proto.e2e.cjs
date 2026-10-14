@@ -1,14 +1,16 @@
 // tags: @ci @webkit
-// proto: friends whose libraries speak different wire versions (net/config.js PROTO; owner, decision 9). Аня's page
-// runs the library with PROTO + 1 (its bundle rewritten on the way): the two rooms on one code do not link; both pages
-// say «Онови сторінку — у друга інша версія»; Богдан's page, the older, reloads itself back into the room (no name
-// asked), once only, and is still not linked; «Оновити» is never offered on Аня's, the newer.
+// proto: friends whose libraries speak different wire versions (net/config.js PROTO; owner, decisions 9 and 37). Аня's
+// page runs the library with PROTO + 1 (its bundle rewritten on the way): the two rooms on one code do not link;
+// Богдан's page, the older, reloads itself back into the room (no name asked), once only, and is still not linked; each
+// page says its own part: Аня's chip «У друга старіша версія» and her dialog «У друга старіша версія — хай оновить
+// сторінку» (never «онови сторінку» to her, nor «Оновити»), Богдан's chip «У друга новіша версія» and his dialog «У
+// друга новіша версія — онови сторінку» with «Оновити».
 'use strict';
 const { U, w, launch, watch, scenario, check, until } = require('./support/scenario.cjs');
-const { openPage, createLink, libState } = require('./support/pages.cjs');
+const { openPage, createLink, dialogText, libState } = require('./support/pages.cjs');
 const { fakeNet } = require('./support/fakenet.cjs');
 
-const UPDATE = /Онови сторінку — у друга інша версія/;
+const OLDER = 'У друга новіша версія — онови сторінку.', NEWER = 'У друга старіша версія — хай оновить сторінку.';
 
 scenario('proto: a friend\'s library is newer', async () => {
   const ctx = await (await launch()).newContext();       // (one context: the fake network is shared by its pages)
@@ -38,7 +40,12 @@ scenario('proto: a friend\'s library is newer', async () => {
   check(sa.version.gap?.why === 'proto' && !sa.version.gap.older && sa.version.gap.theirs === proto - 1 && !sa.version.offer, 'Аня\'s knows it is the newer: no «Оновити»', sa.version);
   check(sa.status === 'version' && sb.status === 'version', 'both rooms say \'version\'', [sa.status, sb.status]);
   const chip = p => p.evaluate(() => document.getElementById('together').textContent);
-  check(UPDATE.test(await chip(pa)) && UPDATE.test(await chip(pb)), 'both pages say it', [await chip(pa), await chip(pb)]);
-  const dialog = await pa.evaluate(() => document.querySelector('.dialog')?.innerText || '');
-  check(UPDATE.test(dialog), 'Аня\'s open dialog says it too', dialog.replace(/\s+/g, ' ').slice(0, 200));
+  check(await chip(pa) === 'У друга старіша версія' && await chip(pb) === 'У друга новіша версія', 'each chip says its side', [await chip(pa), await chip(pb)]);
+  const buttons = p => p.$$eval('.dialog button:not([hidden])', b => b.map(x => x.textContent));
+  const da = await dialogText(pa);
+  check(da.includes(NEWER) && !/онови сторінку/i.test(da) && !(await buttons(pa)).includes('Оновити'), 'Аня\'s open dialog: «' + NEWER + '», nothing to press', [da.slice(0, 300), await buttons(pa)]);
+  await pb.click('#together');                           // (the link screen: the room is still waiting for its friend)
+  await pb.waitForSelector('.dialog canvas.qr');
+  const db = await dialogText(pb);
+  check(db.includes(OLDER) && (await buttons(pb)).includes('Оновити'), 'Богдан\'s dialog: «' + OLDER + '» and «Оновити»', [db.slice(0, 300), await buttons(pb)]);
 });

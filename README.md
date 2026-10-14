@@ -16,7 +16,9 @@ and works offline. Hosted on GitHub Pages.
   Removing someone rotates the library key and re-encrypts every game. A game is gzipped before it is sealed; where
   the browser cannot gunzip (Safari before 16.4: iPhones on iOS 15–16.3), a small gunzip (`lib/inflate.js`, from
   fflate) loads for it, and only there, so iOS 15 is the lowest (whether the internet rooms' MQTT client runs there is
-  not checked).
+  not checked). A game that does not open says why over it, with «Спробувати ще», which opens it again on this device
+  only. A password cancelled in a room takes everyone back to the shelf only from the player who opened the game; anyone
+  else stays over it, with «Цю гру відкрили в кімнаті. Щоб грати, потрібен пароль.» and «Ввести пароль».
 - **Together.** "Грати разом" connects up to 8 players for the whole library: whatever one opens, everyone's library
   opens too. A player is the name they type on entering a room, in one spelling: apostrophes become ’, invisible and
   control characters go (emoji stay), several spaces become one, the first letter a capital; a name with no letter,
@@ -29,10 +31,12 @@ and works offline. Hosted on GitHub Pages.
   also «Повернути сюди»); coming back after the line broke asks nothing. A player who drops out keeps their place
   for 3 minutes; meanwhile the game pauses and the library says whom the others wait for and why, in the game's own
   waiting screen (`<ihroteka-wait>`), or in its card over a game that has none: one who dropped out, the time left and
-  «Не чекати» (nearby, for the phone that holds the room, «Не чекати» ends the room on this phone: «Без телефона X
-  кімната поруч далі не може»), or one who is only opening the game again, in a new tab or
-  device («Чекаємо на X — повертається в гру», nothing to press); a player of the round whose game is closed, a seat
-  to wait for and who plays now, a round coming back after a reload, too. If the copy of the game that runs a
+  «Не чекати» (nearby, for the phone that holds the room, «Не чекати» ends the room on this phone: «Кімнату поруч
+  тримав телефон, на якому грає X: без нього вона далі не може»), or one who is only opening the game again, in a new
+  tab or device («X повертається в гру», nothing to press); a player of the round whose game is closed (named also
+  while the others play on), a seat to wait for and who plays now, a round coming back after a reload (ours, or «Аня
+  повертає гру з того місця, де ви зупинилися…»), too: every name in the nominative, which never turns its line round
+  (see "Waiting screens"). If the copy of the game that runs a
   round is gone for 10 s, the round goes on in another player's copy from its last snapshot, when that player can tell
   it was not them who dropped out (two phones nearby that lose each other wait for the runner instead). The dialog
   first checks by itself whether there is internet (whether a broker answers: `navigator.onLine` also says yes on a
@@ -49,15 +53,19 @@ and works offline. Hosted on GitHub Pages.
   its page: «Друг скасував з’єднання або закрив сторінку. Спробуйте ще раз.») and offers a report for debugging; a
   browser that cannot link directly (no WebRTC, as Tor Browser) is told so up front on the nearby screen: «Цей браузер
   не вміє з’єднуватися напряму: відкрий Ігротеку в Chrome, Safari чи Firefox». Friends whose libraries (or copies of a
-  game) are different versions are not linked (or not seated together) and see «Онови сторінку — у друга інша версія»
-  while that version is heard; the older page updates itself when no game is open there (else its note offers
-  «Оновити»), never in a nearby room. Whoever holds a room by link and is alone again sees «Друг вийшов. Посилання діє
+  game) are different versions are not linked (or not seated together), and each page says its own part while that
+  version is heard: the older «У друга новіша версія — онови сторінку», with «Оновити» (over the game and in «Грати
+  разом»), the newer «У друга старіша версія — хай оновить сторінку»; the older page updates itself when that disturbs
+  nobody (no game open, no password being typed), never in a nearby room (see Versions, under Game API). Whoever holds
+  a room by link and is alone again sees «Друг вийшов. Посилання діє
   далі — чекаю…» in «Грати разом» (not «Ви разом.»). The library's dialogs leave a game's fullscreen as they open (and
   so does the card «Чекаємо…» over a game without screens of its own); its notes at the bottom stack in a column (up to
   three, the same one never twice); «Далі» with no name says «Напиши своє ім’я» under the field.
 - **Offline.** A service worker keeps one complete copy of the site per version, all of that version (a copy that
   mixes two is not installed), and never deletes the copy in use for a newer one; the shelf, the games and nearby
-  play work without a network. On a phone it installs as an app.
+  play work without a network. On a phone it installs as an app. A library that does not open (no network and no
+  offline copy yet, the site not answering) says why instead of turning for ever, with «Спробувати ще», and tries
+  again by itself as soon as the network is back.
 
 ## Layout
 
@@ -211,17 +219,31 @@ ihroteka.round       // the game's rounds: who plays one, whose copy runs it, it
 
 `game.wire` is the version of the game's messages and snapshots (game.json `"wire"`, 1 when not given). Raise it by
 hand, only when they change meaning (never per build): copies of the game with different numbers are not seated
-together, the players see «Онови сторінку — у друга інша версія», and the page with the lower number updates itself
-(its offline copy, then a reload back into the room) when no game is open there (a round may run in one, even alone:
-over a game the note offers «Оновити») and the room is not nearby, at most once per version in a session. It reloads
-only once the newer copy is in place: an update that cannot be stored (no room on the device) or fetched leaves the
-page as it is, with the note (no reload into the same version), and does not try by itself again for that version
-(«Оновити» does); when the site has nothing newer yet, it tries again by itself a minute later. The library does the
-same for its own version (`PROTO` in `library/net/config.js`: those rooms do not even link). A library from before the
-numbers says none: it counts as version 1. The number that counts is that of the game's code that runs in the frame
-(`ihroteka.game.wire`: its page's own, built into it; a `game.bin` from before the numbers speaks 1): a page left open
-over a deploy is seated by the copy it runs, not by the number its shelf had; the shelf's counts only for a page that
-says none.
+together. The library does the same for its own version (`PROTO` in `library/net/config.js`: those rooms do not even
+link). A library from before the numbers says none: it counts as version 1. The number that counts is that of the
+game's code that runs in the frame (`ihroteka.game.wire`: its page's own, built into it; a `game.bin` from before the
+numbers speaks 1): a page left open over a deploy is seated by the copy it runs, not by the number its shelf had; the
+shelf's counts only for a page that says none.
+
+**Versions.** While another version is heard, each page says its own part (owner, decisions 9 and 37): the older «У
+друга новіша версія — онови сторінку», with «Оновити» (over the game, and in «Грати разом»), the newer «У друга старіша
+версія — хай оновить сторінку»; nearby, where no update can come, both add «…, коли буде інтернет». Over a game only a
+gap in that game or in the library is said; another game's is said on the shelf (decision 35: a note, once per gap in
+a room, and the chip in short words). A game that one of the
+shelves has and the other not (a deploy added it or took it off), open in the room, is a version gap too, and which
+page is the older the site says, not the shelf (the shell asks whether the site has a newer version than the page:
+decision 36): over the game, the page that has it says «Богдан не може відкрити цю гру: там інша версія Ігротеки» (naming
+whoever lacks it), and Богдан's, on its shelf, «У кімнаті відкрили гру, якої тут немає». The older page updates itself (its offline copy,
+then a reload back into the room) when no game is open there (a round may run in one, even alone), the password
+dialog is not open (a reload would throw away what is typed: the game opens on the old version, with «Оновити»;
+decision 38) and the room is not nearby, at most once per version in a session. It reloads only once the newer copy is
+in place: an update that cannot be stored or fetched leaves the page as it is and says why, «Бракує місця на пристрої
+для нової версії Ігротеки: звільни трохи місця й натисни «Спробувати ще»» or «Не вдалося завантажити нову версію:
+перевір інтернет», with «Спробувати ще» (that version is not tried again by itself); when the site has nothing newer
+yet, it tries again by itself a minute later. And a page whose offline copy was updated under it (a deploy while it
+stayed open) reloads into the new one as soon as that disturbs nobody: on the shelf, no dialog open, and no room or an
+internet one, which it comes straight back into (the others see it «повертається» for a moment); never nearby, where a
+reload would end the room.
 
 A room holds up to 8 players, each known by name. A game gets as many seats as its `players` says (2 when not
 given): the first players to have it open play, in the room's order; anyone else who opens it waits for a seat
@@ -269,7 +291,9 @@ room.send({ t: 'card', … }, { to: name });    // to one player
 **Listening late.** A game that starts listening after things happened (it often does: the room may be linked
 before the game's code runs) still hears what it missed, once, in the order the room tells it live: `players`, then
 its part in a round of `ihroteka.round` that is on (`run` or `watch`), then `resume` (if its copy runs a round of
-`room.snapshot` on), then `linked`, then `weak` (true), then the messages kept for it, in order: every reliable one (up
+`room.snapshot` on), then `linked`, then `weak` (true), then the `end` of a round it was in and has not heard (below,
+"The round": last, as live, so that what a game shows of it is not wiped by its `linked`), then the messages kept for
+it, in order: every reliable one (up
 to 8 × 32 KB of them: past that the newest are dropped, and the trace says so, as the dev console does once) and the
 newest 64 fast ones. `resume` comes before `linked` live too, and only while we play with someone: a game that hears
 `linked` already knows whether it goes on with a round or starts afresh.
@@ -387,7 +411,8 @@ round.on('start', ({ id, seats, setup, by }) => …)   // a round has just begun
      .on('end', ({ id, by, reason, result }) => …);  // it is over: 'over' (the runner's over(result)), 'quit' (by whom),
                                                      //   'gone' (by: the player whose place went; policy below), 'lost'
                                                      //   (its snapshot on no device), 'closed' (our room closed, its end
-                                                     //   never reached us, or another round replaced it: below)
+                                                     //   never reached us, or another round replaced it: below); also
+                                                     //   once to a copy opened after it (below, Events)
 round.off('run', fn)                                 // that listener no more (on and off return the round: they chain)
 round.active, round.id                               // a round is on (for us: not one we quit); its id (null between rounds)
 round.seats, round.mySeat, round.seatOf(name)        // its players by name, in seat order, frozen at its start (null
@@ -408,8 +433,14 @@ round.policy.endWhenSeatGone = true
 **Events.** Each round tells a copy of the game `start` once, while it has not been saved yet (a copy that comes later
 does not hear it), then exactly one of `run` and `watch`, told again only when the round moves to another copy, and
 `end` once (an end is final for everyone, whatever happened meanwhile; only `closed` says we lost sight of the round:
-back in a room where it is still on, the game hears its part again, and its end later). A game that starts listening late hears its part (`run` or `watch`) once, after `players` and before
-`linked` and the messages kept for it (see Listening late); and while our copy should run a round but has no snapshot
+back in a room where it is still on, the game hears its part again, and its end later). A copy of the game that opens
+after the end of a round it had a part in (the page reloaded meanwhile, or the game was closed and opened again), or
+whose code did not listen to `end` yet when it came, hears that `end` once, with its `by`, `reason` and `result`
+(owner, decision 49): after `players` and, when it plays with someone, after `linked` (Two Dragons wipes its note
+there), else a second later. The tab remembers which round its game had a part in (sessionStorage `ihroteka-heard`,
+with the room and the name), so a new tab or another device does not hear it, and nothing is heard twice. A game that
+starts listening late hears its part (`run` or `watch`) once, after `players` and before `linked` and the messages kept
+for it (see Listening late); and while our copy should run a round but has no snapshot
 of it yet (its page reloaded: the others' copies are on their way), the game hears nothing of it, messages included,
 until `run` with the snapshot: never a fresh `run` for a round that was saved. So `round.active` true before `run` or
 `watch` means a round is coming back (after 1 s the screens say «Повертаю гру…», `restoring`): offer no start then
@@ -420,16 +451,26 @@ whether it is on); only the copy that runs it writes it. A start or a quit from 
 copy: a start names the round it follows and is taken only if the runner's answer comes back within 5 s of asking, by
 the asker's clock (a start that waited out an outage starts nothing); a quit names its round and holds until that round
 is over (said again whenever we link with its runner, and every 2 s while its runner is here: what the room's host was
-passing on is lost when a link starts over; if the round moves to our copy, ours ends it), through a reload of our page
-too: the tab keeps it (sessionStorage) with the room and the name it was said with, and the page back in that room as
-that player says it again (its game hears nothing of that round: it heard its end before). So does every end our copy
+passing on is lost when a link starts over; if the round moves to our copy, ours ends it). A quit follows the player
+(owner, decisions 24 and 50): it is the player's own key in the room's shared state (`quit:<name>` = { game: round id },
+written only by them), so whoever holds the room keeps it for them, the runner back ends that round (and a copy the
+round moves to ends it rather than run it on), and the player's other tab or device takes it as theirs; and the browser
+keeps it (localStorage `ihroteka-quits`: one entry per room and name, for every tab of the browser), so a page back in
+that room as that player, a reload or a new tab, says it again (its game hears nothing of that round: it heard its end
+before). The honest limit: two players, the quit said while the runner is away, then the player goes on on another
+device: nobody else holds it, and the round comes back on with its runner. So the browser keeps every end our copy
 writes (quit, over, gone, lost), until another copy shows it back to us (each copy whose record it changed sends it
 back to its writer): a page that reloads before anyone else has it knows that round is over, and ends it again as soon
 as it sees it on. (Only a player of a round ends it again so; a copy that watches leaves it to them.) The round moves as
 the room's runner does (above): its runner away for 10 s with proof, or at once when its player left the room for good;
-the copy that runs it on hears `run` with the latest snapshot and signs it as its own. Two halves of a room cut off
-from each other may each start a round, if each has players to start one with (3 or more with the game open, say);
-together again, one record wins, and the other round ends for its players as `closed`: it does not come back.
+the copy that runs it on hears `run` with the latest snapshot and signs it as its own. Cut off from each other, one
+side's runner may end a round and begin the next while the other side runs the old one on (or ends it its own way):
+together again, the newer round stays, whatever the clocks (decision 46), and its record says how the round before it
+ended (`prev`), so the copy that ran the old one on hears its real end (`end` 'quit' by Аня, say; never `closed`), then
+watches the new one. (Only a round it knew was over comes back as the older one: a runner cut off while its round was
+run on, ended and followed by others never writes its round over them when it is back.) Two halves of a room may also each start a round, if each has players to start one with (3 or more
+with the game open, say): together again, one record wins, and the other round ends for its players as `closed`: it
+does not come back (rare: decision 47).
 
 **Seats are frozen.** While a round is on, the game's seats (`room.players`) are its players who have the game open, in
 its order, and nobody else's: a player away or with the game closed keeps their seat, and anyone else who opens the game
@@ -493,16 +534,19 @@ element that shows nothing.
 
 | kind        | what it says                                                       | buttons                                                    |
 |-------------|--------------------------------------------------------------------|------------------------------------------------------------|
-| `link`      | «Чекаємо на X… 2:45»: X dropped out, their place kept that long (nearby also «Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.») | nearby «З’єднатися знову» (pairing again); «Не чекати» (their place goes) where it works from here |
-| `loading`   | «Чекаємо на X — повертається в гру»: back in a new tab or device, their game not open there yet | none (owner, decision 4) |
-| `closed`    | «Чекаємо на X — зараз не в грі»: a player of our round, in the room, whose game is closed (after 2 s: following the room into a game takes a moment), while nobody we play with has it open | none: the game's own quit (`round.quit()`) is the way out |
-| `restoring` | «Повертаю гру з того місця, де ви зупинилися…»: our copy runs a saved round (a reload) and its snapshot has not come for 1 s (when it comes, the round runs on; one on no device ends it, `lost`, after 15 s) | none |
+| `link`      | «Чекаємо, поки повернеться X… 2:45»: X dropped out, their place kept that long. Nearby, where pairing again works (on the phone that holds the room; on a guest whose own link to it broke): «Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.»; a guest cut off from that phone, with others in the room, has only its row, «Кімнату поруч тримає телефон, на якому грає X: без нього не чути й інших.»; another guest sees the cut-off one's row with «Кіра і Ганна мають з’єднатися ще раз кодами.»; a guest waiting for a seat gets the row of the phone that holds the room too | «З’єднатися знову» (pairing again) only where it works; «Не чекати» (their place goes) where it works from here |
+| `loading`   | «X повертається в гру»: back in a new tab or device, their game not open there yet | none (owner, decision 4) |
+| `closed`    | «X зараз не в грі — чекаємо»: a player of our round, in the room, whose game is closed (after 2 s: following the room into a game takes a moment), while nobody we play with has it open, or it is the round's runner; «X зараз не в грі» while others play on with us (a game for 3+: whether the round goes on without them is the game's rule; decision 52) | none: the game's own quit (`round.quit()`) is the way out |
+| `restoring` | «Повертаю гру з того місця, де ви зупинилися…»: our copy runs a saved round (a reload) and its snapshot has not come for 1 s; «Аня повертає гру з того місця, де ви зупинилися…»: Аня's copy, the round's runner, waits so for it while ours has none to send (when it comes, the round runs on; one on no device ends it, `lost`, after 15 s) | none |
 | `seat`      | «Ти чекаєш на місце», and «Грають зараз: Аня і Богдан.» (while a round is on, its players still in the room) | none |
-| `version`   | «Онови сторінку — у друга інша версія»                             | «Оновити» on the older page (not nearby)                   |
+| `version`   | each page its own part (see Versions): «У друга новіша версія — онови сторінку», «У друга старіша версія — хай оновить сторінку» (nearby «…, коли буде інтернет»); why our update did not happen («Бракує місця…», «Не вдалося завантажити нову версію: перевір інтернет»); a game one shelf lacks: «Аня не може відкрити цю гру: там інша версія Ігротеки» | «Оновити» on the older page (not nearby); «Спробувати ще» after an update that did not happen |
 
 Rows come in that order (players we play with, then the round's own, then the rest); names are joined «Аня», «Аня і
-Богдан», «Аня, Богдан і Віра». A screen reader hears the rows (never the time) from one live region of the library's
-page, wherever they show, also while a library dialog is open; each second only the time changes.
+Богдан», «Аня, Богдан і Віра». A name always stands in the nominative (a name cannot be declined, and the words have no
+gender: decision 42), without direction controls, and each name in a row is isolated (`<bdi>`): one written right to
+left never turns the rest of its line round, the time included. A screen reader hears the rows (never the time) from
+one live region of the library's page, wherever they show, also while a library dialog is open; each second only the
+time changes.
 
 **Where it shows.** Put a copy wherever the player looks in each state of the game (in each menu panel, over the field):
 any number of copies, in static HTML or made later (`document.createElement('ihroteka-wait')`). The library puts its
@@ -538,10 +582,10 @@ for (const w of document.querySelectorAll('ihroteka-wait')) w.addEventListener('
 
 ```html
 <div class="wait-row" data-kind="link" data-name="Богдан">          <!-- data-name: a row about a player -->
-  <p>Чекаємо на Богдан… <span class="wait-time">2:45</span></p>     <!-- .wait-time: link only -->
+  <p>Чекаємо, поки повернеться <bdi>Богдан</bdi>… <span class="wait-time">2:45</span></p>   <!-- .wait-time: link only -->
   <p class="fine">Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.</p>   <!-- nearby link; seat -->
   <button type="button" class="btn">З’єднатися знову</button>
-  <button type="button" class="btn ghost" aria-label="Не чекати на Богдан">Не чекати</button>
+  <button type="button" class="btn ghost" aria-label="Не чекати, поки повернеться Богдан">Не чекати</button>
 </div>
 ```
 
@@ -578,8 +622,8 @@ announced once, from the library page's live region (the game's own status lines
 A row stays while only its time changes, so a focused «Не чекати» keeps its focus; a row that goes takes its focus
 with it (to the game's `<body>`): the `showing` event lets the game put it back. When the rows move between a copy and
 the card (a layer of the game's covers the copy, or goes), a focused button's focus goes with them, to the same button
-of the same row (unless a `showing` listener put it elsewhere). For a screen reader «Не чекати» is «Не чекати на X»
-(its `aria-label`; the words on it stay). A screen that appears never takes the focus, and Esc does nothing to it
+of the same row (unless a `showing` listener put it elsewhere). For a screen reader «Не чекати» is «Не чекати, поки повернеться X»
+(its `aria-label`, the name in the nominative as in the row; the words on it stay). A screen that appears never takes the focus, and Esc does nothing to it
 (owner, decision 8). A game that moves the focus on `showing` does so only while `document.hasFocus()` (the page may
 be in another window, or a library dialog over it), and puts it back on the window's `focus` too; it listens on one
 copy that stays (the event fires on every copy).
@@ -605,11 +649,11 @@ library's card over the game says it instead`.
   send that player the full picture. A copy that runs the round on after a reload numbers its pictures above the old
   copy's (Two Dragons: from the snapshot's, plus a margin), so the others take them.
 - **Pause on `weak`**. Whom the round waits for, and why, the library says itself, in the game's `<ihroteka-wait>`
-  (or its card over a game that has none: «Чекаємо на …», with «Не чекати» when it makes sense; see "Waiting
+  (or its card over a game that has none: «Чекаємо, поки повернеться …», with «Не чекати» when it makes sense; see "Waiting
   screens"): draw no waiting message of your own, only your own reasons to pause (a hidden tab, a countdown, or a pause
   the runner's room sees and yours does not: Two Dragons says the link is weak), and those only while the library says
-  nothing. A partner whose game closed mid-round (`room.linked` false, `round.active` true): the screen says «Чекаємо на
-  X — зараз не в грі» (after 2 s); the round stands still and goes on when they are back.
+  nothing. A partner whose game closed mid-round (`room.linked` false, `round.active` true): the screen says «X зараз не
+  в грі — чекаємо» (after 2 s); the round stands still and goes on when they are back.
 - **Show the others a little ahead**: predict both players to the moment your own input will reach the round
   (`room.lag()` is the one-way delay), and when a new state corrects the prediction, let the difference fade
   over ~0.1 s instead of jumping. The runner delays its own input and picture by `room.lag()`, so the round
@@ -696,12 +740,19 @@ What the page does close, against mistakes rather than against a game:
   keyring stays in git history); `remove` rotates it too. Everyone else's devices keep working without a password.
 - Signed-in devices keep a non-extractable key in IndexedDB. Anything served from the same origin
   (`*.github.io` of this account) could use it, so host no untrusted pages there and don't load third-party scripts in games.
-- A device is asked for the password once, as long as it keeps the key: not in a private window, nor while its
-  storage does not answer, and Safari forgets a site not added to the home screen after 7 days without a visit.
-  «Скасувати» (or Escape, or a tap outside) while «Відмикаю…» stores nothing. «Забути пароль на цьому пристрої»
-  marks the device first: if its storage did not answer, the next page finishes the forgetting. A person removed from
-  the keyring can open no game sealed after that; their device's offline copy keeps opening the games it already has
-  until it updates.
+- A device is asked for the password once, as long as it keeps the key: not in a private window, and Safari forgets a
+  site not added to the home screen after 7 days without a visit. Storage that does not answer in time (Safari, now and
+  then) is not taken for «nothing remembered»: the dialog shows, keeps asking the storage (for about a minute), and
+  closes by itself, opening the game, when the key comes after all. While the password is checked (a cheap phone may
+  take seconds) the dialog says «Відмикаю…», and after a second «Відмикаю… Це може тривати кілька секунд.» (a status line,
+  there and empty before, so a screen reader hears the first words too); «Скасувати»
+  (or Escape, or a tap outside) meanwhile stores nothing. «Забути пароль на цьому пристрої» marks the device first: if
+  its storage did not answer, the next page finishes the forgetting; if neither could be written, the button stays, with
+  «Не вдалося забути пароль. Закрий вкладку й спробуй ще раз.». A person removed from the keyring can open no game
+  sealed after that (their device's offline copy keeps opening the games it already has until it updates); once their
+  device sees the new keyring, it forgets the key and its dialog says «Доступ до ігор із цим паролем закрили. Якщо тобі
+  дали новий пароль — введи його.», and a device whose person's password was changed «Твій пароль змінили. Введи
+  новий.», until a password fits or the player forgets it.
 - A report (`room.diag()`, «Скопіювати звіт») names the room's players; the report of a nearby pairing («Скопіювати
   звіт для розробника») says the browser and the devices' local network addresses. Share one as you would those.
 - Play together over the internet is sealed end to end (`library/net/seal.js`, owner's decision 10): the room's code
@@ -722,21 +773,21 @@ What the page does close, against mistakes rather than against a game:
   takes it about 45 days, and would open every room with such a code at once (one salt for all). A link of a room from
   before (6 characters, still taken) falls in about an hour: «Грати разом» makes a new code rather than reuse one that
   short.
-- A page of the library from before the seal (`PROTO` 1) on the same code meets nobody: each page listens to every
-  topic of that older kind (one wildcard for all rooms, which says nothing about its own), and only when such a page
-  speaks on its room's one does it answer there, in plain: its version, from a session of its own, nothing else. The
-  older page then says «Онови сторінку — у друга інша версія» and updates itself. (That page's own topic is a plain
-  hash of its code: its traffic was readable before the seal, and is until it updates; and one GPU reverses that hash
-  for every 8-character code in minutes, so while such a page speaks on a code, whoever watches can learn the code,
-  and with it open the sealed room on it too.)
+- A page of the library from before the seal (`PROTO` 1) on the same code meets nobody: each page listens to every topic
+  of that older kind (one wildcard for all rooms, which says nothing about its own), and only when such a page speaks on
+  its room's one does it answer there, in plain: its version, from a session of its own, nothing else. The older page
+  then says (in its release's words) «Онови сторінку — у друга інша версія» and updates itself. (That page's own topic
+  is a plain hash of its code: its traffic was readable before the seal, and is until it updates; and one GPU reverses
+  that hash for every 8-character code in minutes, so while such a page speaks on a code, whoever watches can learn the
+  code, and with it open the sealed room on it too.)
 - The MQTT client comes from a CDN, pinned to one version and checked with Subresource Integrity.
 - A game is fully trusted code (see **Trust** above): only games of the library's own people belong on it.
 - CI runs only actions pinned to a commit, and keeps no git credentials after checkout.
 
 **Deploy:** on every push to `main`, GitHub Actions lints, tests and checks, assembles `site/` and publishes it
 (Settings → Pages → Source: *GitHub Actions*). To undo a bad deploy: `git revert` and push; open pages fetch
-that version when shown again or within half an hour, and reload into it when that disturbs nobody (on the shelf,
-not in a room, no dialog open).
+that version when shown again or within half an hour, and reload into it when that disturbs nobody (on the shelf, no
+dialog open, and no room or an internet one, which the page comes straight back into; never nearby).
 
 **What next:** [docs/ROADMAP.md](docs/ROADMAP.md) (in Ukrainian): the phases after this one, and the decisions
 they need.

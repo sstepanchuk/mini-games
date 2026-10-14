@@ -1,6 +1,7 @@
 // The room's shared state (library/app/roomstate.js, sent around by together.js), in worker tabs that run the real
 // library over fake brokers (tests/support): a newcomer is greeted with all of it, and one wild clock must not
-// freeze it. (Greet goes in chunks of up to CAP bytes: rules.js.)
+// freeze it; who wrote the room's view says whose it is (together.js ownView). (Greet goes in chunks of up to CAP
+// bytes: rules.js.)
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { room, sleep, until, world } from '../support/world.js';
@@ -100,5 +101,24 @@ describe('the shared state', { concurrency: 3 }, () => {
     await C.lib('state4', 'Сава');
     assert.ok(await until(async () => (await C.game()) && (await C.shared('score')), 5000));
     assert.deepEqual(await C.shared('score'), { Аня: 1, Богдан: 2 }, 'greeted with the room\'s value');
+  });
+
+  // (decision 39: a cancelled password takes the room back to the shelf only from the page whose player opened the game,
+  // shell.js; a page that follows, or opened at the game's address in the room, reloaded or from a link, shows it as a
+  // follower, whatever the room's state says yet)
+  test('whose view the room shows: the page that opened the game; not one that followed, nor one reloaded at its address', T, async t => {
+    const W = world(t);
+    const own = (X, id) => X.call('ownView', { id });
+    const [A, B] = await room(W, 'state6', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await inGame(A, B));
+    assert.deepEqual([await own(A, 'g'), await own(B, 'g')], [true, false], 'Аня opened it; Богдан followed');
+    const B2 = await B.reload();                             // at /g/ again: the shell shows it before the room is back
+    await B2.lib('state6', 'Богдан');
+    assert.equal(await own(B2, 'g'), false, 'before the room is back');
+    assert.ok(await until(async () => (await B2.state())?.linked && (await B2.state()).lib.view === 'g', 8000));
+    assert.equal(await own(B2, 'g'), false, 'and after');
+    await A.leave();
+    assert.equal(await own(A, 'g'), true, 'no room: the page\'s own');
   });
 });

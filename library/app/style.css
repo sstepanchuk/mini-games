@@ -57,6 +57,10 @@ input[type=password],input.link{
 }
 @keyframes spin{to{transform:rotate(1turn)}}
 @media (prefers-reduced-motion:reduce){.busy::before{animation:none}}
+/* the password dialog's «Відмикаю…» while it says nothing: out of sight and of the column, still a live region */
+.dialog .busy:empty{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.dialog .busy:empty::before{content:none}
+#busy{text-align:center}                         /* «Відкриваю Ігротеку…», or why it did not open: over «Спробувати ще» */
 
 /* game shelf */
 .shelf{width:min(720px,100%);display:flex;flex-direction:column;gap:18px}

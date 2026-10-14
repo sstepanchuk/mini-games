@@ -7,7 +7,13 @@
    with internet there are two ways (a link, or nearby with QR codes), without it only nearby (and only nearby on a page
    without Web Crypto, served over plain http: net/config.js secure; it says why). Once together,
    more players can be added the same way (up to the room's limit). A friend on another version of the library or of
-   the game (together.js versionGap) is told everywhere it shows: «Онови сторінку — у друга інша версія».
+   a game, or who has open a game this shelf lacks (together.js gapFacts), is told so, each page its own part
+   (waiting.js versionWords, owner decision 37: the older to update, the newer that the friend should; nearby, «…,
+   коли буде інтернет»; why an update did not happen): on the shelf in a note once per gap («У кімнаті відкрили гру,
+   якої тут немає» for such a game), on the chip while not together, in «Грати разом» (the link screen's status, «Ви
+   граєте разом») with «Оновити» on the older page (never nearby), or «Спробувати ще» after an update that did not
+   happen; over a game, its screen or the card (only that game's version or the library's, decision 35).
+   «З’єднатися знову» shows only where pairing again works (decision 31: the host, or a guest whose own link broke).
    What it says about players fits anyone (owner, decision 41; tests/texts.test.js), and a name in a sentence is
    isolated (dom.js iso: it never turns the line round). A typed name is cleaned first and refused, saying why, when
    nobody would see it (decision 43: together.js cleanName, validName). A name whose place a device still on the line
@@ -20,10 +26,11 @@
 import { CODE_LENGTH, hasInternet, newRoomCode, preload, secure } from '../net/index.js';
 import { $, btn, copy, el, errLine, iso, modal, para, safe, toast, toasts } from './dom.js';
 import { Camera, drawQr } from './qr.js';
+import { canRepair } from './rules.js';
 import { adopted, carry, focused, initScreens, paint, ready, show as showScreens } from './screens.js';
-import { asking, cleanName, comeBack, currentRoom, elsewhere, lastInternetCode, lastName, leave, linked, nameInPlay, onChange, rejoinAs, release, startInternet, startNearby,
-  takePlace, updateNow, validName, versionGap, waitFacts } from './together.js';
-import { names, placeLines, sayOf, screen, UPDATE } from './waiting.js';
+import { asking, cleanName, comeBack, currentRoom, elsewhere, gapFacts, lastInternetCode, lastName, leave, linked, nameInPlay, offerUpdate, onChange, rejoinAs, release,
+  startInternet, startNearby, takePlace, updateNow, validName, waitFacts } from './together.js';
+import { LABEL, names, placeLines, sayOf, screen, versionAct, versionWords } from './waiting.js';
 
 // a page without Web Crypto (plain http: `npm run dev -- --lan`) has no internet rooms (net/config.js secure)
 const INSECURE = 'Через посилання можна грати лише на сторінці, відкритій через https: на цій адресі браузер вимикає шифрування.';
@@ -54,7 +61,7 @@ export function initInvite(s) {
     if (what === 'replaced') queueMicrotask(goneElsewhere);
     // our name's place is held by a device still on the line: asked first, whether the dialog was open or not
     if (what === 'status' && room && room.status === 'taken' && !dlg) openDialog();
-    if (what === 'version' && versionGap() && $('stage').hidden) toast(UPDATE);   // (over a game, its screen or the card says it)
+    if (what === 'version' && $('stage').hidden) sayVersion();   // (over a game, its screen or the card says it)
     if (what === 'status' && room && room.status === 'unavailable' && !secure()) toast(INSECURE);   // (opened from a link)
     if (/^(away|leave|left|peer-gone|version|waiting)$/.test(what)) waitNote();
     chip();
@@ -125,6 +132,18 @@ function otherName(kind) {
   show('name');
 }
 
+// Another version (together.js gapFacts), on the shelf: a note, once per gap and room on this page (each page its own
+// part: waiting.js versionWords; a game the room opened that this shelf lacks: «У кімнаті відкрили гру, якої тут
+// немає»). In another room, the same gap is news again.
+let toasted = new Set(), toastedIn = null;
+function sayVersion() {
+  const gap = gapFacts(null), room = currentRoom();
+  if (room !== toastedIn) { toasted = new Set(); toastedIn = room; }
+  if (!gap || toasted.has(gap.key)) return;
+  toasted.add(gap.key);
+  toast(versionWords(gap, { nearby: !!room && room.kind === 'nearby' }));
+}
+
 // 3 s after the room went unlinked, still alone: nearby, the link broke; over the internet (on the shelf: over a game,
 // its screen or the card says it), whom we wait for, or that nobody is left
 function alone(was) {
@@ -136,7 +155,7 @@ function alone(was) {
   toast(!kept.length ? 'У кімнаті більше нікого' : (kept.length > 1 ? 'Чекаємо, поки повернуться ' : 'Чекаємо, поки повернеться ') + names(kept.map(iso)) + '…');
 }
 
-/* ---------- over a game: the card «Чекаємо на …», for a game that shows none of its waiting screens ---------- */
+/* ---------- over a game: the card «Чекаємо, поки повернеться …», for a game that shows none of its waiting screens ---------- */
 // What the library says while the open game waits, and its buttons, are waiting.js's (screen: the words; from
 // together.js waitFacts: whom we wait for and why, our copy restoring its round, a seat, the version); where it shows
 // is screens.js's: in a copy of the game's <ihroteka-wait> that the player sees, else in this card over the game (every
@@ -148,7 +167,7 @@ function alone(was) {
 // keeps its focus, and when the rows move between a copy of the game's and the card, the focus goes with them.
 let card = null;                                         // { box, key: what its rows say now (their keys) }
 let say = null, said = '';                               // the live region, and what it says
-const ACTS = { repair: () => repair(), release: name => notWaiting(name), update: () => updateNow() };
+const ACTS = { repair: () => repair(), release: name => notWaiting(name), update: () => updateNow(), retry: () => updateNow() };
 // (once at a time: a game's 'showing' listener may change what is said, which asks for a pass again)
 let noting = false, again = false;
 function waitNote() {
@@ -180,13 +199,13 @@ function noteOnce() {
   if (now !== said) { said = now; say.textContent = now; }
 }
 // «Не чекати»: their place goes. Nearby, for the phone that holds the room (we are a guest there): there is no room
-// without it, so it ends here, saying why.
+// without it, so it ends here, saying why (owner, decision 5; the name in the nominative, decision 42).
 function notWaiting(name) {
   const room = currentRoom();
   if (room && room.kind === 'nearby' && room.role === 'guest' && room.host === name) {
     leave();
     const m = modal();
-    m.show(el('h2', { textContent: 'Кімнату поруч закрито' }), para('Без телефона ' + iso(name) + ' кімната поруч далі не може.'),
+    m.show(el('h2', { textContent: 'Кімнату поруч закрито' }), para('Кімнату поруч тримав телефон, на якому грає ' + iso(name) + ': без нього вона далі не може.'),
       btn('Закрити', () => m.close(), 'btn ghost'));
     return;
   }
@@ -195,22 +214,26 @@ function notWaiting(name) {
 }
 
 // Nearby, a link broke: pair again (the host shows its code, a guest scans it); the player is back in their place.
+// Only where it works (owner, decision 31: rules.canRepair): a guest whose own link to the host works cannot pair (the
+// host's phone would answer «Це не той код»), nor the camera go on for it.
 function repair() {
   const room = currentRoom();
-  if (!room || room.kind !== 'nearby') return;
+  if (!room || room.kind !== 'nearby' || !repairs(room)) return;
   if (!dlg) openDialog();
   dlg.name = room.me; dlg.adding = true;
   if (room.role === 'host') hostPairing(); else guestPairing();
 }
-// someone in a nearby room is away (their link broke)
-const brokenNearby = room => room.kind === 'nearby' && room.players.some(p => p !== room.me && room.away(p));
+// whether this phone can pair again (rules.canRepair: the host, or a guest whose link to the host broke)
+const repairs = room => canRepair({ nearby: room.kind === 'nearby', role: room.role, host: room.host, away: p => room.away(p) });
+// a link in a nearby room broke that this phone can pair again (the host: anyone's; a guest: its own, to the host)
+const brokenNearby = room => room.kind === 'nearby' && room.players.some(p => p !== room.me && room.away(p)) && repairs(room);
 
 /* ---------- the chip on the shelf ---------- */
 function chip() {
-  const room = currentRoom(), s = room && room.linked && room.stats(), b = $('together');
+  const room = currentRoom(), s = room && room.linked && room.stats(), b = $('together'), gap = room && gapFacts(null);
   b.classList.toggle('on', linked());
   b.textContent = !room ? 'Грати разом'
-    : versionGap() && !linked() ? UPDATE
+    : gap && !linked() ? versionWords(gap, { nearby: room.kind === 'nearby', short: true })
     : linked() ? (room.weak ? 'Разом · зв’язок зник…' : 'Разом' + (room.players.length > 2 ? ' ' + room.players.length : '') + (s.rtt != null ? ' · ' + s.rtt + ' мс' : room.kind === 'nearby' ? ' · поруч' : ''))
     : room.kind === 'nearby' ? 'З’єднуюсь…'
     : room.status === 'unavailable' && !secure() ? 'Лише через https'
@@ -231,9 +254,20 @@ const STATUS = {
   ready: 'Ви разом.',
   pairing: 'Поруч, без інтернету: з’єднайтеся кодами.',
   failed: 'Не вдалося з’єднатися.',
-  version: UPDATE + '.'
+  version: 'У друга інша версія Ігротеки.'              // (said as each page's own part: statusText)
 };
-const statusText = room => room.status === 'unavailable' && !secure() ? INSECURE : STATUS[room.status] || '';
+// (the version: each page its own part, waiting.js versionWords; owner, decision 37)
+const statusText = room => room.status === 'unavailable' && !secure() ? INSECURE : room.status === 'version' ? versionLine(room) : STATUS[room.status] || '';
+const versionLine = room => { const gap = gapFacts(); return gap ? versionWords(gap, { nearby: room.kind === 'nearby' }) + '.' : STATUS.version; };
+// «Оновити» in the dialog (owner, decision 37: also on the shelf, where a game's note is not): on the older page only,
+// never nearby (together.js offerUpdate); after an update that did not happen, «Спробувати ще» (the same call). Built
+// once with its screen, shown and named in place (paintUpdate), so a focused button keeps its focus.
+const updateBtn = () => Object.assign(btn('', () => updateNow()), { hidden: true });
+function paintUpdate(b, on) {
+  const gap = on && gapFacts(), show = !!gap && offerUpdate();
+  b.hidden = !show;
+  if (show) { const [text, cls] = LABEL[versionAct(gap)]; put(b, text); b.className = cls; }
+}
 
 export function openDialog() {
   if (dlg) return;
@@ -280,7 +314,10 @@ function refresh(what) {
   // nearby, our code is not read yet, long after we showed it (net/nearby.js pair.slow): why we still wait
   if (what === 'pair' && room && room.kind === 'nearby' && room.pair.slow && d.wait) d.wait.textContent = SLOW;
   if (d.screen === 'together') { if (!linked()) closeDialog(); else paintTogether(); }
-  else if (d.screen === 'link') { if (!room || room.kind !== 'internet') show('menu'); else if (what === 'status') d.state.textContent = statusText(room); }
+  else if (d.screen === 'link') {
+    if (!room || room.kind !== 'internet') show('menu');
+    else if (what === 'status' || what === 'version') { put(d.state, statusText(room)); paintUpdate(d.update, room.status === 'version'); }
+  }
   else if (room && room.kind === 'nearby' && room.status === 'failed' && what === 'status') failed(room.pair);
   else if (room && room.kind === 'nearby' && room.status === 'version' && what === 'status') otherVersion();
 }
@@ -328,6 +365,8 @@ function show(screen) {
     if (!room || room.kind !== 'internet') return show('menu');
     const link = shell.address(), qr = el('canvas', { className: 'qr' });
     dlg.state = para(statusText(room), 'busy');
+    dlg.update = updateBtn();                            // (another version of the library: the older page's «Оновити»)
+    paintUpdate(dlg.update, room.status === 'version');
     drawQr(qr, link, 200);
     const share = navigator.share && btn('Поділитися', () => navigator.share({ title: 'Ігротека', text: 'Заходь, пограємо разом!', url: link }).catch(() => {}));
     dlg.show(el('h2', { textContent: 'Через посилання' }),
@@ -335,7 +374,7 @@ function show(screen) {
       el('input', { className: 'link', readOnly: true, value: link, onfocus: e => e.target.select() }),
       el('div', { className: 'row' }, ...[share, btn('Скопіювати', e => copy(link, e.target))].filter(Boolean)),
       qr, para('Або хай друг наведе на цей код камеру свого телефона.', 'fine'),
-      dlg.state,
+      dlg.state, dlg.update,
       room.linked ? btn('Готово', closeDialog, 'btn ghost') : btn('Скасувати', () => { leave(); closeDialog(); }, 'btn ghost'));
   } else if (screen === 'nearby') {
     const back = dlg.online ? btn('Назад', () => show('menu'), 'btn ghost') : close;
@@ -349,15 +388,17 @@ function show(screen) {
       back);
   } else if (screen === 'together') {
     const T = dlg.tg = { h2: el('h2'), list: el('ul', { className: 'players' }), items: new Map(), how: para(''), state: para('', 'fine'),
+      version: para(''), update: updateBtn(),
       broken: para('Зв’язок поруч перервався. Щоб продовжити, з’єднайтеся ще раз кодами.', 'fine'), repair: btn('З’єднатися знову', repair),
       more: el('p'), kind: '' };
-    dlg.show(T.h2, T.list, T.how, T.state, T.broken, T.repair, T.more, btn('Від’єднатися', () => { leave(); closeDialog(); }), close);
+    dlg.show(T.h2, T.list, T.how, T.state, T.version, T.update, T.broken, T.repair, T.more, btn('Від’єднатися', () => { leave(); closeDialog(); }), close);
     paintTogether();
   }
 }
 // «Ви граєте разом», built once (show) and painted in place on every change of the room (who is here, who dropped out,
-// the ping, a direct link, a broken link nearby, room for more): a focused button keeps its focus. A focused node that
-// goes (hidden, or another kind of 'more') leaves the focus on the dialog itself.
+// the ping, a direct link, another version and «Оновити», a broken link nearby that this phone can pair again, room
+// for more): a focused button keeps its focus. A focused node that goes (hidden, or another kind of 'more') leaves the
+// focus on the dialog itself.
 const put = (node, text) => { if (node.textContent !== text) node.textContent = text; };
 function paintTogether() {
   const room = currentRoom(), T = dlg && dlg.tg;
@@ -375,6 +416,10 @@ function paintTogether() {
   }
   put(T.how, room.kind === 'nearby' ? 'Поруч, без інтернету.' : 'Через посилання.' + (room.stats().direct ? ' Пристрої з’єднані напряму.' : ''));
   put(T.state, stateText(room));
+  const gap = gapFacts();
+  put(T.version, gap ? versionWords(gap, { nearby: room.kind === 'nearby' }) + '.' : '');
+  T.version.hidden = !gap;
+  paintUpdate(T.update, true);
   T.broken.hidden = T.repair.hidden = !brokenNearby(room);
   const kind = n >= room.max ? 'full' : room.kind === 'internet' || room.role === 'host' ? 'add' : 'host';
   if (kind !== T.kind) {
@@ -423,14 +468,15 @@ function failed(pair) {
     btn('Закрити', closeDialog, 'btn ghost'));
 }
 
-// nearby, the friend's phone runs another version of the library: the pairing ended (see net/nearby.js)
+// nearby, the friend's phone runs another version of the library: the pairing ended (see net/nearby.js). Each phone
+// says its own part (waiting.js versionWords, owner decision 37: «…, коли буде інтернет»): read before the room goes
+// (leave forgets what it knew).
 function otherVersion() {
   dlg.screen = 'version';
   if (dlg.camera) dlg.camera.stop();
-  const room = currentRoom();
+  const room = currentRoom(), gap = gapFacts(null);
   if (room && room.linked) room.pair.cancel(); else leave();
-  dlg.show(el('h2', { textContent: 'Інша версія' }), para(UPDATE + '.'),
-    para('Онови сторінку на тому пристрої, де Ігротека старіша (або на обох), і з’єднайтеся знову.', 'fine'),
+  dlg.show(el('h2', { textContent: 'Інша версія' }), para(gap ? versionWords(gap, { nearby: true }) + '.' : STATUS.version),
     btn('Закрити', closeDialog, 'btn ghost'));
 }
 

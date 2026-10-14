@@ -327,6 +327,42 @@ describe('the tab\'s commands and options', { concurrency: 4 }, () => {
     assert.ok(await has(A2, 'ihroteka-name', 'Богдан'), JSON.stringify(await A2.local()));
   });
 
+  test('shellBusy({ on }): the stand-in shell\'s busy() says the password dialog is open (together.js reloads nothing under it), off again: it does', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'supbsy01', ['Аня', 'Богдан'], { lib: {} });
+    await A.call('shellBusy', { on: true });
+    await B.send({ t: 'lib-state', e: [['wire:Богдан', { v: { g: 2 }, c: Date.now() + 1000, a: 'Богдан' }]] });   // (Богдан's g is newer)
+    assert.ok(await until(async () => (await A.state()).lib.version.gap?.older, 3000), 'Аня knows she is the older');
+    await sleep(1500);                                       // (together.js checks every second)
+    assert.deepEqual([(await A.state()).lib.version.reloading, await A.call('reloads')], [null, []], 'busy: no reload asked');
+    await A.call('shellBusy', { on: false });
+    assert.equal(await until(async () => (await A.state()).lib.version.reloading, 2500), 'wire:g:2', 'not busy: asked');
+  });
+
+  test('shellNewer({ value }): the stand-in shell\'s newer() says whether the site has a newer version than the page (default: no)', T, async t => {
+    const W = world(t);
+    const A = await W.tab('p1tab'), B = await W.tab('p2tab');
+    await A.call('shellNewer', { value: true });             // (before the library starts: what it asks later)
+    await A.lib('supnew01', 'Аня', {}, { g: 1 });
+    assert.ok(await until(async () => (await A.state()).role === 'host', 5000));
+    await B.lib('supnew01', 'Богдан', {}, { g: 1, n: 1 });
+    assert.ok(await until(settled([A, B]), 8000), await shows([A, B]));
+    await B.open('n');                                       // (a game Аня's shelf does not have: the site says who is older)
+    const older = X => until(async () => { const g = (await X.state()).lib.version.gap; return g && typeof g.older === 'boolean' && [g.why, g.older]; }, 5000);
+    assert.deepEqual(await older(A), ['game', true], 'Аня: the site has newer');
+    assert.deepEqual(await older(B), ['game', false], 'Богдан: nothing newer (the default)');
+  });
+
+  test('ownView({ id }): the room shows this game because this page opened it (together.js ownView); a follower\'s is not; no room: ours', T, async t => {
+    const W = world(t);
+    const [A, B] = await room(W, 'supown01', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await until(async () => (await B.game())?.view === 'g', 5000), 'Богдан follows');
+    assert.deepEqual([await A.call('ownView', { id: 'g' }), await B.call('ownView', { id: 'g' }), await A.call('ownView', { id: 'h' })], [true, false, false]);
+    await B.leave();
+    assert.equal(await B.call('ownView', { id: 'g' }), true, 'no room: nobody else\'s');
+  });
+
   test('reload({ boot: true }): the next page starts the library at the address the page had; after «Оновити» it is back in its room by itself (REJOIN)', T, async t => {
     const W = world(t);
     const [A, B] = await room(W, 'supboot1', ['Аня', 'Богдан'], { lib: {} });

@@ -236,16 +236,29 @@ export function clear(box) {
   built.delete(box);
 }
 // a row: the line (with the time, for a place that is kept), the small line, the buttons (library functions, also in
-// the game's document; one that acts on a player is named for a screen reader with whom: waiting.js NAMED)
+// the game's document; one that acts on a player is named for a screen reader with whom: waiting.js NAMED). Each name
+// in a line stands in a <bdi> of its own (waiting.js iso: where it stands): one written right to left never reorders
+// the rest of the line, the time either (the text reads the same)
 function build(doc, r, acts) {
   const make = (tag, cls, text) => { const n = doc.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
-  const node = make('div', 'wait-row'), line = make('p', '', r.text);
+  const words = (p, text, at = []) => {
+    let i = 0;
+    for (const [a, b] of at) {
+      if (a < i || b <= a) continue;
+      if (a > i) p.append(text.slice(i, a));
+      p.append(make('bdi', '', text.slice(a, b)));
+      i = b;
+    }
+    if (i < text.length) p.append(text.slice(i));
+    return p;
+  };
+  const iso = r.iso || {}, node = make('div', 'wait-row'), line = words(make('p', ''), r.text, iso.text);
   node.dataset.kind = r.kind;
   if (r.name) node.dataset.name = r.name;
   const time = r.time == null ? null : make('span', 'wait-time');
   if (time) line.append(' ', time);
   node.append(line);
-  if (r.fine) node.append(make('p', 'fine', r.fine));
+  if (r.fine) node.append(words(make('p', 'fine'), r.fine, iso.fine));
   for (const { act, arg } of r.acts) {
     const b = make('button', LABEL[act][1], LABEL[act][0]);
     b.type = 'button';

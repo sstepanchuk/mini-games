@@ -1,12 +1,12 @@
 // tags: @ci @webkit
-// card: the library's one «Чекаємо на …» over a game, over the internet: the waiting message wherever it is (the card,
+// card: the library's one «Чекаємо, поки повернеться …» over a game, over the internet: the waiting message wherever it is (the card,
 // library/app/invite.js, or the game's own <ihroteka-wait>, screens.js: never both). Аня and Богдан play a game
 // (E2E_GAME: Two Dragons by default). Богдан drops out: Аня's message says whom she waits for, the time his place is
 // kept and «Не чекати»; it is built once (each second only the time changes), a screen reader hears only who and why
 // (the live region of the library page), and a focused «Не чекати» keeps its focus. Богдан back: no message. Богдан
-// goes on in a new tab whose game is slow to open: «Чекаємо на Богдан — повертається в гру», with nothing to press
-// (owner, decision 4), until it is open. Then he drops out again and Аня presses «Не чекати»: his place goes. The probe
-// places no <ihroteka-wait>: the card as it always was. «Не чекати» is named «Не чекати на Богдан» for a screen reader,
+// goes on in a new tab whose game is slow to open: «Богдан повертається в гру», with nothing to press (owner,
+// decisions 4 and 42: the name in the nominative), until it is open. Then he drops out again and Аня presses «Не чекати»: his place goes. The probe
+// places no <ihroteka-wait>: the card as it always was. «Не чекати» is named «Не чекати, поки повернеться Богдан» for a screen reader,
 // and the game comes before the card in Tab and reading order. A library dialog open over the game: the live region is
 // still heard (it is on the library page, under nothing inert). At 320 px, a 24-letter name stays inside the dialog
 // and the card. Needs the dev server with the plaintext games (npm run unlock), or with the probe (npm run dev --
@@ -31,16 +31,16 @@ scenario('card: whom the game waits for, and why', async () => {
 
   step('Богдан drops out');
   await pb.evaluate(() => window.__net(false));
-  const away = async () => { const c = await cardOf(pa); return c.where && /Чекаємо на Богдан… \d+:\d\d/.test(c.text) && c; };
+  const away = async () => { const c = await cardOf(pa); return c.where && /Чекаємо, поки повернеться Богдан… \d+:\d\d/.test(c.text) && c; };
   let c = await until(away, 10000);
-  check(c, 'Аня’s message: «Чекаємо на Богдан… m:ss»', await cardOf(pa));
+  check(c, 'Аня’s message: «Чекаємо, поки повернеться Богдан… m:ss»', await cardOf(pa));
   check(c && c.where !== 'both', 'in one place only (' + (c && c.where) + ')', c);
   if (GAME === 'probe') {                                 // (contract 4, no <ihroteka-wait>: the card as it always was)
     const s = await pa.evaluate(() => window.__ihroteka.screens());
     check(c && c.where === 'card' && c.copies === 0 && s.adopted === false, 'the probe places no waiting screen: the library\'s card', [c, s]);
   }
   check(c && c.buttons.includes('Не чекати') && !c.buttons.includes('З’єднатися знову'), '… with «Не чекати» (over the internet, no pairing again)', c && c.buttons);
-  check(c && c.say === 'Чекаємо на Богдан…', 'the screen reader hears who (not the time)', c && c.say);
+  check(c && c.say === 'Чекаємо, поки повернеться Богдан…', 'the screen reader hears who (not the time)', c && c.say);
   // the row stays the same node, only its time changes; the live region does not change; the focus stays (in the
   // document of whatever holds the rows: the card in the page, or the game's screen in its frame)
   const box = await waitBox(pa);
@@ -53,7 +53,7 @@ scenario('card: whom the game waits for, and why', async () => {
     window.__tick = setInterval(() => window.__times.push(b.querySelector('.wait-time')?.textContent), 500);
   });
   const named = await box.evaluate(() => window.__stay.getAttribute('aria-label'));
-  check(named === 'Не чекати на Богдан', 'a screen reader hears «Не чекати на Богдан» (the button\'s text stays «Не чекати»)', named);
+  check(named === 'Не чекати, поки повернеться Богдан', 'a screen reader hears «Не чекати, поки повернеться Богдан» (the button\'s text stays «Не чекати»)', named);
   const order = await pa.evaluate(() => !!(document.querySelector('#stage iframe').compareDocumentPosition(document.getElementById('waiting')) & Node.DOCUMENT_POSITION_FOLLOWING));
   check(order, 'the game comes before the card (Tab and reading order)', order);
   await pa.evaluate(() => {
@@ -80,7 +80,7 @@ scenario('card: whom the game waits for, and why', async () => {
   await (await frameOf(pa)).evaluate(() => window.ihroteka.invite());
   await pa.waitForSelector('.dialog');
   await pb.evaluate(() => window.__net(false));
-  check(await until(async () => (await region())?.text === 'Чекаємо на Богдан…', 10000), 'the live region says whom Аня waits for', await region());
+  check(await until(async () => (await region())?.text === 'Чекаємо, поки повернеться Богдан…', 10000), 'the live region says whom Аня waits for', await region());
   check((await region())?.under === null, '… under nothing inert or hidden (the dialog makes the stage inert)', await region());
   if (CHROMIUM) {                                         // (what a screen reader is given: the accessibility tree)
     const cdp = await pa.context().newCDPSession(pa);
@@ -103,12 +103,12 @@ scenario('card: whom the game waits for, and why', async () => {
   await pc.addInitScript(fakeNet('bbbb2222bbbb'));
   await pc.goto(link);
   await enterName(pc, 'Богдан');
-  const loading = async () => { const x = await cardOf(pa); return x.where && x.text === 'Чекаємо на Богдан — повертається в гру' && x; };
+  const loading = async () => { const x = await cardOf(pa); return x.where && x.text === 'Богдан повертається в гру' && x; };
   c = await until(loading, 10000, 100);
-  check(c, 'Аня’s message: «Чекаємо на Богдан — повертається в гру»', await cardOf(pa));
+  check(c, 'Аня’s message: «Богдан повертається в гру»', await cardOf(pa));
   check(c && c.where !== 'both', 'in one place only (' + (c && c.where) + ')', c);
   check(c && !c.buttons.length, '… with nothing to press (no «Не чекати»: he did not drop out)', c && c.buttons);
-  check(c && c.say === 'Чекаємо на Богдан — повертається в гру', 'the screen reader hears why', c && c.say);
+  check(c && c.say === 'Богдан повертається в гру', 'the screen reader hears why', c && c.say);
   check(await until(async () => !(await cardOf(pa)).where && (await libState(pc)).game?.linked, 15000), 'his game open there: no message, playing', [await cardOf(pa), await short(pc)]);
 
   step('Богдан drops out again; Аня does not wait');
@@ -150,9 +150,10 @@ scenario('card: whom the game waits for, and why', async () => {
   const cn = await card();
   check(cn.sw === cn.cw && cn.lines.length > 0 && cn.lines.every(Boolean) && cn.page === cn.vw, 'the card: nothing runs off it or off the screen', cn);
   // a name of every day: the card as wide as it was before a name could break anywhere (its line for a moment with
-  // another name, measured with the rule and as without it, in one task: nothing repaints it meanwhile)
+  // another name, measured with the rule and as without it, in one task: nothing repaints it meanwhile; the name is
+  // where the line isolates it, its <bdi>, or in its text)
   const widths = await pn.evaluate(() => {
-    const c = document.getElementById('waiting'), line = c.querySelector('.wait-row p').firstChild, was = line.textContent, out = [];
+    const c = document.getElementById('waiting'), p = c.querySelector('.wait-row p'), line = p.querySelector('bdi') || p.firstChild, was = line.textContent, out = [];
     line.textContent = was.replace(/Ш+/, 'Богдан');
     out.push(c.getBoundingClientRect().width);
     const old = document.head.appendChild(Object.assign(document.createElement('style'), { textContent: '.waiting,.waiting *{overflow-wrap:normal!important}' }));

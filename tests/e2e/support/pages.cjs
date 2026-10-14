@@ -41,7 +41,7 @@ const libState = p => p.isClosed() ? Promise.resolve(null) : p.evaluate(() => wi
 // the open dialog's text, or '' (whitespace collapsed; without the marks that keep a name from turning the line round,
 // U+2066–U+2069: invite.js iso, which a reader never sees)
 const dialogText = async p => p.isClosed() ? '' : p.evaluate(() => document.querySelector('.dialog')?.innerText.replace(/[\u2066-\u2069]/g, '').replace(/\s+/g, ' ').trim() || '');
-// the card over the game («Чекаємо на …», invite.js; only the card: see waitShown): whether it shows, its text
+// the card over the game («Чекаємо, поки повернеться …», invite.js; only the card: see waitShown): whether it shows, its text
 // (whitespace collapsed), its buttons, and what its live region says to a screen reader (say)
 const waitCard = p => p.evaluate(() => {
   const c = document.getElementById('waiting'), say = document.querySelector('#layer .sr[role=status]'), shown = !!c && !c.hidden;
@@ -94,12 +94,13 @@ async function short(p, game) {
 /* ---------- nearby: a phone is a browser of its own (no fake brokers in common with the others) ---------- */
 // internet: false (default) = no internet at all, so the dialog goes straight to nearby; net: more fakeNet options
 // (relayOnly: a browser without WebRTC); init: scripts that run in the phone's pages before the library (functions,
-// as context.addInitScript takes them: [fn] or [[fn, arg]])
-async function phone(pid, name, { internet = false, net = {}, viewport = { width: 420, height: 860 }, init = [] } = {}) {
+// as context.addInitScript takes them: [fn] or [[fn, arg]]); url: the library it opens (default: E2E_URL's; a dev server
+// of the scenario's own, support/newgame.cjs)
+async function phone(pid, name, { internet = false, net = {}, viewport = { width: 420, height: 860 }, init = [], url = U } = {}) {
   const b = await launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
   const ctx = await b.newContext({ viewport, ...(CHROMIUM && { permissions: ['camera'] }) });
   for (const x of init) await (Array.isArray(x) ? ctx.addInitScript(...x) : ctx.addInitScript(x));
-  const p = await openPage(ctx, pid, U, { label: name, net: { brokers: internet, ...net } });
+  const p = await openPage(ctx, pid, url, { label: name, net: { brokers: internet, ...net } });
   const X = {
     b, p, name,
     state: () => libState(p),
