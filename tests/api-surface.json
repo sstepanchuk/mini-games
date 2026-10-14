@@ -11,7 +11,7 @@
   "events": ["join", "leave", "linked", "message", "peer-gone", "players", "pulse", "relinked", "resume", "role", "shared", "stats", "tick", "weak"],
   "chainable": ["on"],
   "deprecated": {
-    "//": "the rounds of contract 4 (phase 4: ihroteka.round says the same per round): kept as they are, marked so in README; they go in the contract step (docs/ROADMAP.md, phase 5)",
+    "//": "the rounds of contract 4 (phase 4: ihroteka.round says the same per round; their snapshots: library/app/legacy.js): kept as they are, marked so in README; they go in the contract step (docs/ROADMAP.md, phase 5)",
     "room": ["host", "role", "snapshot"],
     "events": ["peer-gone", "relinked", "resume", "role"]
   },

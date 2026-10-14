@@ -292,7 +292,8 @@ function modeHooks(mode, relay) {
  * @property {number[]} win          per broker: how often it brought their data first (halved every 2 s)
  * @property {number[]} peerBest     the brokers that bring our data to them first, as they say (w; ≤ 2)
  * @property {number} peerBestAt     when they said so
- * Paths, numbering and ping (link.js; resetPaths starts the numbering and the measurements over):
+ * Paths, numbering and ping (link.js; resetPaths starts the numbering and the measurements over, directGone the direct
+ * path's when its link closes):
  * @property {string} via            the path in use: 'p2p' (direct) or 'relay' (the brokers)
  * @property {number} viaAt          when it was last chosen
  * @property {Array} q               messages waiting to go through the brokers (a flush: as few 'd' as RELAY_BYTES allows)
@@ -771,15 +772,17 @@ function arrive(N, P, m, reliable) {
 }
 
 /* ---------- several links, one room ---------- */
+// the links with one player (n: their name), or all of them
+const peersOf = (N, n) => n === undefined ? linkedPeers(N) : linkedPeers(N).filter(P => P.name === n);
 // one player's figure, or the room's: the worst of all (a game waits for its slowest player). (merge gets two figures
 // at a time: reduce's own index and array would make Math.max NaN.)
 function pick(N, n, fn, merge, none) {
-  const ps = n === undefined ? linkedPeers(N) : linkedPeers(N).filter(P => P.name === n);
+  const ps = peersOf(N, n);
   return ps.length ? ps.map(fn).reduce((a, b) => merge(a, b)) : none;
 }
 // One player's link, or all of them: the worst. A player who dropped out counts as weak.
 function roomStats(N, n) {
-  const ps = n === undefined ? linkedPeers(N) : linkedPeers(N).filter(P => P.name === n);
+  const ps = peersOf(N, n);
   const m = n !== undefined && memberOf(N, n), away = !!m && !!awaySince(N, m);
   if (!ps.length) return { rtt: null, peerRtt: null, direct: false, relayed: false, turn: null, weak: away };
   const all = ps.map(stats), worst = (k, f) => { const v = all.map(s => s[k]).filter(x => x != null); return v.length ? f(...v) : null; };

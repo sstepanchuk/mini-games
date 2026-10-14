@@ -10,6 +10,8 @@ export const MAX = 40;
 const ERRORS = 20;
 const lines = [];
 const UTF8 = new TextEncoder();
+// a string's size in bytes, UTF-8 (values.js passes it on: here, as this module loads in Node's main thread too)
+export const bytes = s => UTF8.encode(s).length;
 const FLAG = /^(room weak|room away \S.*|→ \S+ weak) (?:true|false)$/;
 const ERROR = /^error (in the game|on the page): /;
 
@@ -30,7 +32,7 @@ export const read = () => lines.map(l => clock(l.at) + '  ' + l.text + (l.n > 1 
 
 // a value as the trace tells it: its size as JSON, in bytes ('?' when it cannot become JSON)
 export function size(v) {
-  try { const s = JSON.stringify(v); return (s === undefined ? 0 : UTF8.encode(s).length) + ' B'; } catch (e) { return '? B'; }
+  try { const s = JSON.stringify(v); return (s === undefined ? 0 : bytes(s)) + ' B'; } catch (e) { return '? B'; }
 }
 // what an event's arguments may say: names, flags and numbers as they are, a list of names joined, anything else its size
 export const args = a => a.map(x => typeof x === 'string' || typeof x === 'boolean' || typeof x === 'number' || x == null ? String(x)

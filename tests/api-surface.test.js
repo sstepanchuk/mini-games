@@ -1,9 +1,10 @@
 // The API games see, pinned: window.ihroteka (what library/app/shell.js hands a game, and the contract at the top of
-// library/game-api.js), ihroteka.room (the channel's `api` object in library/app/together.js), ihroteka.round (the
-// `round` object in library/app/round.js), the events a game can get from each, and the waiting screens a game places
-// (<ihroteka-wait>: game-api.js defines it, library/app/screens.js fills it). Everything is read from the
-// source, nothing is run. A member or an event added, renamed or removed fails here until tests/api-surface.json and
-// README's "Game API" say the same: an API change is made on purpose, with its docs.
+// library/game-api.js), ihroteka.room (the channel's `api` object in library/app/together.js; its rounds of contract 4
+// in library/app/legacy.js), ihroteka.round (the `round` object in library/app/round.js), the events a game can get
+// from each, and the waiting screens a game places (<ihroteka-wait>: game-api.js defines it, library/app/screens.js
+// fills it). Everything is read from the source, nothing is run. A member or an event added, renamed or removed fails
+// here until tests/api-surface.json and README's "Game API" say the same: an API change is made on purpose, with its
+// docs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -56,10 +57,13 @@ function contract() {
     versions: [...head.matchAll(/\bversion\s+(\d+)/gi)].map(m => +m[1]) };
 }
 
-/* ---------- ihroteka.room: `const api = { … }` in together.js ---------- */
-const TOGETHER = parse('library/app/together.js');
+/* ---------- ihroteka.room: `const api = { … }` in together.js (or legacy.js: the rounds of contract 4) ---------- */
+const ROOM = ['library/app/together.js', 'library/app/legacy.js'].map(file => ({ file, ast: parse(file) }));
+const isApi = n => n.type === 'VariableDeclarator' && n.id.name === 'api' && n.init?.type === 'ObjectExpression';
 function room() {
-  const decl = find(TOGETHER, n => n.type === 'VariableDeclarator' && n.id.name === 'api' && n.init?.type === 'ObjectExpression', 'const api = { … } in library/app/together.js');
+  const decls = ROOM.flatMap(({ ast }) => [...walk(ast)].filter(isApi));
+  assert.equal(decls.length, 1, 'one const api = { … } in library/app/together.js and legacy.js');
+  const decl = decls[0];
   const out = { getters: [], methods: [], policies: [] }, nodes = {};
   for (const p of decl.init.properties) {
     const k = keyOf(p, 'ihroteka.room');
@@ -72,40 +76,42 @@ function room() {
   return { surface: Object.fromEntries(Object.entries(out).map(([k, v]) => [k, sorted(v)])), nodes };
 }
 
-/* ---------- the events: what together.js emits to the open game ---------- */
-// <anything>.emit('x', …) in together.js (c, ch today: whatever a channel is called), or events a pure rule of
-// library/app/rules.js lists:
+/* ---------- the events: what together.js and legacy.js emit to the open game ---------- */
+// <anything>.emit('x', …) in together.js or legacy.js (c, ch today: whatever a channel is called), or events a pure rule
+// of library/app/rules.js lists:
 //   for (const [e, ...a] of rules.f(…)) c.emit(e, ...a)      (also: of f(…), f imported from './rules.js'; c.emit(...e))
 // where f builds them as arrays ['x', …]. Anything else is an event the test cannot name, and fails.
 function events() {
   const found = new Set(), fromRules = new Set(), seen = new Set();
-  const imports = new Map();                           // local name → its name in rules.js ('*': the module)
-  for (const n of TOGETHER.body) if (n.type === 'ImportDeclaration' && n.source.value === './rules.js') {
-    for (const s of n.specifiers) imports.set(s.local.name, s.type === 'ImportNamespaceSpecifier' ? '*' : s.imported.name);
-  }
-  const rulesFn = call => {                            // rules.f(…) or f(…) → 'f'
-    if (call?.type !== 'CallExpression') return null;
-    const f = call.callee;
-    if (f.type === 'MemberExpression' && !f.computed && f.object.type === 'Identifier' && imports.get(f.object.name) === '*') return f.property.name;
-    if (f.type === 'Identifier' && imports.has(f.name) && imports.get(f.name) !== '*') return imports.get(f.name);
-    return null;
-  };
   const isEmit = n => isCall(n, null, 'emit');
-  for (const loop of walk(TOGETHER)) {
-    const fn = loop.type === 'ForOfStatement' && rulesFn(loop.right);
-    const decl = fn && loop.left.type === 'VariableDeclaration' && loop.left.declarations[0].id;
-    const bound = decl && (decl.type === 'Identifier' ? decl.name : decl.type === 'ArrayPattern' && decl.elements[0]?.type === 'Identifier' ? decl.elements[0].name : null);
-    if (!bound) continue;
-    for (const n of walk(loop.body)) {
-      const a = isEmit(n) && n.arguments[0];
-      if (a && ((a.type === 'Identifier' && a.name === bound) || (a.type === 'SpreadElement' && a.argument.type === 'Identifier' && a.argument.name === bound))) { seen.add(n); fromRules.add(fn); }
+  for (const { file, ast } of ROOM) {
+    const imports = new Map();                         // local name → its name in rules.js ('*': the module)
+    for (const n of ast.body) if (n.type === 'ImportDeclaration' && n.source.value === './rules.js') {
+      for (const s of n.specifiers) imports.set(s.local.name, s.type === 'ImportNamespaceSpecifier' ? '*' : s.imported.name);
     }
-  }
-  for (const n of walk(TOGETHER)) {
-    if (!isEmit(n) || seen.has(n)) continue;
-    const a = n.arguments[0];
-    assert.ok(a && a.type === 'Literal' && typeof a.value === 'string', 'together.js line ' + n.loc.start.line + ': an event the test cannot name (emit a string, or the events of a rules.js function)');
-    found.add(a.value);
+    const rulesFn = call => {                          // rules.f(…) or f(…) → 'f'
+      if (call?.type !== 'CallExpression') return null;
+      const f = call.callee;
+      if (f.type === 'MemberExpression' && !f.computed && f.object.type === 'Identifier' && imports.get(f.object.name) === '*') return f.property.name;
+      if (f.type === 'Identifier' && imports.has(f.name) && imports.get(f.name) !== '*') return imports.get(f.name);
+      return null;
+    };
+    for (const loop of walk(ast)) {
+      const fn = loop.type === 'ForOfStatement' && rulesFn(loop.right);
+      const decl = fn && loop.left.type === 'VariableDeclaration' && loop.left.declarations[0].id;
+      const bound = decl && (decl.type === 'Identifier' ? decl.name : decl.type === 'ArrayPattern' && decl.elements[0]?.type === 'Identifier' ? decl.elements[0].name : null);
+      if (!bound) continue;
+      for (const n of walk(loop.body)) {
+        const a = isEmit(n) && n.arguments[0];
+        if (a && ((a.type === 'Identifier' && a.name === bound) || (a.type === 'SpreadElement' && a.argument.type === 'Identifier' && a.argument.name === bound))) { seen.add(n); fromRules.add(fn); }
+      }
+    }
+    for (const n of walk(ast)) {
+      if (!isEmit(n) || seen.has(n)) continue;
+      const a = n.arguments[0];
+      assert.ok(a && a.type === 'Literal' && typeof a.value === 'string', file.split('/').pop() + ' line ' + n.loc.start.line + ': an event the test cannot name (emit a string, or the events of a rules.js function)');
+      found.add(a.value);
+    }
   }
   if (fromRules.size) {
     const RULES = parse('library/app/rules.js');
@@ -175,7 +181,7 @@ test('ihroteka.room: its getters, methods and policies', () => {
 });
 
 test('the events a game can get from ihroteka.room', () => {
-  assert.deepEqual(events(), SNAP.events, 'what together.js (and rules.js) emit ≠ tests/api-surface.json "events"');
+  assert.deepEqual(events(), SNAP.events, 'what together.js and legacy.js (and rules.js) emit ≠ tests/api-surface.json "events"');
 });
 
 test('ihroteka.round: its getters, methods and policy (every one off)', () => {

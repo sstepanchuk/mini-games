@@ -326,7 +326,7 @@ describe('a quit outlives a reload', { concurrency: 3 }, () => {
 
 // A quit goes to the round's runner through whoever holds the room; what the host keeps for a player whose links start
 // over (her page gave the room up for lost and comes back as a guest) is gone with them, and nobody hears of that: the
-// quit is said again every 2 s while its runner is here, until that round is over (round.js QUIT_AGAIN, invariant 5).
+// quit is said again every 2 s while its runner is here, until that round is over (values.js QUIT_AGAIN, round.js invariant 5).
 // (audit: else the runner, back, ran the round on, and the one who quit waited until something relinked)
 describe('a quit is said again while its runner is here', { concurrency: 2 }, () => {
   // Сава holds the room, her game closed (no seat); Аня runs the round, Богдан plays it; his quit while she is out

@@ -46,6 +46,14 @@ export function resetPaths(P) {
   P.pts = -1; P.suspect = -1e9;
   P.rD = P.rR = null; P.sD = []; P.sR = []; P.qD = P.qR = -1; P.slowDirect = false; P.peerRtt = null; P.aliveAt = 0;
 }
+// the direct link closed (rtc.js closeRtc): the brokers carry everything, and its ping is measured anew on the next one
+export function directGone(P) {
+  P.via = 'relay'; P.rD = null; P.sD = []; P.slowDirect = false;
+}
+// a link that carries nothing more (nearby.js broke): what waits for an acknowledgement, or for a missing one, is dropped
+export function dropReliable(P) {
+  P.outbox = []; P.rxHold.clear();
+}
 
 /* ---------- sending ---------- */
 // fast: unordered, may be lost (state, aim). latest (with fast): each one makes the previous one of its stream
@@ -76,9 +84,9 @@ export function wire(m) {
 // by the path in use; while the direct link is not sure, through the brokers as well
 function transmit(P, m, fast, stream) {
   const N = P.N;
-  if (!N.relay) { if (dcLive(P)) { try { (fast ? P.dcF : P.dcC).send(JSON.stringify(m)); } catch (e) {} } return; }   // nearby: the direct link is all there is
+  if (!N.relay) { dcSend(P, m, fast); return; }       // nearby: the direct link is all there is
   if (dcLive(P) && P.via === 'p2p') {
-    try { (fast ? P.dcF : P.dcC).send(JSON.stringify(m)); } catch (e) {}
+    dcSend(P, m, fast);
     if (dcFresh(P)) return;                            // the direct link is alive: that is enough
   }
   // through the brokers (no direct path, it went quiet, or it is slower), within the relay budget (see the top)
@@ -127,7 +135,10 @@ function resend(P, now) {
   }
   if (P.q.length > q0) flushRelay(P);                  // (this tick's, together)
 }
-function sendDirect(P, m) { if (dcLive(P)) { try { P.dcF.send(JSON.stringify(m)); } catch (e) {} } }
+// Over the direct link, while both its channels are open: fast ones on 'fast', the rest on 'ctl' (rtc.js). One the
+// channel refuses is lost here: a reliable one goes again (resend).
+export function dcSend(P, m, fast) { if (dcLive(P)) { try { (fast ? P.dcF : P.dcC).send(JSON.stringify(m)); } catch (e) {} } }
+function sendDirect(P, m) { dcSend(P, m, true); }
 function sendRelay(P, m) { if (P.linked && P.N.relay) { P.q.push(m); flushRelay(P); } }
 // Reliable messages through the brokers go at the end of the task that sent them, together: a burst, or a tick's
 // resends, is a few publishes (each publish is sealed in the room's one chain, brokers.js: one per message flooded the
@@ -379,9 +390,9 @@ function pingMsg(P, now) {
 // While a game is played here (N.playing: the library's open game has someone to play with), the page is visible, the
 // brokers work (internet rooms) and a direct link is open, the room asks about a quiet direct link by itself every
 // ALIVE_EVERY ms (keepDirectAlive), as a game's room.frame(now) would each frame, so the game need not: a direct link
-// gone dead moves to the brokers in about 0.7 s (measured: the watchdog alone does it as soon, see docs/ROADMAP.md,
-// phase 2). No such timer anywhere else (the shelf, an idle room, a hidden page, a nearby room). Asked each watchdog
-// tick, and when the page is hidden or shown. → whether it runs
+// gone dead moves to the brokers in about 0.7 s (measured: some 0.05–0.07 s sooner than the watchdog alone, see
+// docs/ROADMAP.md, phase 2). No such timer anywhere else (the shelf, an idle room, a hidden page, a nearby room).
+// Asked each watchdog tick, and when the page is hidden or shown. → whether it runs
 export function tendAlive(N) {
   const on = !N.closed && N.relay && N.up && !document.hidden && N.playing() && linkedPeers(N).some(dcLive);
   if (on && !N.aliveTimer) N.aliveTimer = setInterval(() => { if (tendAlive(N)) keepDirectAlive(N); }, ALIVE_EVERY);

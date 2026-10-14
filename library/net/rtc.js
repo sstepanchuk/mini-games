@@ -6,7 +6,7 @@
 // candidate from an earlier attempt cannot spoil a newer one. Only the guest starts attempts (no glare).
 import { ICE } from './config.js';
 import { pubOn } from './brokers.js';
-import { deliver, flushRelay } from './link.js';
+import { deliver, directGone, flushRelay } from './link.js';
 
 const ICE_MAX = 50;                                    // candidates kept while waiting for an offer
 
@@ -39,7 +39,8 @@ export function openChannels(P, pc) {
 export function closeRtc(P) {
   clearTimeout(P.rtcTimer); P.rtcTimer = null;
   const pc = P.pc, a = P.dcF, b = P.dcC;
-  P.pc = null; P.dcF = null; P.dcC = null; P.iceQ = []; P.rtcK = null; P.via = 'relay'; P.turn = null; P.cand = ''; P.iceRtt = null; P.rD = null; P.sD = []; P.slowDirect = false;
+  P.pc = null; P.dcF = null; P.dcC = null; P.iceQ = []; P.rtcK = null; P.turn = null; P.cand = ''; P.iceRtt = null;
+  directGone(P);                                       // (the path's own fields: link.js)
   try { if (a) a.close(); } catch (e) {}
   try { if (b) b.close(); } catch (e) {}
   try { if (pc) pc.close(); } catch (e) {}

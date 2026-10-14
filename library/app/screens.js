@@ -40,7 +40,9 @@ const STYLE = 'ihroteka-wait:empty{display:none!important}\n' +
   ':where(ihroteka-wait p){margin:0;overflow-wrap:anywhere}\n' +
   ':where(ihroteka-wait .wait-time){font-variant-numeric:tabular-nums;white-space:nowrap}\n' +
   ':where(ihroteka-wait .fine){flex-basis:100%}';
-// the dev server (the page's version meta: 'dev', as together.js): a game's mistake the library can see says so, once
+// the dev server (the page's version meta: 'dev', as values.js DEV): a game's mistake the library can see says so,
+// once. (Read here, not imported: this module loads on its own with dom.js and waiting.js, tests/e2e/screens-unit, and
+// values.js would bring the room's whole net with it.)
 const DEV = globalThis.document?.querySelector?.('meta[name="ihroteka-version"]')?.content === 'dev';
 
 let win = null;                                          // the open game's window (attachScreens), null: none

@@ -10,8 +10,8 @@ import { fileURLToPath } from 'node:url';
 import * as espree from 'espree';                      // ESLint's own parser (it comes with eslint)
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const FILES = ['library/app/invite.js', 'library/app/dom.js', 'library/app/qr.js', 'library/app/together.js', 'library/app/waiting.js',
-  'library/app/shell.js', 'library/app/lock.js'];
+const FILES = ['library/app/invite.js', 'library/app/dom.js', 'library/app/qr.js', 'library/app/together.js', 'library/app/legacy.js',
+  'library/app/values.js', 'library/app/waiting.js', 'library/app/shell.js', 'library/app/lock.js'];
 // a whole word (Ukrainian letters and the apostrophe ’ make up a word)
 const GENDERED = /(^|[^а-яіїєґ’])(він|зайшов|вийшов|приєднався|відпав|скопіював|відкрив|той, хто)([^а-яіїєґ’]|$)/i;
 const KEPT = [
@@ -42,7 +42,7 @@ function texts(file) {
 
 test('the files say something to players (the check reads their texts)', () => {
   assert.ok(texts('library/app/invite.js').length > 50, 'invite.js: its texts are read');
-  for (const f of ['library/app/together.js', 'library/app/waiting.js', 'library/app/shell.js', 'library/app/lock.js']) assert.ok(texts(f).length, f + ': its texts are read');
+  for (const f of ['library/app/values.js', 'library/app/waiting.js', 'library/app/shell.js', 'library/app/lock.js']) assert.ok(texts(f).length, f + ': its texts are read');
 });
 
 test('the check itself: it finds a gendered word, and lets the neutral ones and longer words go', () => {

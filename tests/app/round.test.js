@@ -62,6 +62,29 @@ describe('whose copy runs a round', { concurrency: 3 }, () => {
     assert.equal((await B.game()).role, 'host');
   });
 
+  // A copy that ran the round and lost it (it plays as a guest now) has nothing of what came since: when the round
+  // comes back to it, it hears 'resume' again, with the newer snapshot (together.js resets legacy.js own on the role).
+  test('the round moves away and back: the first runner, in charge again, hears resume with the newer snapshot', { timeout: 60000 }, async t => {
+    const W = world(t, { scale: SCALE });
+    const [A, B] = await room(W, 'run8', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await plays([A, B], 'Аня,Богдан'));
+    await A.snapshot({ round: 8, n: 1 });
+    await sleep(300);
+    const { AUTH_WAIT } = (await A.info()).timing;
+    await A.net({ up: false });
+    assert.ok(await until(async () => (await B.game()).events.some(e => e[1] === 'resume'), AUTH_WAIT + 6000, 50), 'Богдан runs the round on: ' + evs(await B.game()));
+    await A.net({ up: true });
+    assert.ok(await until(async () => { const g = await A.game(); return g.linked && !g.weak && g.role === 'guest'; }, 15000, 100), 'Аня plays as a guest: ' + evs(await A.game()));
+    assert.equal(await B.snapshot({ round: 8, n: 2 }), true);
+    assert.ok(await until(async () => (await snapOf(A))?.s?.n === 2, 3000), 'Аня keeps Богдан\'s snapshot: ' + JSON.stringify(await snapOf(A)));
+    const n = (await A.game()).events.length;
+    await B.net({ up: false });
+    const a = await until(async () => { const g = await A.game(); return g.role === 'host' && evs(g, n).some(e => e.startsWith('resume')) && g; }, AUTH_WAIT + 8000, 50);
+    assert.ok(a, 'Аня runs the round again, from Богдан\'s snapshot: ' + evs(await A.game(), n));
+    assert.deepEqual(evs(a, n).filter(e => e.startsWith('resume')), ['resume {"round":8,"n":2}'], 'once, the newer one');
+  });
+
   test('a player who dropped out themself does not take the round over', T, async t => {
     const W = world(t, { scale: SCALE });
     const [A, B] = await room(W, 'run3', ['Аня', 'Богдан'], { lib: {} });
@@ -316,7 +339,7 @@ describe('a round\'s snapshot', { concurrency: 3 }, () => {
     assert.equal((await snapOf(B))?.s, null, 'he was greeted with its tombstone');
   });
 
-  // (owner, decision 3: a round waits for a closed game, not for a player who quit; channel over() in together.js)
+  // (owner, decision 3: a round waits for a closed game, not for a player who quit; forGame over() in legacy.js)
   test('the partner quits the room mid-round, the game open: the round is a tombstone; whoever waited plays a new one', T, async t => {
     const W = world(t);
     const [A, B, C] = await room(W, 'snap8', ['Аня', 'Богдан', 'Сава'], { lib: {} });
@@ -451,7 +474,7 @@ describe('the round layer (ihroteka.round)', { concurrency: 3 }, () => {
     await A.open('g');
     assert.ok(await plays([A, B], 'Аня,Богдан'));
     assert.equal(await start(B), true, 'asked');
-    await B.freeze(5000 * SCALE + 300);                      // (round.js ASK_TTL) Богдан's tab stops: Аня's offer waits for it
+    await B.freeze(5000 * SCALE + 300);                      // (values.js ASK_TTL) Богдан's tab stops: Аня's offer waits for it
     assert.ok(await until(async () => (await B.state()).lib.trace.some(l => /offered came too late/.test(l)), 5000), 'the offer came, too late: ' +
       (await B.state()).lib.trace.slice(-8).join(' | '));
     assert.ok((await A.state()).lib.trace.some(l => /start asked by Богдан, offered/.test(l)), 'Аня offered it');
@@ -729,7 +752,7 @@ describe('the round layer (ihroteka.round)', { concurrency: 3 }, () => {
     assert.ok(await until(async () => (await C.state()).linked, 5000));
     await C.send(fake);
     assert.ok(await until(async () => (await rec(A))?.id === 'lostlost', 3000));
-    const LOST = 15000 * SCALE;                              // (round.js LOST_WAIT)
+    const LOST = 15000 * SCALE;                              // (values.js LOST_WAIT)
     await sleep(LOST + 2000);
     assert.equal((await rec(A)).on, true, 'Богдан is away: the round waits (' + rlines(await A.game()) + ')');
     await B.net({ up: true });

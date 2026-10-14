@@ -20,10 +20,12 @@ and works offline. Hosted on GitHub Pages.
   only. A password cancelled in a room takes everyone back to the shelf only from the player who opened the game; anyone
   else stays over it, with «Цю гру відкрили в кімнаті. Щоб грати, потрібен пароль.» and «Ввести пароль».
 - **Together.** "Грати разом" connects up to 8 players for the whole library: whatever one opens, everyone's library
-  opens too. A player is the name they type on entering a room, in one spelling: apostrophes become ’, invisible and
-  control characters go (emoji stay), several spaces become one, the first letter a capital; a name with no letter,
-  digit or emoji, or «*», is refused («Ім’я має містити літери, цифри чи емодзі»), and a name already in play is never
-  changed. In a sentence of a dialog a name cannot turn the line around. The same name from another tab, browser or
+  opens too. A player is the name they type on entering a room, cleaned as it is typed into one spelling (apostrophes
+  become ’, a letter typed in parts becomes one (NFC), invisible and control characters go (emoji stay), several spaces
+  become one, the first letter a capital) and from then on compared exactly (a Latin look-alike of a Cyrillic letter
+  makes another name); a name with no letter, digit or emoji, or «*», is refused («Ім’я має містити літери, цифри чи
+  емодзі»), and a name already in play (a reload, «Повернути сюди») is never changed. In a sentence of a dialog a name
+  cannot turn the line around. The same name from another tab, browser or
   device takes that player's place: another tab of the same browser at once; another browser or device, while the old
   one is still on the line, asks first («Богдан уже грає в кімнаті з іншого пристрою. Це ти?» — «Так, грати тут» or
   «Інше ім’я»), and the old one says what happened («Під іменем «Богдан» щойно увійшли з іншої вкладки або з іншого
@@ -72,9 +74,10 @@ and works offline. Hosted on GitHub Pages.
 ```
 library/   everything that runs in the browser
   app/       the library page: shell, password, together (+ rules: who plays, who runs a round; round: ihroteka.round,
-             a game's rounds; waiting, screens: the waiting screens a game puts in itself; trace: what happened
-             lately, for bug reports), offline copy, page template, icons; inflate: a gunzip for Safari before 16.4
-             (built as lib/inflate.js, loaded only there)
+             a game's rounds; legacy: the rounds of contract 4; waiting, screens: the waiting screens a game puts in
+             itself; trace: what happened lately, for bug reports; values: what together, round and legacy share),
+             offline copy, page template, icons; inflate: a gunzip for Safari before 16.4 (built as lib/inflate.js,
+             loaded only there)
   net/       rooms for up to 8 players: internet (MQTT, sealed with the room's code, + WebRTC) and nearby (QR-paired
              WebRTC)
   crypto.js  keyring and sealed files (browser and Node)
@@ -258,7 +261,8 @@ stayed open) reloads into the new one as soon as that disturbs nobody: on the sh
 internet one, which it comes straight back into (the others see it «повертається» for a moment); never nearby, where a
 reload would end the room.
 
-A room holds up to 8 players, each known by name. A game gets as many seats as its `players` says (2 when not
+A room holds up to 8 players, each known by name (as cleaned when it was typed, then compared exactly: see "How it
+works"). A game gets as many seats as its `players` says (2 when not
 given): the first players to have it open play, in the room's order; anyone else who opens it waits for a seat
 (`room.waiting`) and gets one as soon as a player leaves. `ihroteka.room` is linked (`room.linked`) while we have
 a seat and someone else does too:
@@ -368,8 +372,9 @@ hidden and shown, errors by type and place; never what a message, a snapshot, a 
 flag that keeps flipping, a link that flaps, is one line, counted; errors outlast the other lines);
 `room.direct`: every player we play with is on a direct link; `room.nearby`: a nearby room (no internet). While a
 game is played over the internet, the library itself asks about a quiet direct link (every 50 ms, only while the page
-is visible), and the game does nothing for it: one gone silent moves to the brokers in about 0.7 s (1.4 s when the
-game does not say `streaming`, below).
+is visible), and the game does nothing for it: one gone silent moves to the brokers in about 0.7 s (Two Dragons'
+`deadlink`, the median of 5 cuts: both sides within 0.68–0.69 s; about 1.4 s when the game does not say `streaming`,
+below), and back to it about 1.8 s after it speaks again.
 The public brokers ban whoever floods them, so the room keeps a **relay budget**: through the brokers, each `latest`
 stream goes about 30 times a second at most, and the other fast messages start at most 30 publishes a second per
 player (more wait and go together, none dropped; on the dev server the console says so, once). Reliable messages
@@ -404,7 +409,8 @@ cut short what the game asked, a `DOMException` `NotAllowedError` or `AbortError
 
 The room's code is `library/net/` (`room.js` describes the room and its rules) and `library/app/together.js`
 (what a game sees; the rules of who plays and who runs a round are in `library/app/rules.js`; `ihroteka.round` is
-`library/app/round.js`).
+`library/app/round.js`; the rounds of contract 4, `room.snapshot` and `resume`, are `library/app/legacy.js`, which
+the contract step takes away).
 
 ### The round: `ihroteka.round`
 
@@ -738,8 +744,8 @@ A game is fully trusted code. Its page runs in a frame of the library's own orig
 and change what the library keeps on the device (IndexedDB with the key that opens the games, the offline copy, local
 storage), call the library page directly (`parent.__ihroteka`, anything on `parent`), act as its player in the room,
 and send whatever it likes wherever it likes. `window.ihroteka` is a convenience, not a boundary. Only games of the
-library's own people belong on it. Sandboxed frames with a message API are an open decision, for when games come from
-other authors ([docs/ROADMAP.md](docs/ROADMAP.md), 23). The trust goes the other way too: the library page writes into
+library's own people belong on it. Sandboxed frames with a message API come when games come from other authors
+(owner, decision 23: [docs/ROADMAP.md](docs/ROADMAP.md)). The trust goes the other way too: the library page writes into
 the game's document (the rows of its waiting screens, one `<style data-ihroteka-wait>`, the `showing` attribute: see
 "Waiting screens"), as same-origin trusted code; the policy below has no `style-src`, so that style is allowed.
 
@@ -770,18 +776,18 @@ What the page does close, against mistakes rather than against a game:
 - Signed-in devices keep a non-extractable key in IndexedDB. Anything served from the same origin
   (`*.github.io` of this account) could use it, so host no untrusted pages there and don't load third-party scripts in games.
 - A device is asked for the password once, as long as it keeps the key: not in a private window, and Safari forgets a
-  site not added to the home screen after 7 days without a visit. Storage that does not answer in time (Safari, now and
-  then) is not taken for «nothing remembered»: the dialog shows, keeps asking the storage (for about a minute), and
-  closes by itself, opening the game, when the key comes after all. While the password is checked (a cheap phone may
-  take seconds) the dialog says «Відмикаю…», and after a second «Відмикаю… Це може тривати кілька секунд.» (a status line,
-  there and empty before, so a screen reader hears the first words too); «Скасувати»
-  (or Escape, or a tap outside) meanwhile stores nothing. «Забути пароль на цьому пристрої» marks the device first: if
-  its storage did not answer, the next page finishes the forgetting; if neither could be written, the button stays, with
-  «Не вдалося забути пароль. Закрий вкладку й спробуй ще раз.». A person removed from the keyring can open no game
-  sealed after that (their device's offline copy keeps opening the games it already has until it updates); once their
-  device sees the new keyring, it forgets the key and its dialog says «Доступ до ігор із цим паролем закрили. Якщо тобі
-  дали новий пароль — введи його.», and a device whose person's password was changed «Твій пароль змінили. Введи
-  новий.», until a password fits or the player forgets it.
+  site not added to the home screen (the key and the offline copy) after 7 days of use without a visit. Storage that
+  does not answer in time (Safari, now and then) is not taken for «nothing remembered»: the dialog shows, keeps asking
+  the storage (for about a minute), and closes by itself, opening the game, when the key comes after all. While the
+  password is checked (a cheap phone may take seconds) the dialog says «Відмикаю…», and after a second «Відмикаю… Це
+  може тривати кілька секунд.» (a status line, there and empty before, so a screen reader hears the first words too);
+  «Скасувати» (or Escape, or a tap outside) meanwhile stores nothing. «Забути пароль на цьому пристрої» marks the
+  device first: if its storage did not answer, the next page finishes the forgetting; if neither could be written, the
+  button stays, with «Не вдалося забути пароль. Закрий вкладку й спробуй ще раз.». A person removed from the keyring
+  can open no game sealed after that (their device's offline copy keeps opening the games it already has until it
+  updates); once their device sees the new keyring, it forgets the key and its dialog says «Доступ до ігор із цим
+  паролем закрили. Якщо тобі дали новий пароль — введи його.», and a device whose person's password was changed «Твій
+  пароль змінили. Введи новий.», until a password fits or the player forgets it.
 - A report (`room.diag()`, «Скопіювати звіт») names the room's players; the report of a nearby pairing («Скопіювати
   звіт для розробника») says the browser and the devices' local network addresses. Share one as you would those.
 - Play together over the internet is sealed end to end (`library/net/seal.js`, owner's decision 10): the room's code

@@ -92,7 +92,7 @@ import { closeRtc, dcLive, openChannels, wireDc } from './rtc.js';
 import { ANSWER, OFFER, candidates, decode, describe, encode } from './code.js';
 import { dropMember, guestMembers, linkedPeers, markLinked, memberOf, NAME, newPeer, newRoom, otherVersion, renamePeer, seatMember, setStatus,
   startWatch, stop, unlink, validWire } from './room.js';
-import { send, setWeak } from './link.js';
+import { dcSend, dropReliable, send, setWeak } from './link.js';
 
 const GATHER_MS = 3000, CONNECT_MS = 20000, REFUSED_MS = 1000;   // REFUSED_MS: a refused link closes after this (our _h first)
 
@@ -122,7 +122,7 @@ export function joinNearby({ game, name, max, ask = false }) {
     const now = performance.now(), m = N.role === 'guest' && N.members.length > 1 ? N.members.map(x => [x.n, x.s, x.a ? Math.round(now - x.a) : 0]) : null;
     // (a guest: ask, it would rather be asked before it takes a place whose device is still linked; take, it was asked)
     const g = N.role === 'guest', ask = g && N.ask && !N.took, take = g && N.took;
-    try { Q.dcC.send(JSON.stringify({ t: '_h', id: me, n: N.name, pv: PROTO, ...(no && { no }), ...(m && { m }), ...(ask && { ask: 1 }), ...(take && { take: 1 }) })); } catch (e) {}
+    dcSend(Q, { t: '_h', id: me, n: N.name, pv: PROTO, ...(no && { no }), ...(m && { m }), ...(ask && { ask: 1 }), ...(take && { take: 1 }) }, false);
   }
   // Who is on the other end: now the link counts. The host seats them by name (a name it knows: their place, the
   // old link steps aside) and answers; a guest learns the host's name. Another library version, our own name or no
@@ -398,7 +398,7 @@ function ended(N, P, final) {
 function broke(N, Q) {
   if (!Q.linked) return;
   closeRtc(Q);
-  Q.outbox = []; Q.rxHold.clear();
+  dropReliable(Q);
   N.refresh(Q);
 }
 // The host's page is back from a reload (a new page, nobody here but us) and the first guest that pairs again knew our

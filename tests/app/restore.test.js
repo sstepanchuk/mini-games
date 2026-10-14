@@ -56,7 +56,7 @@ describe('a page reloaded while every other player is away', { concurrency: 3 },
     assert.ok(screen.showing.split(' ').includes('link'), 'the screens wait for him: ' + JSON.stringify(screen));
     assert.ok(screen.rows.some(r => r.kind === 'link' && r.name === 'Богдан' && r.acts.some(a => a.act === 'release' && a.arg === 'Богдан')), 'with «Не чекати»: ' + JSON.stringify(screen.rows));
     assert.ok(!rlines(g).includes('run fresh'), 'never afresh: ' + rlines(g));
-    const LOST_WAIT = 15000 * SCALE;                         // (round.js LOST_WAIT)
+    const LOST_WAIT = 15000 * SCALE;                         // (values.js LOST_WAIT)
     await sleep(LOST_WAIT + 1500);                           // (a snapshot on no device would end the round 'lost' by now)
     const r = await rec(A2);
     assert.deepEqual([r.id, r.on, r.runner], [id, true, 'Аня'], 'still on: ' + JSON.stringify(r));
@@ -69,6 +69,25 @@ describe('a page reloaded while every other player is away', { concurrency: 3 },
     assert.deepEqual(both.map(y => y.round.mySeat), [0, 1]);
     assert.deepEqual([(await rec(A2)).on, (await rec(B)).on], [true, true]);
     assert.ok(!rlines(await A2.game()).includes('run fresh'), rlines(await A2.game()));
+    void W;
+  });
+
+  // (a game of contract 4: the room's own snapshots, library/app/legacy.js, are kept with the rest of the room)
+  test('contract 4: the runner\'s page reloads while Богдан is away: its copy goes on from its room.snapshot (resume), never afresh', T, async t => {
+    const W = world(t, { scale: SCALE });
+    const [A, B] = await room(W, 'kept6', ['Аня', 'Богдан'], { lib: {} });
+    await A.open('g');
+    assert.ok(await until(async () => (await Promise.all([A.game(), B.game()])).every(g => g && g.linked && g.players.join() === 'Аня,Богдан'), 8000), 'both play');
+    assert.equal(await A.snapshot({ n: 1 }), true);
+    assert.ok(await until(async () => (await B.state()).lib.snaps.g?.s?.n === 1, 3000), 'Богдан keeps the snapshot');
+    await B.net({ up: false });
+    assert.ok(await until(async () => (await A.state()).away.includes('Богдан'), 5000), 'Аня sees Богдан away');
+    const A2 = await A.reload();
+    await A2.lib('kept6', 'Аня');
+    const g = await until(async () => { const y = await A2.game(); return y && y.role === 'host' && y.events.some(e => e[1] === 'resume') && y; }, 8000);
+    assert.ok(g, 'her new copy runs the round on: ' + JSON.stringify((await A2.state())?.lib?.snaps) + ' ' + JSON.stringify((await A2.game())?.events));
+    assert.ok(await said(A2, 'restored'), 'the room took the places back');
+    assert.deepEqual(g.events.filter(e => e[1] === 'resume').map(e => e[2]), [{ n: 1 }], 'once, from the snapshot the page before kept');
     void W;
   });
 

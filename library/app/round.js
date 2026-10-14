@@ -1,7 +1,7 @@
 /* =====================================================================
-   The round layer: ihroteka.round (phase 4, next to the room of contract 4, which stays as it is). A game's rounds
-   are one shared record per game and a few mechanisms around it; which rules a game plays by is the game's own
-   (owner: no default policies), so the library decides nothing a game did not ask for.
+   The round layer: ihroteka.round (phase 4, next to the room of contract 4, which stays as it is: legacy.js). A
+   game's rounds are one shared record per game and a few mechanisms around it; which rules a game plays by is the
+   game's own (owner: no default policies), so the library decides nothing a game did not ask for.
 
    The record: round:<game> in the room's shared state (roomstate.js; last writer wins, the same for everyone) =
      { id, seats, runner, on, by, reason, result, setup, saved, w, pol, prev? }
@@ -24,8 +24,8 @@
    rounds still on (only they write it: together.js knownEntry, validQuits; invariant 5). A library from before phase 4
    knows none of these and drops round:<game> keys (it takes only those it knows, together.js): a game on this layer
    has a newer wire than any copy of it there, so they are never seated together; the room's own words (contract 4:
-   auth:<game>, lib-snap, room.snapshot) stay as they were. One from before phase B drops quit:<name> keys (it hears
-   the lib-ask instead) and passes prev on unread.
+   auth:<game>, lib-snap, room.snapshot; legacy.js) stay as they were. One from before phase B drops quit:<name> keys
+   (it hears the lib-ask instead) and passes prev on unread.
 
    Invariants (tests/app/round.test.js, tests/rules.test.js):
    1. One writer. Only the runner writes the record (an entry is taken only from the runner it names: validRecord),
@@ -95,38 +95,20 @@
                             чекати», 3 minutes away); without it the game hears the room's 'leave' or 'peer-gone'
                             and decides
    ===================================================================== */
-import { NAME, TIMING } from '../net/index.js';
+import { MAX_PLAYERS, NAME, TIMING } from '../net/index.js';
 import { validClock } from './roomstate.js';
 import * as rules from './rules.js';
 import * as trace from './trace.js';
+// (the waits, scaled as the room's TIMING; a game's id; what the tab and the browser keep, as the browser lets us)
+import { ASK_TTL, bytes, copy, GAME_ID, json, local, LOST_WAIT, NEWS_WAIT, QUIT_AGAIN, RESTORE_SHOW, session } from './values.js';
 
 const { CAP, SHARE_BYTES } = rules;
-// (scaled as the room's TIMING: tests set window.__timeScale)
-const SCALE = Number.isFinite(globalThis.__timeScale) && globalThis.__timeScale > 0 ? globalThis.__timeScale : 1;
-export const LOST_WAIT = 15000 * SCALE;                 // a round whose snapshot is on no device ends this long after (owner)
-export const RESTORE_SHOW = 1000 * SCALE;               // our copy waits this long for its round's snapshot before the screens say so
-export const ASK_TTL = 5000 * SCALE;                    // a start asked of the runner: taken only this soon after asking
-export const QUIT_AGAIN = 2000 * SCALE;                 // a quit of ours whose round is on: said again this often while its runner is here
-export const NEWS_WAIT = 1000 * SCALE;                  // a late end waits this long for its game to play with someone ('linked'), then is told anyway
 const SAVE_EVERY = 500;                                  // a round's snapshots go to its players at most this often (the latest)
 const REASONS = new Set(['quit', 'over', 'gone', 'lost']);
 const ABC = 'abcdefghjkmnpqrstuvwxyz23456789';
 const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), b => ABC[b % ABC.length]).join('');
-const RID = /^[a-z0-9]{8}$/, GAME = /^[a-z0-9-]{1,40}$/;
-const UTF8 = new TextEncoder(), bytes = s => UTF8.encode(s).length;
-const copy = v => v === undefined ? v : JSON.parse(JSON.stringify(v));
-// a game's value as JSON; one that cannot be (a cycle, a BigInt) is a TypeError at the call
-function json(v, what) {
-  try { const x = JSON.stringify(v); return x === undefined ? 'null' : x; } catch (e) { throw new TypeError('ihroteka.round.' + what + ': not JSON (' + e.message + ')'); }
-}
+const RID = /^[a-z0-9]{8}$/;
 const KEY = game => 'round:' + game, QUIT = name => 'quit:' + name;
-// Kept for the next page as the browser lets us: site data may be blocked (it throws) or gone (empty); what we cannot
-// keep, the page still holds as long as it lives. (area: 'localStorage', the browser's, every tab of it; or
-// 'sessionStorage', the tab's)
-const store = (area, key) => ({
-  get() { try { return JSON.parse(globalThis[area].getItem(key)); } catch (e) { return null; } },
-  set(v) { try { if (v) globalThis[area].setItem(key, JSON.stringify(v)); else globalThis[area].removeItem(key); } catch (e) {} }
-});
 const obj = x => !!x && typeof x === 'object' && !Array.isArray(x);
 // The room we are in, as what we keep knows it: its kind and code, and our name there.
 const where = r => JSON.stringify([r.kind, r.code || '', r.me]);
@@ -134,20 +116,21 @@ const where = r => JSON.stringify([r.kind, r.code || '', r.me]);
 // own or another tab's: one entry per room and name, { [where]: { q?: { game: round id }, e?: { game: { id, by,
 // reason, result, c } }, at } } (each left out when empty; at: when it was written), the latest ROOMS of them. (A page
 // of the release before kept one entry in the tab, { room, q?, e? }, in sessionStorage: taken back from there too.)
-const QUITS = 'ihroteka-quits', ROOMS = 8, kept = store('localStorage', QUITS), keptBefore = store('sessionStorage', QUITS);
+// What the browser cannot keep (values.js store), the page still holds as long as it lives.
+const QUITS = 'ihroteka-quits', ROOMS = 8;
 // The rounds whose part our open game was told and whose end it was not (invariant 6), kept in the tab (not another
 // tab's: a game opened there heard nothing of them): { room: where, t: { game: round id } }.
-const HEARD = 'ihroteka-heard', heard = store('sessionStorage', HEARD);
+const HEARD = 'ihroteka-heard';
 // the end of a round (as a record's prev carries the round before it)
 const validEnd = x => obj(x) && RID.test(x.id) && REASONS.has(x.reason) && (x.by === null || (typeof x.by === 'string' && NAME.test(x.by)));
 
 // A player's quits in the shared state (quit:<name>: only they write it, together.js knownEntry): { game: round id },
 // up to 64
-export const validQuits = v => obj(v) && Object.keys(v).length <= 64 && Object.entries(v).every(([g, id]) => GAME.test(g) && typeof id === 'string' && RID.test(id));
+export const validQuits = v => obj(v) && Object.keys(v).length <= 64 && Object.entries(v).every(([g, id]) => GAME_ID.test(g) && typeof id === 'string' && RID.test(id));
 // A round record from the shared state, as it must look (invariant 1: its writer is the runner it names).
 export function validRecord(k, e) {
-  const v = e && e.v, names = a => Array.isArray(a) && a.length >= 1 && a.length <= 8 && a.every(p => typeof p === 'string' && NAME.test(p)) && new Set(a).size === a.length;
-  return typeof k === 'string' && k.startsWith('round:') && GAME.test(k.slice(6)) && !!v && typeof v === 'object' && RID.test(v.id) && names(v.seats) &&
+  const v = e && e.v, names = a => Array.isArray(a) && a.length >= 1 && a.length <= MAX_PLAYERS && a.every(p => typeof p === 'string' && NAME.test(p)) && new Set(a).size === a.length;
+  return typeof k === 'string' && k.startsWith('round:') && GAME_ID.test(k.slice(6)) && !!v && typeof v === 'object' && RID.test(v.id) && names(v.seats) &&
     typeof v.runner === 'string' && v.seats.includes(v.runner) && e.a === v.runner && typeof v.on === 'boolean' &&
     (v.on ? v.reason === null : REASONS.has(v.reason)) && (v.by === null || (typeof v.by === 'string' && NAME.test(v.by))) &&
     typeof v.saved === 'boolean' && Number.isSafeInteger(v.w) && v.w > 0 && (v.pol === undefined || (!!v.pol && typeof v.pol === 'object')) &&
@@ -159,7 +142,7 @@ export function validRecord(k, e) {
  *   room() → the room | null; st() → its shared state | null; publish(entry) → a change of ours, to everyone;
  *   send(m, to?) → a library message to one player or everyone; facts → the room as rules.js sees it;
  *   lookingAgain() → we look for the room again (our list is not the room's); wire(game) → our copy's wire number;
- *   frame() → the open game's channel | null; since() → since when we are online (rules.onlineSince);
+ *   channel() → the open game's channel | null; since() → since when we are online (rules.onlineSince);
  *   update() → tell the open game what changed; play(fn, ...a) → the game's code, called safely
  * and of the open game's channel (c, together.js): id, seated, others, inGame, api (ihroteka.room), disposed;
  *   later(key, fn), unlater(key, fn), heard(key) (late listeners: one replay pass with the room's), deliverKept() (the
@@ -183,16 +166,16 @@ export function rounds(ctx) {
   // the next page; one that is over or no longer on goes (unquit), and an end once another copy has it (said)
   const keepQuits = () => {
     if (!ours) return;
-    const all = kept.get(), o = obj(all) ? all : {};
+    const all = local.get(QUITS), o = obj(all) ? all : {};
     delete o[ours];
     if (quits.size || unsaid.size) o[ours] = { ...(quits.size && { q: Object.fromEntries(quits) }), ...(unsaid.size && { e: Object.fromEntries(unsaid) }), at: Date.now() };
     const latest = Object.keys(o).filter(k => obj(o[k])).sort((a, b) => (+o[b].at || 0) - (+o[a].at || 0)).slice(0, ROOMS);
-    kept.set(latest.length ? Object.fromEntries(latest.map(k => [k, o[k]])) : null);
+    local.set(QUITS, latest.length ? Object.fromEntries(latest.map(k => [k, o[k]])) : null);
   };
   const unquit = game => { if (quits.delete(game)) keepQuits(); };
   const said = game => { if (unsaid.delete(game)) keepQuits(); };
   // the rounds our open game has a part in, into the tab (heard)
-  const keepParts = () => { if (ours) heard.set(parts.size ? { room: ours, t: Object.fromEntries(parts) } : null); };
+  const keepParts = () => { if (ours) session.set(HEARD, parts.size ? { room: ours, t: Object.fromEntries(parts) } : null); };
   const unpart = (game, id) => { if (parts.get(game) === id && parts.delete(game)) keepParts(); };
   // our quits of rounds still on, to everyone: our own shared key (quit:<name>), so that they follow us to another tab
   // or device, and the runner hears them from whoever holds the room for us (invariant 5)
@@ -281,7 +264,7 @@ export function rounds(ctx) {
     // a round's snapshot from someone (its runner, or passed on): taken only from the runner the record names for
     // that round (invariant 3); a newer one of the same writer, or the first of a new runner, replaces ours
     onSave(m) {
-      if (!GAME.test(m.v) || !RID.test(m.r) || !validClock(m.c) || typeof m.a !== 'string' || m.s === undefined || m.s === null) return;
+      if (!GAME_ID.test(m.v) || !RID.test(m.r) || !validClock(m.c) || typeof m.a !== 'string' || m.s === undefined || m.s === null) return;
       const rec = record(m.v);
       if (!rec || !rec.on || rec.id !== m.r || rec.runner !== m.a || rec.w !== m.w) return;
       ctx.st().seen(m.c);
@@ -289,19 +272,19 @@ export function rounds(ctx) {
       if (cur && cur.r === m.r && cur.a === m.a && cur.c >= m.c) return;
       saves.set(m.v, { r: m.r, s: m.s, c: m.c, a: m.a, w: m.w });
       trace.note('round ' + m.v + ' saved ← ' + m.a + ': ' + trace.size(m.s), 'save<' + m.v);
-      const c = ctx.frame();
+      const c = ctx.channel();
       if (c && c.id === m.v) ctx.update();              // (our copy may run it now: it waited for this)
     },
     // A request to the runner (invariant 5): a start (we offer it; it begins only when the asker takes the offer in
     // time), the asker taking our offer, our offer, a quit.
     onAsk(m, from) {
-      if (!GAME.test(m.v) || typeof m.q !== 'string') return;
+      if (!GAME_ID.test(m.v) || typeof m.q !== 'string') return;
       if (m.q === 'quit') {
         const rec = record(m.v);
         if (rec && rec.on && rec.id === m.r && rec.runner === me() && rec.seats.includes(from)) end(m.v, rec, { by: from, reason: 'quit' });
         return;
       }
-      const c = ctx.frame();
+      const c = ctx.channel();
       if (!c || c.id !== m.v || c.disposed || typeof m.n !== 'string') return;
       if (m.q === 'ok') c.round.offered(m.n, from);
       else if (m.q === 'start' && c.round.mayStart(from, m)) {
@@ -397,7 +380,7 @@ export function rounds(ctx) {
     tick(now = performance.now()) {
       const room = ctx.room(), st = ctx.st();
       if (!room || !st) return;
-      const f = ctx.facts, c = ctx.frame();
+      const f = ctx.facts, c = ctx.channel();
       for (const [k] of st.entries()) {
         if (!k.startsWith('round:')) continue;
         const game = k.slice(6), rec = record(game);
@@ -422,16 +405,16 @@ export function rounds(ctx) {
           for (const p of rec.seats) if (p !== room.me && room.players.includes(p)) ctx.send(saveMsg(game, snap), p);
         }
         if (!c || c.id !== game || c.disposed) { lostSince.delete(game); continue; }
-        let ours = rec.runner === room.me;
-        if (!ours) {
+        let runsHere = rec.runner === room.me;
+        if (!runsHere) {
           const why = rules.roundTaker(f, { rec, seated: c.seated, inGame: c.inGame, since: ctx.since(), now, wait: TIMING.AUTH_WAIT, lookingAgain: false });
           if (why && quits.get(game) === rec.id) { end(game, rec, { by: room.me, reason: 'quit' }); continue; }   // (it moves to us: ours ends it)
           const q = why && quitter(game, rec);
           if (q) { end(game, rec, { by: q, reason: 'quit' }); continue; }   // (so a seated player's quit their key says)
           if (why && (snap || !rec.saved)) { takeover(game, rec, snap, why); continue; }
-          ours = !!why;
+          runsHere = !!why;
         }
-        if (ours && rec.saved && !snap && rules.snapshotLost(f, rec)) {
+        if (runsHere && rec.saved && !snap && rules.snapshotLost(f, rec)) {
           if (!lostSince.has(game)) { lostSince.set(game, now); trace.note('round ' + game + ' ' + rec.id + ': its snapshot is on no device here'); }
           else if (now - lostSince.get(game) >= LOST_WAIT) end(game, rec, { by: room.me, reason: 'lost' });
         } else lostSince.delete(game);
@@ -451,17 +434,17 @@ export function rounds(ctx) {
       ours = r ? where(r) : null;
       if (!r) return;
       // the browser's entry for this room and name; and the tab's, from a page of the release before (it moves here)
-      const all = kept.get(), before = keptBefore.get();
-      if (before) keptBefore.set(null);
+      const all = local.get(QUITS), before = session.get(QUITS);
+      if (before) session.set(QUITS, null);
       for (const k of [obj(all) && obj(all[ours]) && all[ours], obj(before) && before.room === ours && before]) {
         if (!k) continue;
         for (const [game, id] of Object.entries(obj(k.q) ? k.q : {}).slice(0, 64)) {
-          if (!GAME.test(game) || typeof id !== 'string' || !RID.test(id)) continue;
+          if (!GAME_ID.test(game) || typeof id !== 'string' || !RID.test(id)) continue;
           quits.set(game, id);
           trace.note('round ' + game + ' ' + id + ': quit, kept from the page before');
         }
         for (const [game, x] of Object.entries(obj(k.e) ? k.e : {}).slice(0, 64)) {
-          if (!GAME.test(game) || !validEnd(x) || !validClock(x.c)) continue;
+          if (!GAME_ID.test(game) || !validEnd(x) || !validClock(x.c)) continue;
           const v = { id: x.id, by: x.by, reason: x.reason, result: x.result === undefined ? null : x.result, c: x.c };
           unsaid.set(game, v); noteEnd(game, v);
           trace.note('round ' + game + ' ' + x.id + ': ended here, kept from the page before');
@@ -469,9 +452,9 @@ export function rounds(ctx) {
       }
       keepQuits();
       // the rounds our game had a part in, in this tab (invariant 6): only of this room and name, else dropped
-      const h = heard.get();
+      const h = session.get(HEARD);
       if (obj(h) && h.room === ours && obj(h.t)) {
-        for (const [game, id] of Object.entries(h.t).slice(0, 64)) if (GAME.test(game) && typeof id === 'string' && RID.test(id)) parts.set(game, id);
+        for (const [game, id] of Object.entries(h.t).slice(0, 64)) if (GAME_ID.test(game) && typeof id === 'string' && RID.test(id)) parts.set(game, id);
       }
       keepParts();
     },
@@ -480,7 +463,7 @@ export function rounds(ctx) {
     has: (game, id) => saves.get(game)?.r === id,
 
     /* ---------- ihroteka.round: the open game's view of its round (c: its channel, together.js) ---------- */
-    frame(c) {
+    forGame(c) {
       const handlers = new Map();
       let told = { id: null, part: null, runner: null, over: true, closed: false };   // what the game is told (or hears when it listens: replay)
       let ins = [];                                       // (our copy runs it) its other players in the game with us
@@ -532,7 +515,7 @@ export function rounds(ctx) {
         // setup (JSON, up to SHARE_BYTES). Ours decides: it begins now; else we ask the copy that decides (invariant
         // 5). → whether it began or was asked; false while a round is on, with nobody to play with, or as the policy says
         start(setup, opts) {
-          const x = setup === undefined ? 'null' : json(setup, 'start');
+          const x = setup === undefined ? 'null' : json(setup, 'round.start');
           c.uses('round');
           const r = rec(), seats = opts && opts.seats !== undefined ? opts.seats : c.seated.slice();
           if (!room() || !c.others.length) return refuse('start: only with someone to play with (room.linked)');
@@ -553,7 +536,7 @@ export function rounds(ctx) {
         // the latest (sent at most twice a second; at once when the game closes or the page goes or hides), so it can
         // go on in another copy, or in ours after a reload. → whether it was taken
         save(state) {
-          const x = state === undefined || state === null ? null : json(state, 'save');
+          const x = state === undefined || state === null ? null : json(state, 'round.save');
           c.uses('round');
           const r = rec();
           if (!room() || !on(r) || !round.runs) return refuse('save: only from the copy that runs the round (round.runs)');
@@ -570,7 +553,7 @@ export function rounds(ctx) {
         // (our copy runs the round) the game's rules ended it, with its result (JSON, up to SHARE_BYTES): everyone
         // hears 'end' { reason: 'over', result }. → whether it ended
         over(result) {
-          const x = result === undefined ? 'null' : json(result, 'over');
+          const x = result === undefined ? 'null' : json(result, 'round.over');
           c.uses('round');
           const r = rec();
           if (!room() || !on(r) || !round.runs) return refuse('over: only from the copy that runs the round (round.runs)');
