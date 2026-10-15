@@ -1,6 +1,7 @@
 // tags: @ci @webkit
 // crash: a game that throws while it starts (its page rewritten on the way: a script that throws, ahead of the game's
-// own code) leaves no empty screen: «Гра зламалася» over it, the focus on «Скопіювати звіт», which copies the report
+// own code) leaves no empty screen: «Гра зламалася» over it, the focus on «Відкрити ще раз» (the UX spec L-T13), and
+// «Скопіювати звіт», which copies the report
 // (the site's version, the connection, the trace: the error's type and place, never its message). A game that
 // started well and throws later shows no note, but the trace has it; so does the library page's own error. A browser's
 // notice that comes as a window error with nothing thrown (a ResizeObserver loop, as a layout settles while the game
@@ -63,8 +64,8 @@ scenario('crash: a game that breaks as it starts', async () => {
   await p.click(CARD);
   const n = await until(async () => { const x = await note(p); return x.shown && /Гра зламалася/.test(x.text) && x; }, 15000);
   check(n && n.over, '«Гра зламалася» over the game', n);
-  check(n && /Скопіювати звіт/.test(n.text) && /До бібліотеки/.test(n.text), 'with «Скопіювати звіт» and «До бібліотеки»', n);
-  check(n && n.focus === 'stage-report', 'the focus on «Скопіювати звіт»', n && n.focus);
+  check(n && /Відкрити ще раз/.test(n.text) && /Скопіювати звіт/.test(n.text) && /До бібліотеки/.test(n.text), 'with «Відкрити ще раз», «Скопіювати звіт» and «До бібліотеки»', n);
+  check(n && n.focus === 'stage-retry', 'the focus on «Відкрити ще раз»', n && n.focus);
   await w(1500);
   check((await note(p)).over, 'and it stays once the game\'s page has loaded', await note(p));
   await p.click('#stage-report');
@@ -72,7 +73,8 @@ scenario('crash: a game that breaks as it starts', async () => {
   check(/^Ігротека dev\nno room\ntrace:\n/.test(copied || ''), 'the report: the site\'s version, the connection, the trace', copied);
   check(new RegExp('game ' + GAME + ' open').test(copied || '') && new RegExp('error in the game: TypeError at ' + GAME + ':\\d+:\\d+').test(copied || ''), 'the trace: the game opened, the error\'s type and place', copied);
   check(!(copied || '').includes(SECRET), 'never the error\'s message', copied);
-  check(await p.textContent('#stage-report') === 'Скопійовано ✓', 'the button says it copied');
+  const said = await p.$eval('#stage-report', b => ({ name: b.getAttribute('aria-label'), done: !!b.querySelector('.swap.done svg') }));
+  check(said.name === 'Скопійовано' && said.done, 'the button says it copied («Скопійовано» with a drawn check, its name too)', said);
 
   await p.click('#stage-back');
   await p.waitForSelector('#shelf:not([hidden])');

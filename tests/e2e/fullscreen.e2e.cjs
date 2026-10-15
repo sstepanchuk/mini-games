@@ -7,7 +7,7 @@
 // library opens by itself («Ти граєш деінде»: the same player came in from another tab). And the card «Чекаємо, поки повернеться …»
 // over a game that shows none of its waiting screens (invite.js) leaves fullscreen too; a game whose own screen says it
 // stays fullscreen. A game that breaks as it starts (an error within START of its page loading), on the whole screen:
-// the page leaves fullscreen, and «Гра зламалася» is on top with the focus on «Скопіювати звіт». Chromium (WebKit's
+// the page leaves fullscreen, and «Гра зламалася» is on top with the focus on «Відкрити ще раз». Chromium (WebKit's
 // element fullscreen is not checked here). E2E_GAME: any game (the probe on CI).
 'use strict';
 const { U, launch, errs, forgive, scenario, check, step, until, GAME } = require('./support/scenario.cjs');
@@ -103,9 +103,9 @@ scenario('fullscreen: a library dialog over a game on the whole screen', async (
     const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2), a = document.activeElement;
     return { text: n.hidden ? '' : t.textContent, fs: !!document.fullscreenElement, hit: !!hit && n.contains(hit) ? 'note' : hit && hit.tagName + '.' + hit.className, focus: a ? a.id || a.tagName : null };
   });
-  const b = await until(async () => { const x = await note(); return x.text === 'Гра зламалася' && !x.fs && x.focus === 'stage-report' && x; }, 5000, 50);
+  const b = await until(async () => { const x = await note(); return x.text === 'Гра зламалася' && !x.fs && x.focus === 'stage-retry' && x; }, 5000, 50);
   check(b && !b.fs, '«Гра зламалася»: out of fullscreen', await note());
   check(b && b.hit === 'note', '… on top (what is at its centre is the note)', await note());
-  check(b && b.focus === 'stage-report', '… the focus on «Скопіювати звіт»', await note());
+  check(b && b.focus === 'stage-retry', '… the focus on «Відкрити ще раз»', await note());
   forgive(e0, /TypeError: the game broke/);           // (the error made here)
 }, { timeout: 150000 });

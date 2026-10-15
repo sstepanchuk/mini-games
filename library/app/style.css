@@ -1,20 +1,35 @@
-/* The look of the library: paper, ink outlines, pink and blue offset shadows. */
+/* The look of the library: paper, ink outlines, pink and blue offset shadows. Motion (library/app/motion.js MOTION_CSS:
+   the --m-* tokens and the ihk-* keyframes) comes in at boot, after this file's first paint: every token is read here
+   with its fallback, var(--m-in, 200ms). Only transform and opacity move; what leaves is gone at once (motion.js). */
 :root{
   --page:#e4e2f0;
   --paper:#f6f5fb;
   --ink:#23204a;
-  --mute:#6b6890;
-  --pink:#ff4fa3;
+  --mute:#5f5c85;                                        /* 4.9:1 on --page, 5.8:1 on paper */
+  --err:#c00062;                                         /* 4.8:1 on --page, 6.1:1 on white */
+  --pink:#ff4fa3;                                        /* fills, marks, shadows */
+  --pink-text:#d6007a;                                   /* pink as text: 4.7:1 on paper */
   --blue:#2b6cf0;
   --yellow:#ffd91a;
+  --mint:#c9f2d4;                                        /* together, won: with a word or a ✓, never by hue alone */
+  --off:#ebe9f4;                                         /* a button that cannot be pressed now: «waiting», not «broken» */
+  --bw:3px;
+  --r-card:18px;--r-btn:12px;--r-pill:999px;
+  --sh-card:6px 6px 0 var(--pink),-6px -6px 0 var(--blue);   /* cards, dialogs, note cards */
+  --sh-voice:3px 3px 0 var(--pink),-3px -3px 0 var(--blue);  /* the library speaking inside a game */
+  --sh-panel:6px 6px 0 var(--ink);                           /* a game's own panels */
+  --sh-btn:4px 4px 0 var(--ink);                             /* what is pressed: hover +2px (a mouse), press leaves 1px */
+  --tap:44px;                                            /* the least height of a ghost button, «← Усі ігри», a tool */
   --display:'Unbounded','Arial Black','Segoe UI',system-ui,sans-serif;
   --text:'Onest','Segoe UI',system-ui,-apple-system,sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 [hidden]{display:none !important}
 html{min-height:100%;background:var(--page)}
+/* every view stands at the top (nothing re-centres when it changes): the shelf, the page as it starts, the card when
+   the library did not open */
 body{
-  min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;
   gap:20px;padding:calc(env(safe-area-inset-top,0px) + 24px) 16px calc(env(safe-area-inset-bottom,0px) + 24px);
   background:var(--page);color:var(--ink);font:16px/1.45 var(--text);
   -webkit-tap-highlight-color:transparent;
@@ -24,127 +39,288 @@ button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid var(-
 .card{
   width:min(420px,100%);display:flex;flex-direction:column;gap:14px;
   padding:26px 22px 22px;text-align:center;
-  background:var(--paper);border:3px solid var(--ink);border-radius:18px;
-  box-shadow:6px 6px 0 var(--pink),-6px -6px 0 var(--blue);
+  background:var(--paper);border:var(--bw) solid var(--ink);border-radius:var(--r-card);box-shadow:var(--sh-card);
 }
-.cover{display:block;width:100%;height:auto;aspect-ratio:1200/630;object-fit:cover;border:3px solid var(--ink);border-radius:12px;background:#fff}
+.cover{display:block;width:100%;height:auto;aspect-ratio:1200/630;object-fit:cover;border:3px solid var(--ink);border-radius:12px;background:var(--page)}
 .title{
   font-family:var(--display);font-weight:800;font-size:clamp(28px,8vw,40px);line-height:1.08;
   text-shadow:3px 3px 0 var(--pink),-3px -2px 0 var(--blue);padding:4px 0 2px;
 }
 .fine{font-size:13px;color:var(--mute)}
+/* for screen readers only (what they hear of the card over a game: who and why, not the time; a player's «(ти)») */
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 
+/* fields: one line high in a row or a column; an error turns the field and says why in the slot kept under it */
 form{display:flex;flex-direction:column;gap:12px}
 input[type=password],input.link{
   width:100%;font:500 17px/1.2 var(--text);color:var(--ink);text-align:center;letter-spacing:.04em;
   padding:13px 12px;border:3px solid var(--ink);border-radius:12px;background:#fff;
+  transition:border-color var(--m-quick,140ms) linear,box-shadow var(--m-quick,140ms) linear;
 }
+input[aria-invalid=true]{border-color:var(--err);box-shadow:0 0 0 3px rgba(192,0,98,.16)}
+.stack{display:flex;flex-direction:column;gap:4px}      /* a field, its error slot, its button (invite.js, lock.js) */
+.stack > .btn{margin-top:4px}
+.stack > .err,.stack > .err:empty{display:block;min-height:1.45em;font-size:14px;text-align:left;padding-left:4px}
+
+/* buttons. Pressing: down 3px in 80 ms, back in 160 ms with a little spring; a lift on hover only with a mouse (below) */
 .btn{
   appearance:none;-webkit-appearance:none;cursor:pointer;
   font:700 16px/1.2 var(--text);color:var(--ink);text-decoration:none;
-  padding:14px 16px;border:3px solid var(--ink);border-radius:12px;background:var(--yellow);
-  box-shadow:4px 4px 0 var(--ink);transition:transform .06s,box-shadow .06s;
+  padding:14px 16px;border:3px solid var(--ink);border-radius:var(--r-btn);background:var(--yellow);
 }
-.btn:active{transform:translate(3px,3px);box-shadow:1px 1px 0 var(--ink)}
-.btn.ghost{background:none;border-color:transparent;box-shadow:none;font-weight:500;text-decoration:underline;padding:6px}
-.btn.ghost:active{transform:none}
-.err{min-height:1.45em;font-weight:700;color:#d1006a}
+.btn.second{background:var(--paper)}                    /* the other choice next to the one that matters */
+.btn.ghost{
+  min-height:var(--tap);padding:10px 12px;background:none;border-color:transparent;box-shadow:none;font-weight:500;
+  text-decoration:underline;transition:background-color var(--m-press,80ms) linear;
+}
+.btn.ghost:active{transform:none;box-shadow:none;background:rgba(35,32,74,.1)}
+.btn.danger{color:var(--err)}                           /* a ghost that ends something: «Скасувати» a room, «Від’єднатися» */
+.btn.ghost.small{font-size:13px;color:var(--mute)}      /* a small text link (under «Закрити»: «Скопіювати звіт для розробника») */
+/* unavailable now: off, dashed, muted, nothing to press; busy (motion.js busy): in place, a ring in it */
+.btn:not(.ghost):is(:disabled,[aria-disabled=true]){background:var(--off);border-style:dashed;box-shadow:none;color:var(--mute);transform:none;cursor:default}
+.btn.is-busy,.btn.is-busy:is(:disabled,[aria-disabled=true]){background:var(--paper);border-style:dashed;color:var(--mute);transform:none;cursor:progress}
+.btn.is-busy .spin{color:var(--ink)}
+/* «Скопіювати» → «Скопійовано» (dom.js copyLabels): both words in one cell, so the button keeps its width; they
+   cross-fade (140 ms) */
+.swap{display:inline-grid;justify-items:center}
+.swap > span{grid-area:1/1;transition:opacity var(--m-quick,140ms) linear}
+.swap > span:last-child,.swap.done > span:first-child{opacity:0}
+.swap.done > span:last-child{opacity:1}
+.swap svg{width:14px;height:14px;vertical-align:-1px;margin-left:4px;fill:none;stroke:currentColor;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+.err{min-height:1.45em;font-weight:700;color:var(--err)}
 .err:empty{display:none}
 .busy{font-weight:500;color:var(--mute)}
-.busy::before{
+.busy::before,.spin{
   content:'';display:inline-block;width:12px;height:12px;margin-right:8px;vertical-align:-1px;
-  border:2.5px solid var(--ink);border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite;
+  border:2.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite;
 }
+.busy::before{border-color:var(--ink);border-right-color:transparent}
 @keyframes spin{to{transform:rotate(1turn)}}
-@media (prefers-reduced-motion:reduce){.busy::before{animation:none}}
-/* the password dialog's «Відмикаю…» while it says nothing: out of sight and of the column, still a live region */
+/* the password dialog's «Відмикаю…» (lock.js) while it says nothing: out of sight and of the column, still a live
+   region. While the password is checked, «Відкрити» looks as it was for 300 ms, then says «Відмикаю…» in itself
+   (motion.js busy), and the line says the same to a screen reader only. Motion off (no busy look): the line shows */
 .dialog .busy:empty{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 .dialog .busy:empty::before{content:none}
+:root:not([data-motion=off]) .dialog .stack > .busy[role=status]{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+:root:not([data-motion=off]) .dialog .stack > .busy[role=status]::before{content:none}
+:root:not([data-motion=off]) .dialog .stack > .btn[type=submit]:disabled:not(.is-busy){background:var(--yellow);border-style:solid;color:var(--ink);box-shadow:var(--sh,4px) var(--sh,4px) 0 var(--shc,var(--ink));cursor:default}
 #busy{text-align:center}                         /* «Відкриваю Ігротеку…», or why it did not open: over «Спробувати ще» */
+
+/* the page as it starts (page.html #boot, after the shelf and the stage: either one shown hides it). Nothing for
+   300 ms (a quick start shows only the page's colour), then «Ігротека» and «Відкриваю Ігротеку…» fade in. A library
+   that did not open: the same place, now a card (.stuck), so nothing moves */
+.boot{
+  width:min(420px,100%);display:flex;flex-direction:column;align-items:center;gap:14px;margin-top:clamp(16px,10vh,72px);
+  padding:26px 22px 22px;text-align:center;border:var(--bw) solid transparent;border-radius:var(--r-card);
+  animation:boot-in var(--m-in,200ms) var(--m-ease-out,cubic-bezier(.2,.8,.3,1)) 300ms both;
+}
+@keyframes boot-in{from{opacity:.01}}
+.shelf:not([hidden]) ~ .boot,.stage:not([hidden]) ~ .boot{display:none}
+.boot.stuck{background:var(--paper);border-color:var(--ink);box-shadow:var(--sh-card)}
+.boot #busy.err{font-weight:500;color:var(--ink)}       /* (why: said in ink, it is no fault of the player's) */
+.boot #busy-again:empty{display:none}
+.boot #busy-retry{align-self:stretch}
+:root[data-motion=off] .boot{animation:none}
 
 /* game shelf */
 .shelf{width:min(720px,100%);display:flex;flex-direction:column;gap:18px}
 .shelf-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+/* a phone: «Грати разом» on its own row under «Ігротека», so a longer word on it moves nothing (owner, decision 65) */
+@media (max-width:419px){.shelf-head{flex-direction:column;align-items:flex-start;gap:10px}}
 .shelf > .btn.ghost{align-self:center}
 .shelf > .fine{text-align:center}
 .games{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:18px}
 .game{
-  display:flex;flex-direction:column;overflow:hidden;color:inherit;text-decoration:none;
-  background:var(--paper);border:3px solid var(--ink);border-radius:16px;box-shadow:5px 5px 0 var(--ink);
-  transition:transform .08s,box-shadow .08s;
+  --sh:5px;--shc:var(--ink);display:flex;flex-direction:column;overflow:hidden;color:inherit;text-decoration:none;
+  background:var(--paper);border:3px solid var(--ink);border-radius:16px;
 }
-.game:hover{transform:translate(-2px,-2px);box-shadow:7px 7px 0 var(--ink)}
-.game:active{transform:translate(3px,3px);box-shadow:2px 2px 0 var(--ink)}
-.game img{display:block;width:100%;aspect-ratio:1200/630;object-fit:cover;border-bottom:3px solid var(--ink);background:#fff}
+.game img{display:block;width:100%;aspect-ratio:1200/630;object-fit:cover;border-bottom:3px solid var(--ink);background:var(--page)}
 .game-body{display:flex;flex-direction:column;gap:4px;padding:12px 14px 14px;text-align:left}
 .game-body b{font:800 18px/1.2 var(--display)}
 .game-body span{font-size:14px;color:var(--mute)}
-body:has(> .shelf:not([hidden])){justify-content:flex-start}
+/* the card a game opened from, while its copy flies (shell.js): unseen, never a double; still focusable (back on the
+   shelf it has the focus). Back on the shelf it lands, with a blue shadow for 900 ms («you came from here») */
+.game.lifted{opacity:0}
+.game.came{--shc:var(--blue)}
+/* «install»: a line in ink with «Встановити» on paper, a finger's size (install.js) */
+#install{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px 12px;font-size:15px;color:var(--ink)}
+#install .btn{min-height:var(--tap);padding:10px 16px;background:var(--paper);border-color:var(--ink);font-weight:700;text-decoration:none}
 
-/* "play together" chip */
+/* "play together" chip: an icon, a short word or two (one cell: the old and the new cross-fade), a dot for the state.
+   It keeps one size whatever it says (its words in the middle, between the icon and the dot), so nothing moves as the
+   words change (owner, decision 65): wide enough for «Без інтернету» */
 .chip{
-  appearance:none;cursor:pointer;font:700 15px/1.2 var(--text);color:var(--ink);
-  padding:9px 14px;border:3px solid var(--ink);border-radius:999px;background:var(--paper);box-shadow:3px 3px 0 var(--blue);
+  --sh:3px;--shc:var(--blue);appearance:none;cursor:pointer;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;min-width:13.4em;
+  font:700 15px/1.2 var(--text);color:var(--ink);padding:9px 14px;border:3px solid var(--ink);border-radius:var(--r-pill);background:var(--paper);
 }
-.chip::before{content:'👥 '}
-.chip.on{background:#c9f2d4;box-shadow:3px 3px 0 var(--pink)}
-.chip:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+.chip.on{--shc:var(--pink);background:var(--mint)}
+.chip .ic{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.chip .lbl{flex:1;display:inline-grid;justify-items:center;text-align:center}
+.chip .lbl > span{grid-area:1/1}
+.chip .dot{flex:none;width:10px;height:10px;border-radius:50%;border:2px solid var(--ink);background:#fff;transition:background-color var(--m-quick,140ms) linear}
+.chip .dot.wait{background:var(--yellow);border-style:dashed}       /* «Чекаю…», «З’єднуюсь…» */
+.chip .dot.on{background:#1f9d55}                                   /* «Разом», «Разом · 3» */
+.chip .dot.lost{background:#cfcde3;border-style:dashed}             /* «Зв’язок зник», «Без інтернету» */
+.chip .dot.warn{background:var(--pink)}                             /* «Інша версія» */
 
-/* the open game: a frame over the whole screen, inside the safe area */
+/* the press, the same for everything pressed (I12, I23): a shadow of its own (--sh, --shc), down 3px with a 1px shadow
+   in 80 ms, back in 160 ms with a little spring (box-shadow moves only here, for this one control) */
+.btn:not(.ghost){--sh:4px;--shc:var(--ink)}
+.option{--sh:4px;--shc:var(--ink)}
+.btn:not(.ghost),.option,.chip,.game{
+  box-shadow:var(--sh) var(--sh) 0 var(--shc);
+  transition:transform var(--m-release,160ms) var(--m-spring,cubic-bezier(.3,1.45,.55,1)),box-shadow var(--m-release,160ms) var(--m-spring,cubic-bezier(.3,1.45,.55,1)),background-color var(--m-quick,140ms) linear;
+}
+:is(.btn:not(.ghost):not(.is-busy),.option,.chip,.game):not(:disabled):not([aria-disabled=true]):active{
+  transform:translate(3px,3px);box-shadow:1px 1px 0 var(--shc);
+  transition-duration:var(--m-press,80ms);transition-timing-function:var(--m-ease-out,cubic-bezier(.2,.8,.3,1));
+}
+.btn:not(.ghost):is(:disabled,[aria-disabled=true]),.btn.is-busy{box-shadow:none}
+/* hover lifts 2px, only where there is a mouse: never stuck on after a touch */
+@media (hover:hover) and (pointer:fine){
+  :is(.btn:not(.ghost):not(.is-busy),.option,.chip,.game):not(:disabled):not([aria-disabled=true]):hover:not(:active){
+    transform:translate(-2px,-2px);box-shadow:calc(var(--sh) + 2px) calc(var(--sh) + 2px) 0 var(--shc);transition-duration:var(--m-press,80ms);
+  }
+  .btn.ghost:hover:not(:active){background:rgba(35,32,74,.06)}
+}
+
+/* the open game: a frame over the whole screen, inside the safe area. While the stage comes in over the shelf (its
+   layer fades in), the stage itself is see-through, and the frame unseen until that layer is opaque */
 .stage{
   position:fixed;z-index:1;background:var(--page);
   inset:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px);
 }
+.stage.entering{background:none}
 .frame{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:var(--page)}
-.stage-note{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center}
+.frame.covered{visibility:hidden}
+/* the note over the game (shell.js): over the frame, so no blank or half-built game is ever seen; standing at the top.
+   Opaque by itself; .layered: its layer is a .note-bg of its own instead (it fades in alone, under the opening card;
+   .note-bg.veil: the game stays faintly in sight under it) */
+.stage-note{
+  position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:12px;
+  padding:clamp(16px,10vh,72px) 16px 24px;text-align:center;overflow-y:auto;background:var(--page);
+}
+.stage-note.layered{background:none}
+.stage-note > .note-bg{position:absolute;inset:0;z-index:-1;background:var(--page)}
+.stage-note > .note-bg.veil{background:rgba(228,226,240,.6)}
 /* a game that broke while it started (shell.js): the note covers it */
-.stage-note.over{z-index:3;background:var(--page)}
+.stage-note.over{z-index:3}
+/* a note as a card: what happened and what can be done; in ink, unless something went wrong (.err); a game that broke
+   has a heading (#stage-text.head) and a line of what can be done */
+.note-card{width:min(340px,100%);gap:12px;padding:22px 20px 18px}
+.note-card .head{font:800 21px/1.2 var(--display);color:var(--ink)}
+/* the opening card (shell.js): the game's cover and title, who opened it (we follow them), and in their place from the
+   start «Відкриваю гру…» (a status: there, empty, before it speaks) and «До бібліотеки», unseen for 300 ms (.wait); it
+   flies from the tapped card (motion.js fly), which is .lifted meanwhile */
+.open-card{width:min(328px,100%);display:flex;flex-direction:column;overflow:hidden;background:var(--paper);border:3px solid var(--ink);border-radius:16px;box-shadow:5px 5px 0 var(--ink);text-align:left}
+.open-card > :is(img,canvas){display:block;width:100%;height:auto;aspect-ratio:1200/630;object-fit:cover;border-bottom:3px solid var(--ink);background:var(--page)}
+.open-card .game-body{gap:8px}
+.open-card .who{font-size:14px;color:var(--mute);font-weight:500}
+.open-card .later{display:flex;flex-direction:column;align-items:flex-start;gap:2px}
+.open-card .later > p{min-height:1.45em}
+.open-card .later .btn.ghost{margin-left:-12px}         /* (its words under the title's) */
+.open-card .later.wait .btn{visibility:hidden}
+/* a page-coloured veil that fades off the shelf as it comes back (in the fx layer, motion.js; never catches a tap) */
+.page-veil{position:fixed;inset:0;background:var(--page);pointer-events:none}
 
 /* dialogs and toasts, above everything */
 #layer{position:relative;z-index:10}
+/* what fades as the view changes (motion.js's fx layer: ghosts, the page-coloured veil, a card in flight): over the
+   shelf and the game, under the dialogs and the notes, so it never covers a dialog that stays open (motion.js puts the
+   layer over everything, inline: in a game, where it knows nothing of the page) */
+.ihk-fx{z-index:9!important}
+/* a dialog stands by its top edge: when what it shows changes, only its bottom edge moves */
 .backdrop{
-  position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
-  padding:calc(env(safe-area-inset-top,0px) + 16px) 16px calc(env(safe-area-inset-bottom,0px) + 16px);
+  position:fixed;inset:0;display:flex;align-items:flex-start;justify-content:center;
+  padding:calc(env(safe-area-inset-top,0px) + clamp(16px,10vh,72px)) 16px calc(env(safe-area-inset-bottom,0px) + 16px);
   background:rgba(35,32,74,.45);overflow-y:auto;
 }
-.dialog{max-height:100%;overflow-y:auto;gap:12px}
+/* (a shadow at an edge says there is more to scroll: the paper covers it while scrolled to that edge; a step that
+   enters from the side never makes it scroll sideways) */
+.dialog{
+  max-height:100%;overflow-y:auto;overflow-x:hidden;gap:12px;
+  background:linear-gradient(var(--paper) 30%,rgba(246,245,251,0)) top/100% 28px no-repeat local,
+             linear-gradient(rgba(246,245,251,0),var(--paper) 70%) bottom/100% 28px no-repeat local,
+             radial-gradient(farthest-side at 50% 0,rgba(35,32,74,.22),rgba(35,32,74,0)) top/100% 10px no-repeat scroll,
+             radial-gradient(farthest-side at 50% 100%,rgba(35,32,74,.22),rgba(35,32,74,0)) bottom/100% 10px no-repeat scroll,var(--paper);
+}
+/* a dialog's screen (dom.js modal show): one .step, entering forward, back or as a fade (ihk-fwd, ihk-back, ihk-fade) */
+.dialog .step{display:flex;flex-direction:column;gap:12px}
 /* a long name (24 letters at 320 px) breaks rather than run off the dialog or the card over a game */
 .dialog,.waiting{overflow-wrap:anywhere}
 .dialog:focus{outline:none}
-.dialog h2{font:800 22px/1.15 var(--display)}
+.dialog h2{font:800 22px/1.15 var(--display);text-wrap:balance}   /* (balanced lines, where the browser can) */
 .dialog .row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
-.dialog .row .link{flex:1 1 160px;min-width:0}
 input.link{font-size:14px;letter-spacing:0;text-align:left;padding:10px 12px}
 .option{
   appearance:none;cursor:pointer;display:flex;align-items:center;gap:14px;text-align:left;
   padding:12px 14px;border:3px solid var(--ink);border-radius:14px;background:#fff;color:var(--ink);font:inherit;
-  box-shadow:4px 4px 0 var(--ink);
 }
-.option:active{transform:translate(3px,3px);box-shadow:1px 1px 0 var(--ink)}
 .option b{display:block;font:800 17px/1.2 var(--display)}
 .option span span{font-size:14px;color:var(--mute)}
-.option-icon{flex:none;width:40px;height:40px;display:grid;place-items:center;font:800 20px var(--display);border:3px solid var(--ink);border-radius:50%;background:var(--yellow)}
+.option-icon{flex:none;width:40px;height:40px;display:grid;place-items:center;border:3px solid var(--ink);border-radius:50%;background:var(--yellow)}
+.option-icon svg{width:22px;height:22px;fill:none;stroke:var(--ink);stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+/* a status line (the link screen's, a pairing step's): two lines kept, so nothing under it moves when it changes; a
+   ring beside it only while something is under way (.busy) */
+.status-line{min-height:2.9em;display:flex;align-items:flex-start;justify-content:center;font-weight:500;color:var(--mute)}
+.status-line > span{display:block}
+.status-line.busy::before{flex:none;margin-top:.3em}
+/* nearby: the step («● ○») with whose turn it is, under the heading; a box of the code's size, and of the camera's,
+   while they come (a ring in it), so nothing jumps when they do */
+.steps-dots{display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;font-weight:700;color:var(--mute)}
+.steps-dots i{width:12px;height:12px;border-radius:50%;border:2.5px solid var(--ink);background:#fff;transition:background-color var(--m-quick,140ms) linear}
+.steps-dots i.on{background:var(--ink)}
+.steps-dots span{margin-left:2px}
 .qr{align-self:center;max-width:100%;height:auto!important;aspect-ratio:1;border:3px solid var(--ink);border-radius:10px;image-rendering:pixelated;background:#fff}
-video.scan{width:100%;max-height:50vh;object-fit:cover;border:3px solid var(--ink);border-radius:12px;background:#000}
+.placeholder,.qr.code{align-self:center;width:min(260px,100%);aspect-ratio:1}
+.placeholder{display:grid;place-items:center;border:3px dashed var(--ink);border-radius:10px;background:#fff}
+.placeholder.camera{width:100%;aspect-ratio:4/3;max-height:50vh;background:var(--ink);color:var(--paper);border-style:solid;border-radius:12px}
+.placeholder .spin{margin:0;width:22px;height:22px;border-width:3px}
+video.scan{width:100%;aspect-ratio:4/3;max-height:50vh;object-fit:cover;border:3px solid var(--ink);border-radius:12px;background:#000}
+/* «Ви граєте разом»: each player a chip with a dot (dashed while away, the words with it), «ти» as a tag; how they are
+   linked kept two lines high («напряму» comes and goes); the ping in a slot of its own, in even digits; and how long
+   it stays open (2.4 s): a bar that drains (a hold, so from JS: play(bar, 'ihk-drain', { duration: 2400 }); under
+   «менше руху» it stays whole) */
+.people{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin:0;padding:0;list-style:none;text-align:left}
+.person{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:5px 11px;border:2.5px solid var(--ink);border-radius:var(--r-pill);background:#fff;font-weight:700;font-size:14px;transition:background-color var(--m-quick,140ms) linear}
+.person > i{flex:none;width:10px;height:10px;border-radius:50%;border:2px solid var(--ink);background:#1f9d55;transition:background-color var(--m-quick,140ms) linear}
+.person.away{border-style:dashed}
+.person.away > i{background:#cfcde3;border-style:dashed}
+.person .state{font-weight:500;color:var(--mute)}
+.person .state:empty{display:none}
+.person .tag{font-style:normal;font-size:11px;line-height:1;padding:3px 7px;border-radius:var(--r-pill);background:var(--ink);color:var(--paper)}
+.how{min-height:2.9em}
+.ping{min-height:1.45em;font-variant-numeric:tabular-nums}
+.drain{height:3px;border-radius:2px;background:var(--ink);transform-origin:left;margin:2px 10% 0}
 /* the notes at the bottom of the screen (dom.js toast): a column, the newest at the bottom, none over another; over a
-   dialog too (the column is in #layer before any dialog: without z-index a dialog would cover what it says) */
+   dialog too (the column is in #layer before any dialog: without z-index a dialog would cover what it says). Centred by
+   its margins (a toast that goes glides: no transform of its own); above the card over a game: --card-h, how much
+   higher the column stands while the card shows (dom.js: the card's height + 6 px, the column then 12 px above it). On
+   the shelf and over a dialog a tap takes a note away (.tappable); over a game the column never catches a tap */
 .toasts{
-  position:fixed;z-index:1;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 22px);transform:translateX(-50%);
+  position:fixed;z-index:1;left:16px;right:16px;margin:0 auto;bottom:calc(env(safe-area-inset-bottom,0px) + 22px + var(--card-h,0px));
   display:flex;flex-direction:column;gap:8px;align-items:center;width:max-content;max-width:calc(100% - 32px);pointer-events:none;
 }
 .toast{
   max-width:100%;padding:11px 16px;font-weight:700;text-align:center;
-  background:var(--ink);color:#fff;border-radius:12px;box-shadow:4px 4px 0 var(--pink);transition:opacity .4s;
+  background:var(--ink);color:#fff;border-radius:12px;box-shadow:4px 4px 0 var(--pink);
 }
-.toast.out{opacity:0}
+.toasts.tappable .toast{pointer-events:auto;cursor:pointer}
 /* the card over a game that shows none of its waiting screens (invite.js; the rows: waiting.js, screens.js paint): a row
    per thing said, the time in even digits, buttons of a finger's size. 16 px above the game on every phone: the stage
-   already keeps out of the unsafe edges (a home bar), unlike .toasts and .backdrop, which are on the page itself */
-.waiting{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:2;gap:2px;padding:8px 14px;max-width:calc(100% - 24px);text-align:center}
+   already keeps out of the unsafe edges (a home bar), unlike .toasts and .backdrop, which are on the page itself.
+   Centred by its margins (its entry rises: no transform of its own) */
+.waiting{position:absolute;left:0;right:0;margin:0 auto;bottom:16px;z-index:2;width:min(420px,calc(100% - 24px));gap:2px;padding:8px 14px;text-align:center}
 .wait-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 12px}
 .waiting p{margin:0;font-weight:700}
 .waiting .wait-time{font-variant-numeric:tabular-nums}
-.waiting .btn{min-height:44px}
-/* for screen readers only (what they hear of the card: who and why, not the time) */
-.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-.players{margin:0;padding-left:20px;text-align:left}
+.waiting .btn{min-height:var(--tap)}
+
+/* «менше руху»: nothing moves or scales. Spinners stop (the ring and the words stay), a press and a hover only change
+   colour and shadow, the page as it starts only fades (120 ms) */
+@media (prefers-reduced-motion:reduce){
+  @keyframes spin{to{}}
+  .busy::before,.spin{animation:none}
+  :is(.btn,.option,.chip,.game):is(:hover,:active){transform:none!important}
+  .boot{animation-duration:120ms}
+}

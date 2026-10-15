@@ -9,6 +9,7 @@
 import * as vault from '../crypto.js';
 import * as device from './device.js';
 import { btn, el, modal, para, root } from './dom.js';
+import { busy as pending, free, play } from './motion.js';
 
 export const MSG = {
   offline: 'Не вдалося завантажити. Перевір інтернет і спробуй ще.',
@@ -22,7 +23,8 @@ export const MSG = {
   intro: 'Ігри в Ігротеці відкриваються за паролем. Цей пристрій його запам’ятає.',
   removed: 'Доступ до ігор із цим паролем закрили. Якщо тобі дали новий пароль — введи його.',
   changed: 'Твій пароль змінили. Введи новий.',
-  // under «Відкрити» while the password is checked (one key derivation per person: a cheap phone may take seconds)
+  // while the password is checked (one key derivation per person: a cheap phone may take seconds): «Відкрити» says the
+  // first after 300 ms; the line under it, for a screen reader, both
   unlocking: 'Відмикаю…',
   slow: 'Відмикаю… Це може тривати кілька секунд.'
 };
@@ -141,6 +143,11 @@ export const askingPassword = () => asking > 0;
 // (device.js note), said first. later(signal) → the key, when the device's storage did not answer: if it comes before
 // a password was sent, the dialog closes by itself and opens with it (Cancel, a password sent or the dialog closing
 // stop the wait).
+// What it shows (the UX spec L-T08, rule 5): the error's slot kept under the field (style.css .stack: nothing moves
+// when it is said; it fades in). While the password is checked «Відкрити» is unavailable, as it was for 300 ms, then it
+// says «Відмикаю…» in itself (motion.js busy: a ring, aria-busy; then for 500 ms at least): nothing is added, nothing
+// moves. The line under it is a screen reader's («Відмикаю…», after a second MSG.slow): with motion on out of sight
+// (style.css), motion off it shows, as the only sign.
 let dialogs = 0;
 function passwordDialog(game, why, later) {
   return new Promise((resolve, reject) => {
@@ -162,17 +169,18 @@ function passwordDialog(game, why, later) {
     const busy = el('p', { className: 'busy' });
     busy.setAttribute('role', 'status');
     const intro = para(MSG[why] || MSG.intro);
-    const form = el('form', {}, el('input', { type: 'text', name: 'username', value: 'Ігротека', autocomplete: 'username', hidden: true }), pw, go, busy, err);
+    const form = el('form', { className: 'stack' }, el('input', { type: 'text', name: 'username', value: 'Ігротека', autocomplete: 'username', hidden: true }), pw, err, go, busy);
     form.addEventListener('submit', async e => {
       e.preventDefault();
       if (!pw.value) return;
       wait.abort();                                    // (a password sent: no key from the storage any more)
       err.textContent = ''; pw.removeAttribute('aria-invalid'); go.disabled = true;
       busy.textContent = MSG.unlocking;
+      pending(go, MSG.unlocking);
       const slow = setTimeout(() => { busy.textContent = MSG.slow; }, 1000);
       let found = null;
       try { found = await passwordKey(pw.value); } catch (x) { err.textContent = offline(x) ? MSG.failed : MSG.broken; }
-      finally { clearTimeout(slow); busy.textContent = ''; }
+      finally { clearTimeout(slow); busy.textContent = ''; free(go); }
       if (closed) return;
       go.disabled = false;
       if (found) {
@@ -183,6 +191,7 @@ function passwordDialog(game, why, later) {
         return;
       }
       if (!err.textContent) { err.textContent = MSG.wrong; pw.setAttribute('aria-invalid', 'true'); }
+      play(err, 'ihk-fade', { duration: 'quick' });
       pw.select();
     });
     m.show(...(game.image ? [el('img', { className: 'cover', src: new URL(game.id + '/' + game.image, root).href, alt: '' })] : []),

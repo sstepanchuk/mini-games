@@ -3,7 +3,7 @@
 // where they may show (placeLines: the card over a game, or nothing while a copy of the game's <ihroteka-wait> holds them).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { KINDS, LABEL, mmss, NAMED, names, placeLines, sayOf, screen, shown, versionAct, versionWords } from '../library/app/waiting.js';
+import { GRACE, KINDS, LABEL, mmss, NAMED, names, OFFLINE, placeLines, sayOf, screen, settled, shown, versionAct, versionWords } from '../library/app/waiting.js';
 import * as rules from '../library/app/rules.js';
 
 const OLDER = 'У друга новіша версія — онови сторінку', NEARBY = 'Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.';
@@ -25,7 +25,33 @@ test('link: «Чекаємо, поки повернеться X…», the time t
   assert.deepEqual(acts(r), ['repair', 'release']);
   assert.deepEqual(acts(one({ waits: [link('Богдан', { release: false, repair: true })], nearby: true })), ['repair']);
   assert.deepEqual(acts(one({ waits: [link('Богдан', { release: false })] })), []);
-  assert.deepEqual([LABEL.repair, LABEL.release, LABEL.update, LABEL.retry], [['З’єднатися знову', 'btn'], ['Не чекати', 'btn ghost'], ['Оновити', 'btn ghost'], ['Спробувати ще', 'btn ghost']]);
+  // (owner, UX I11: the helpful action is the one that matters: «Оновити» is a primary button)
+  assert.deepEqual([LABEL.repair, LABEL.release, LABEL.update, LABEL.retry], [['З’єднатися знову', 'btn'], ['Не чекати', 'btn ghost'], ['Оновити', 'btn'], ['Спробувати ще', 'btn ghost']]);
+});
+
+// (owner, UX Q2: our own internet gone, the others only look away: one line for it, without «Не чекати»)
+test('our own internet gone: one row «Немає інтернету на цьому пристрої — чекаємо, поки зв’язок повернеться…», nothing to press', () => {
+  assert.equal(OFFLINE, 'Немає інтернету на цьому пристрої — чекаємо, поки зв’язок повернеться…');
+  const m = screen(facts({ waits: [link('Богдан'), link('Віра'), { name: 'Гліб', left: 9000, why: 'loading', release: false }], offline: true, gap: { key: 'proto:3' } }));
+  assert.deepEqual(m.rows.map(r => [r.kind, r.name, r.text, r.time, r.fine, r.acts, r.classic]),
+    [['link', null, OFFLINE, null, null, [], true], ['loading', 'Гліб', 'Гліб повертається в гру', null, null, [], true], ['version', null, 'У друга старіша версія — хай оновить сторінку', null, null, [], true]]);
+  assert.equal(m.say, OFFLINE + ' Гліб повертається в гру. У друга старіша версія — хай оновить сторінку');
+  assert.ok(!/\d:\d\d/.test(m.rows[0].text), 'no time: not their places that are at stake');
+  assert.notEqual(m.rows[0].key, screen(facts({ waits: [link('Богдан')] })).rows[0].key, 'a row of its own');
+  assert.deepEqual(screen(facts({ waits: [{ name: 'Гліб', left: 9000, why: 'loading', release: false }], offline: true })).rows.map(r => r.kind), ['loading'], 'nobody dropped out: nothing to say of it');
+  assert.equal(screen(facts({ waits: [link('Богдан')], offline: false })).rows[0].text, 'Чекаємо, поки повернеться Богдан…');
+});
+
+// (owner, UX Q1: a player who only reloaded is back in a moment: «Чекаємо, поки повернеться…» only after 0.6 s away)
+test('settled: one who dropped out less than 0.6 s ago is not named yet (a reload); the other rows as they are', () => {
+  assert.equal(GRACE, 600);
+  const away = { Богдан: 599, Віра: 600, Гліб: 0, Дана: 20 };
+  const f = facts({ waits: [link('Богдан'), link('Віра'), { name: 'Гліб', left: 9000, why: 'loading', release: false }, { name: 'Дана', left: 0, why: 'closed', release: false, round: true }], restoring: true });
+  const s = settled(f, n => away[n]);
+  assert.deepEqual(s.waits.map(x => x.name), ['Віра', 'Гліб', 'Дана']);
+  assert.deepEqual([s.restoring, f.waits.length], [true, 4], 'the rest kept; the facts given are not changed');
+  assert.deepEqual(screen(s).rows.map(r => r.text), ['Чекаємо, поки повернеться Віра…', 'Гліб повертається в гру', 'Дана зараз не в грі — чекаємо', 'Повертаю гру з того місця, де ви зупинилися…']);
+  assert.equal(settled(null, () => 0), null, 'nothing to say: nothing');
 });
 
 // (owner, q16: arbitrary names cannot be declined: every line has the name in the nominative, and no gender)
@@ -115,15 +141,13 @@ test('restoring: our copy («Повертаю гру…»), or another one, name
 });
 
 // (owner, q11: each page its own part; nearby, when there is internet; why an update did not happen)
-test('versionWords: the older page and the newer one, online and nearby; the chip\'s short words', () => {
+test('versionWords: the older page and the newer one, online and nearby', () => {
   const w = (gap, o) => versionWords({ why: 'wire', key: 'wire:g:2', ...gap }, o);
   assert.equal(w({ older: true }), OLDER);
   assert.equal(w({ older: false }), 'У друга старіша версія — хай оновить сторінку');
   assert.equal(w({ older: true }, { nearby: true }), 'У друга новіша версія — онови сторінку, коли буде інтернет');
   assert.equal(w({ older: false }, { nearby: true }), 'У друга старіша версія — хай оновить сторінку, коли буде інтернет');
   assert.equal(versionWords({ why: 'proto', key: 'proto:3', older: true }), OLDER, 'the library\'s version: the same words');
-  assert.deepEqual([w({ older: true }, { short: true }), w({ older: false }, { short: true }), w({ older: true }, { short: true, nearby: true })],
-    ['У друга новіша версія', 'У друга старіша версія', 'У друга новіша версія']);
 });
 
 test('versionWords: our update did not happen, and why', () => {
@@ -132,7 +156,6 @@ test('versionWords: our update did not happen, and why', () => {
   assert.equal(w('failed'), 'Не вдалося завантажити нову версію: перевір інтернет');
   assert.equal(w('timeout'), 'Не вдалося завантажити нову версію: перевір інтернет');
   assert.equal(w('same'), OLDER, 'the site has nothing newer yet (tried again by itself)');
-  for (const f of ['storage', 'failed', 'timeout', 'same']) assert.equal(w(f, { short: true }), 'У друга новіша версія', f);
   // the button with them (the screens and «Грати разом» alike): «Спробувати ще» where these words ask for it
   assert.deepEqual(['storage', 'failed', 'timeout', 'same', null].map(failed => versionAct({ failed })), ['retry', 'retry', 'retry', 'update', 'update']);
 });
@@ -145,7 +168,6 @@ test('versionWords: a game another shelf lacks (theirs: whom), or this one lacks
   assert.equal(theirs(['Аня', 'Богдан', 'Віра']), 'Аня, Богдан і Віра не можуть відкрити цю гру: там інша версія Ігротеки');
   const ours = { why: 'game', game: 'g', key: 'game:g', older: null, missing: 'ours', who: ['Аня'] };
   assert.equal(versionWords(ours), 'У кімнаті відкрили гру, якої тут немає');
-  assert.equal(versionWords({ ...ours, older: true }, { short: true }), 'У кімнаті відкрили гру, якої тут немає', 'the chip: the same words');
   assert.equal(versionWords({ ...ours, older: true, failed: 'storage' }), 'Бракує місця на пристрої для нової версії Ігротеки: звільни трохи місця й натисни «Спробувати ще»');
 });
 

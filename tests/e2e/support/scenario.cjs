@@ -6,6 +6,8 @@
 // console.warn never does), or it ran longer than its timeout. forgive(from, re) lets expected ones go. todo(cond, …)
 // is a known bug: reported, never failing. skip(why) leaves before it starts: SKIP and the exit code 77 (run.cjs counts
 // it apart). exitOnSignals(before) makes SIGINT, SIGTERM and SIGHUP exit through process 'exit' (cleanups run).
+// Motion is off in every browser context launch() gives (see MOTION): E2E_MOTION=on, or newContext({ motion: true }),
+// keeps it.
 // E2E_PERF=<file>: a report for tools/perf.js (npm run perf). Every page counts its long tasks (its frames too) and,
 // while its game is played together, what went out per path (the fake network's __wire); when the scenario ends, all
 // of it goes into that file: [{ page, frame: 'page' | 'game', long: [ms, …], linkedS, bytes: { path: characters } }].
@@ -49,6 +51,11 @@ function playwright() {
   try { pw = require('playwright'); } catch (e) { pw = require(path.join(execSync('npm root -g').toString().trim(), 'playwright')); }
   return pw;
 }
+// Motion (library/app/motion.js) is off in every context by default, so a scenario sees the page's state at once, with
+// no ghost, glide or flight (the library's page reads window.__ihrotekaMotion in its first script; a game gets it at
+// attach). E2E_MOTION=on keeps it in every context, newContext({ motion: true }) in that one (motion.e2e).
+const MOTION = process.env.E2E_MOTION === 'on';
+function MOTION_OFF() { window.__ihrotekaMotion = 'off'; }
 const browsers = new Set();
 // a browser (one device); closed when the scenario ends. (Chromium's own switches, such as a fake camera, are dropped
 // for another engine.)
@@ -57,7 +64,13 @@ async function launch(opt = {}) {
   if (!engine) throw new Error('E2E_BROWSER: no such engine in Playwright: ' + BROWSER);
   if (!CHROMIUM && opt.args) opt = { ...opt, args: opt.args.filter(a => !/^--use-fake-|^--use-file-for-fake-/.test(a)) };
   const b = await engine.launch(opt);
-  if (PERF) { const make = b.newContext.bind(b); b.newContext = async (...a) => { const c = await make(...a); await c.addInitScript(PERF_INIT); return c; }; }
+  const make = b.newContext.bind(b);                   // (browser.newPage() comes through here too)
+  b.newContext = async ({ motion = MOTION, ...o } = {}) => {
+    const c = await make(o);
+    if (!motion) await c.addInitScript(MOTION_OFF);
+    if (PERF) await c.addInitScript(PERF_INIT);
+    return c;
+  };
   browsers.add(b);
   b.on('disconnected', () => browsers.delete(b));
   return b;

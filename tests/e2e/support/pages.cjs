@@ -4,7 +4,7 @@
 const { fakeNet } = require('./fakenet.cjs');
 const { U, w, launch, watch, until, CHROMIUM } = require('./scenario.cjs');
 
-const SHELF = '#shelf:not([hidden])', NAME = '.dialog input.link';
+const SHELF = '#shelf:not([hidden])', NAME = '#layer .dialog input.link';   // (#layer: a dialog's ghost, motion on, is none)
 
 // the name a player comes in with (the dialog a room link opens with, or the first screen of "Грати разом")
 async function enterName(p, name) {
@@ -36,11 +36,21 @@ async function frameOf(p, ready = () => !!window.ihroteka, timeout = 15000) {
   await f.waitForFunction(ready, null, { timeout });
   return f;
 }
-// the library's own view of the room (together.js state()); null for a closed page
-const libState = p => p.isClosed() ? Promise.resolve(null) : p.evaluate(() => window.__ihroteka.state());
+// the library's own view of the room (together.js state()), once the library has started (motion on, its shelf waits
+// up to 200 ms for its fonts: index.js); null for a closed page
+const libState = p => p.isClosed() ? Promise.resolve(null) : p.evaluate(async () => {
+  for (let i = 0; i < 100 && !window.__ihroteka; i++) await new Promise(r => setTimeout(r, 20));
+  return window.__ihroteka.state();
+});
+// the chip's words as a player hears them (motion on, the words it said before fade beside them a moment, unheard)
+const chipText = p => p.evaluate(() => {
+  const c = document.getElementById('together').cloneNode(true);
+  for (const n of c.querySelectorAll('[aria-hidden=true]')) n.remove();
+  return c.textContent.replace(/\s+/g, ' ').trim();
+});
 // the open dialog's text, or '' (whitespace collapsed; without the marks that keep a name from turning the line round,
 // U+2066–U+2069: invite.js iso, which a reader never sees)
-const dialogText = async p => p.isClosed() ? '' : p.evaluate(() => document.querySelector('.dialog')?.innerText.replace(/[\u2066-\u2069]/g, '').replace(/\s+/g, ' ').trim() || '');
+const dialogText = async p => p.isClosed() ? '' : p.evaluate(() => document.querySelector('#layer .dialog')?.innerText.replace(/[\u2066-\u2069]/g, '').replace(/\s+/g, ' ').trim() || '');
 // the card over the game («Чекаємо, поки повернеться …», invite.js; only the card: see waitShown): whether it shows, its text
 // (whitespace collapsed), its buttons, and what its live region says to a screen reader (say)
 const waitCard = p => p.evaluate(() => {
@@ -121,7 +131,7 @@ async function phone(pid, name, { internet = false, net = {}, viewport = { width
     },
     // from the menu (with internet) to the nearby screen
     nearby: async () => {
-      await p.waitForFunction(() => /Показати код|Через посилання|Додати гравця/.test(document.querySelector('.dialog')?.innerText || ''));
+      await p.waitForFunction(() => /Показати код|Через посилання|Додати гравця/.test(document.querySelector('#layer .dialog')?.innerText || ''));
       if (await p.isVisible('text=Через посилання')) await p.click('text=Поруч, без інтернету');
     }
   };
@@ -165,4 +175,4 @@ async function oneNetwork(...ctxs) {
 // → true once every one of these phones (or pages) is linked
 const allLinked = (xs, ms = 15000) => until(async () => (await Promise.all(xs.map(x => libState(x.p || x)))).every(s => s && s.linked), ms);
 
-module.exports = { enterName, openPage, createLink, frameOf, libState, dialogText, oneNetwork, waitCard, waitShown, waitBox, clickWait, short, phone, pair, allLinked };
+module.exports = { enterName, openPage, createLink, frameOf, libState, chipText, dialogText, oneNetwork, waitCard, waitShown, waitBox, clickWait, short, phone, pair, allLinked };

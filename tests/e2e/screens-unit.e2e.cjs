@@ -9,18 +9,21 @@
 // dialog is open, two copies, and the event after the rows are in place; a name that writes right to left, or carries
 // direction controls, in an isolate of its own (the time's digits in order after it); copies connected, moved and dropped inside the
 // browser's ResizeObserver delivery (from the game's own observer and from a 'showing' listener), pass after pass: the
-// browser has no ResizeObserver loop to report (WebKit reports it as an error). Then the dialog's guards: a browser that
+// browser has no ResizeObserver loop to report (WebKit reports it as an error). With motion on in the game (motion.js
+// installed as shell.js does at attach): a copy whose entry runs (from opacity .01) stays the holder through it, every
+// frame, also while a board glides under it (its z-index). Then the dialog's guards: a browser that
 // knows no inert (Safari before 15.5) keeps Tab and Shift+Tab in the dialog, and a game that pulls the focus into its
 // frame behind a dialog loses it back to the dialog (Escape still closes it). screens is the integration test.
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
-const { U, launch, scenario, check, step, until, w, watch } = require('./support/scenario.cjs');
+const { U, CHROMIUM, launch, scenario, check, step, until, w, watch } = require('./support/scenario.cjs');
 
 const APP = path.join(__dirname, '..', '..', 'library', 'app'), AT = U + '__unit/';
-const SERVED = ['screens.js', 'dom.js', 'waiting.js', 'style.css'];
+const SERVED = ['screens.js', 'dom.js', 'waiting.js', 'motion.js', 'style.css'];
 const GAME = '<!doctype html><meta charset=utf-8><body style=\'margin:0;font:16px sans-serif\'><main id=game style=\'height:100vh;background:#eee\'>поле</main></body>';
 const PAGE = `<!doctype html><html lang="uk"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<script>if (window.__ihrotekaMotion === 'off') document.documentElement.dataset.motion = 'off';</script>
 <link rel="stylesheet" href="./style.css">
 <body>
 <p class="busy" id="busy" hidden></p>
@@ -286,6 +289,52 @@ scenario('screens-unit: which copy is seen, and the dialog\'s guards', async () 
   check(r.loops.length === 0, 'no ResizeObserver loop: the browser had nothing to report', r.loops);
   check(r.held, 'and a copy holds the rows', r);
 
+  // (the UX spec, I27: screens.js's style gives a copy with rows its entry, ihk-keep from opacity .01, and z-index 1 so
+  // what glides passes under it; seen() treats only opacity 0 as unseen)
+  step('motion on in the game: a copy whose entry runs stays the holder through it, a board gliding under it');
+  r = await run(async () => {
+    const W = document.getElementById('f').contentWindow, d = W.document, frame = () => new Promise(res => W.requestAnimationFrame(() => res()));
+    const M = await import('./app/motion.js'), lib = document.documentElement, was = [lib.getAttribute('data-motion'), W.__ihrotekaMotion];
+    // (the scenario's switch, in this page and the game's: motion on here)
+    lib.removeAttribute('data-motion'); delete W.__ihrotekaMotion; d.documentElement.removeAttribute('data-motion');
+    M.install(d, W);
+    const out = { motion: M.mode(d) };
+    // a copy in its layer, a board under it (as tic-tac-toe's under its copy): the rows come in, the board glides down
+    // from where they now are (flip); then a pass each frame, as the observer and invite.js's second ask for them
+    const watchEntry = async (own = '') => {
+      await U.fresh();
+      const c = U.add({ style: own }), board = d.createElement('div');
+      board.style.cssText = 'height:220px;background:#cde';
+      c.parentElement.append(board);
+      const o = { frames: 0, lost: [], names: [], glides: 0, min: 1 };
+      M.flip([board], () => { o.held = U.show(); o.first = +W.getComputedStyle(c).opacity; });
+      o.names = c.getAnimations().map(a => a.animationName);
+      for (let i = 0; i < 90; i++) {
+        const runs = c.getAnimations().some(a => a.playState === 'running'), glides = board.getAnimations().some(a => a.playState === 'running');
+        if (!runs && !glides && i > 3) break;
+        o.min = Math.min(o.min, +W.getComputedStyle(c).opacity);
+        if (glides) o.glides++;
+        if (!U.show() || U.state().holder !== 0 || !c.firstElementChild) o.lost.push(o.frames);
+        o.frames++;
+        await frame();
+      }
+      o.after = U.show();
+      return o;
+    };
+    out.entry = await watchEntry();
+    out.flat = await watchEntry('z-index:auto');           // (the same copy without its z-index: the board covers it)
+    if (was[0] != null) { lib.setAttribute('data-motion', was[0]); d.documentElement.setAttribute('data-motion', was[0]); }
+    if (was[1] !== undefined) W.__ihrotekaMotion = was[1];
+    await U.fresh();
+    return out;
+  });
+  const e = r.entry;
+  check(r.motion === 'full' && e.names.includes('ihk-keep') && e.first >= 0.01 && e.first < 0.5, 'the copy\'s entry runs (ihk-keep), from opacity .01', r);
+  check(e.held && e.frames > 5 && e.glides > 3 && !e.lost.length && e.after, 'every frame of it, the board gliding under it: the copy holds the rows (the card never says them)', e);
+  check(e.min >= 0.01, '… and its opacity never went under .01', e.min);
+  if (CHROMIUM) check(r.flat.glides > 3 && r.flat.lost.length > 0 && r.flat.after, '(the board does pass over it: without its z-index, a frame hands the rows to the card)', r.flat);
+  else console.log('  (without its z-index: ' + JSON.stringify(r.flat) + ')');
+
   step('the dialog with no inert (Safari before 15.5): Tab and Shift+Tab stay in it');
   await run(() => { delete HTMLElement.prototype.inert; document.getElementById('stage').hidden = true; document.getElementById('shelf').hidden = false; });
   await run(async () => { window.D = await import('./app/dom.js?noinert'); });
@@ -305,7 +354,7 @@ scenario('screens-unit: which copy is seen, and the dialog\'s guards', async () 
       if (k === 'in') inside++; else if (k !== 'body') behind++;
     }
     await p.keyboard.press('Escape');
-    keys[key] = { behind, inside, closed: !(await p.$('.backdrop')), back: await run(() => document.activeElement && document.activeElement.id) };
+    keys[key] = { behind, inside, closed: !(await p.$('#layer > .backdrop')), back: await run(() => document.activeElement && document.activeElement.id) };
   }
   check(Object.values(keys).every(k => k.behind === 0 && k.inside > 0), '14 Tab and 14 Shift+Tab presses never leave the dialog', keys);
   check(Object.values(keys).every(k => k.closed && k.back === 'opener'), 'Escape closes it, and the focus is back where it was', keys);
@@ -331,5 +380,5 @@ scenario('screens-unit: which copy is seen, and the dialog\'s guards', async () 
   check(back, 'the dialog has the focus again' + (pulled ? ' (the game had pulled it into its frame)' : ' (this engine never let the game pull it)'),
     await p2.evaluate(() => document.activeElement.tagName + '.' + document.activeElement.className));
   await p2.keyboard.press('Escape');
-  check(await until(async () => !(await p2.$('.backdrop')), 1000, 50), 'Escape closes it');
+  check(await until(async () => !(await p2.$('#layer > .backdrop')), 1000, 50), 'Escape closes it');
 }, { timeout: 120000 });

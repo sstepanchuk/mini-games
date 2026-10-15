@@ -32,9 +32,12 @@ import { LABEL, mmss, NAMED } from './waiting.js';
 export const ELEMENT = 'ihroteka-wait', ATTR = 'showing', EVENT = 'showing';
 export const CLASSES = ['btn', 'fine', 'ghost', 'wait-row', 'wait-time'];   // the markup's hooks (README "Waiting screens")
 export const DATA = ['kind', 'name'];                                       // its data- attributes
-// the default look: an empty copy takes no room; the rest at zero specificity (any rule of the game's wins)
+// the default look: an empty copy takes no room; the rest at zero specificity (any rule of the game's wins). A copy that
+// gets rows comes in calmly (ihk-keep of motion.js, put into the game's window at attach: from opacity .01, never 0,
+// which seen() would count as unseen), above what glides past it (z-index 1), so it stays the holder through its entry
 const STYLE = 'ihroteka-wait:empty{display:none!important}\n' +
   ':where(ihroteka-wait){display:block}\n' +
+  ':where(ihroteka-wait:not(:empty)){position:relative;z-index:1;animation:ihk-keep var(--m-in,200ms) var(--m-ease-out,ease-out) both}\n' +
   ':where(ihroteka-wait .wait-row){display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 12px}\n' +
   ':where(ihroteka-wait .wait-row+.wait-row){margin-top:6px}\n' +
   ':where(ihroteka-wait p){margin:0;overflow-wrap:anywhere}\n' +

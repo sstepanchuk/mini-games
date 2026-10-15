@@ -20,7 +20,8 @@ and works offline. Hosted on GitHub Pages.
   only. A password cancelled in a room takes everyone back to the shelf only from the player who opened the game; anyone
   else stays over it, with «Цю гру відкрили в кімнаті. Щоб грати, потрібен пароль.» and «Ввести пароль».
 - **Together.** "Грати разом" connects up to 8 players for the whole library: whatever one opens, everyone's library
-  opens too. A player is the name they type on entering a room, cleaned as it is typed into one spelling (apostrophes
+  opens too (the others' opening card says «Аня відкриває «Два дракони»…»; and back on the shelf, «Аня повертає всіх до
+  бібліотеки»). A player is the name they type on entering a room, cleaned as it is typed into one spelling (apostrophes
   become ’, a letter typed in parts becomes one (NFC), invisible and control characters go (emoji stay), several spaces
   become one, the first letter a capital) and from then on compared exactly (a Latin look-alike of a Cyrillic letter
   makes another name); a name with no letter, digit or emoji, or «*», is refused («Ім’я має містити літери, цифри чи
@@ -32,13 +33,16 @@ and works offline. Hosted on GitHub Pages.
   пристрою, тож гра продовжується там. Якщо це не ти — увійди під іншим ім’ям», with «Інше ім’я», over the internet
   also «Повернути сюди»); coming back after the line broke asks nothing. A player who drops out keeps their place
   for 3 minutes; meanwhile the game pauses and the library says whom the others wait for and why, in the game's own
-  waiting screen (`<ihroteka-wait>`), or in its card over a game that has none: one who dropped out, the time left and
-  «Не чекати» (nearby, for the phone that holds the room, «Не чекати» ends the room on this phone: «Кімнату поруч
-  тримав телефон, на якому грає X: без нього вона далі не може»), or one who is only opening the game again, in a new
-  tab or device («X повертається в гру», nothing to press); a player of the round whose game is closed (named also
-  while the others play on), a seat to wait for and who plays now, a round coming back after a reload (ours, or «Аня
-  повертає гру з того місця, де ви зупинилися…»), too: every name in the nominative, which never turns its line round
-  (see "Waiting screens"). If the copy of the game that runs a
+  waiting screen (`<ihroteka-wait>`), or in its card over a game that has none: one who dropped out (once away for
+  0.6 s: one who only reloads the page is back sooner), the time left and «Не чекати» (nearby, for the phone that holds
+  the room, «Не чекати» ends the room on this phone: «Кімнату поруч тримав телефон, на якому грає X: без нього вона
+  далі не може»; pressed on the card, the card says «Гаразд, не чекаємо.» for a moment), or one who is only opening the
+  game again, in a new tab or device («X повертається в гру», nothing to press); a player of the round whose game is
+  closed (named also while the others play on), a seat to wait for and who plays now, a round coming back after a
+  reload (ours, or «Аня повертає гру з того місця, де ви зупинилися…»), too: every name in the nominative, which never
+  turns its line round (see "Waiting screens"). When it is our own internet that went (an internet room whose brokers
+  this page no longer reaches), one line says so instead of whom we wait for: «Немає інтернету на цьому пристрої —
+  чекаємо, поки зв’язок повернеться…», nothing to press. If the copy of the game that runs a
   round is gone for 10 s, the round goes on in another player's copy from its last snapshot, when that player can tell
   it was not them who dropped out (two phones nearby that lose each other wait for the runner instead). The dialog
   first checks by itself whether there is internet (whether a broker answers: `navigator.onLine` also says yes on a
@@ -60,14 +64,25 @@ and works offline. Hosted on GitHub Pages.
   разом»), the newer «У друга старіша версія — хай оновить сторінку»; the older page updates itself when that disturbs
   nobody (no game open, no password being typed), never in a nearby room (see Versions, under Game API). Whoever holds
   a room by link and is alone again sees «Друг вийшов. Посилання діє
-  далі — чекаю…» in «Грати разом» (not «Ви разом.»). The library's dialogs leave a game's fullscreen as they open (and
-  so does the card «Чекаємо…» over a game without screens of its own); its notes at the bottom stack in a column (up to
-  three, the same one never twice); «Далі» with no name says «Напиши своє ім’я» under the field.
+  далі — чекаю…» in «Грати разом» (not «Ви разом.»). The chip on the shelf says how the room is in a word or two, with
+  a coloured dot that never says it alone («Грати разом», «Чекаю…», «З’єднуюсь…», «Разом», «Разом · 3», «Зв’язок
+  зник», «Інша версія», «Без інтернету», «Лише через https»; the ping only in the dialog); on a phone it has a row of
+  its own under «Ігротека», so nothing on the shelf moves when its words change (owner, decision 65). Linked (or one
+  more player added) while «Грати разом» is open, it says «Ви граєте разом» for 2.4 s with a bar that drains, then
+  closes by itself; a touch or a key in it keeps it open (decision 63). The library's dialogs leave a game's
+  fullscreen as they open (and so does the card «Чекаємо…» over a game without screens of its own); its notes at the
+  bottom stack in a column (up to three, the same one never twice), each as long as its words need (2.6 s, up to 6 s),
+  above the card «Чекаємо…», never one that says what a dialog or the game says already (no «Ви разом!» while «Грати
+  разом» is open, nor when everyone it hears was with it already: a reload, a link that started over; none of the
+  room's comings and goings over a game that shows the room itself), and a tap takes one away on the shelf and over a
+  dialog, never over a game (decision 66); «Далі» with no name says «Напиши своє ім’я» under the field, between it and
+  «Далі».
 - **Offline.** A service worker keeps one complete copy of the site per version, all of that version (a copy that
   mixes two is not installed), and never deletes the copy in use for a newer one; the shelf, the games and nearby
   play work without a network. On a phone it installs as an app. A library that does not open (no network and no
   offline copy yet, the site not answering) says why instead of turning for ever, with «Спробувати ще», and tries
-  again by itself as soon as the network is back.
+  again by itself as soon as the network is back; a try that did not help says so under it, «Ще не вийшло — спробую
+  знову, щойно з’явиться інтернет.» (owner, decision 64).
 
 ## Layout
 
@@ -75,9 +90,9 @@ and works offline. Hosted on GitHub Pages.
 library/   everything that runs in the browser
   app/       the library page: shell, password, together (+ rules: who plays, who runs a round; round: ihroteka.round,
              a game's rounds; legacy: the rounds of contract 4; waiting, screens: the waiting screens a game puts in
-             itself; trace: what happened lately, for bug reports; values: what together, round and legacy share),
-             offline copy, page template, icons; inflate: a gunzip for Safari before 16.4 (built as lib/inflate.js,
-             loaded only there)
+             itself; trace: what happened lately, for bug reports; values: what together, round and legacy share;
+             motion: how the library and its games move, "Motion" under Game API), offline copy, page template, icons;
+             inflate: a gunzip for Safari before 16.4 (built as lib/inflate.js, loaded only there)
   net/       rooms for up to 8 players: internet (MQTT, sealed with the room's code, + WebRTC) and nearby (QR-paired
              WebRTC)
   crypto.js  keyring and sealed files (browser and Node)
@@ -231,6 +246,8 @@ ihroteka.invite()    // the library's "play together" dialog (room.invite() is t
 ihroteka.room        // the other players (below)
 ihroteka.round       // the game's rounds: who plays one, whose copy runs it, its snapshots (below, "The round")
 <ihroteka-wait>      // where the library says whom we wait for (below, "Waiting screens")
+<html data-ihroteka> // the game is in the library: its <html> attributes and the motion vocabulary, ihk-* and --m-*
+                     //   (below, "Motion")
 ```
 
 `game.wire` is the version of the game's messages and snapshots (game.json `"wire"`, 1 when not given). Raise it by
@@ -245,7 +262,7 @@ shelf's counts only for a page that says none.
 друга новіша версія — онови сторінку», with «Оновити» (over the game, and in «Грати разом»), the newer «У друга старіша
 версія — хай оновить сторінку»; nearby, where no update can come, both add «…, коли буде інтернет». Over a game only a
 gap in that game or in the library is said; another game's is said on the shelf (decision 35: a note, once per gap in
-a room, and the chip in short words). A game that one of the
+a room, and the chip «Інша версія», decision 65). A game that one of the
 shelves has and the other not (a deploy added it or took it off), open in the room, is a version gap too, and which
 page is the older the site says, not the shelf (the shell asks whether the site has a newer version than the page:
 decision 36): over the game, the page that has it says «Богдан не може відкрити цю гру: там інша версія Ігротеки» (naming
@@ -259,7 +276,8 @@ in place: an update that cannot be stored or fetched leaves the page as it is an
 yet, it tries again by itself a minute later. And a page whose offline copy was updated under it (a deploy while it
 stayed open) reloads into the new one as soon as that disturbs nobody: on the shelf, no dialog open, and no room or an
 internet one, which it comes straight back into (the others see it «повертається» for a moment); never nearby, where a
-reload would end the room.
+reload would end the room. Every such reload is said first: a note «Оновлюю Ігротеку…» for 0.8 s, then the reload (one
+the page does by itself, only if that still disturbs nobody; owner, decision 64).
 
 A room holds up to 8 players, each known by name (as cleaned when it was typed, then compared exactly: see "How it
 works"). A game gets as many seats as its `players` says (2 when not
@@ -402,10 +420,12 @@ player) that way.
 
 **A game that breaks.** What a game's window throws (or a promise it leaves rejected), and what its listeners throw,
 goes into the trace of `room.diag()`. One that does so while it starts (before its page loaded, or within 5 s after)
-leaves no empty screen: the library covers it with «Гра зламалася», a button «Скопіювати звіт» (the report of
-`room.diag()`) and «До бібліотеки». (A browser's notice that comes as an error with nothing thrown, a ResizeObserver
-loop as the layout settles, is only a line in the trace; so is a promise left rejected because the browser refused or
-cut short what the game asked, a `DOMException` `NotAllowedError` or `AbortError`: a sound played before any tap.)
+leaves no empty screen: the game stays in sight under a veil, and the library's card over it says «Гра зламалася» and
+«Можна відкрити її ще раз або повернутися до бібліотеки.», with «Відкрити ще раз» (focused: the game again, on this
+device only), «Скопіювати звіт» (the report of `room.diag()`) and «До бібліотеки» (owner, decision 64). (A browser's
+notice that comes as an error with nothing thrown, a ResizeObserver loop as the layout settles, is only a line in the
+trace; so is a promise left rejected because the browser refused or cut short what the game asked, a `DOMException`
+`NotAllowedError` or `AbortError`: a sound played before any tap.)
 
 The room's code is `library/net/` (`room.js` describes the room and its rules) and `library/app/together.js`
 (what a game sees; the rules of who plays and who runs a round are in `library/app/rules.js`; `ihroteka.round` is
@@ -554,7 +574,7 @@ element that shows nothing.
 
 | kind        | what it says                                                       | buttons                                                    |
 |-------------|--------------------------------------------------------------------|------------------------------------------------------------|
-| `link`      | «Чекаємо, поки повернеться X… 2:45»: X dropped out, their place kept that long. Nearby, where pairing again works (on the phone that holds the room; on a guest whose own link to it broke): «Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.»; a guest cut off from that phone, with others in the room, has only its row, «Кімнату поруч тримає телефон, на якому грає X: без нього не чути й інших.»; another guest sees the cut-off one's row with «Кіра і Ганна мають з’єднатися ще раз кодами.»; a guest waiting for a seat gets the row of the phone that holds the room too | «З’єднатися знову» (pairing again) only where it works; «Не чекати» (their place goes) where it works from here |
+| `link`      | «Чекаємо, поки повернеться X… 2:45»: X dropped out, their place kept that long; said once X has been away 0.6 s (one who only reloads is back sooner: owner, decision 63). Our own internet gone (an internet room whose brokers this page no longer reaches): one row instead of all of them, «Немає інтернету на цьому пристрої — чекаємо, поки зв’язок повернеться…», with no time and nothing to press (decision 64). Nearby, where pairing again works (on the phone that holds the room; on a guest whose own link to it broke): «Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.»; a guest cut off from that phone, with others in the room, has only its row, «Кімнату поруч тримає телефон, на якому грає X: без нього не чути й інших.»; another guest sees the cut-off one's row with «Кіра і Ганна мають з’єднатися ще раз кодами.»; a guest waiting for a seat gets the row of the phone that holds the room too | «З’єднатися знову» (pairing again) only where it works; «Не чекати» (their place goes) where it works from here |
 | `loading`   | «X повертається в гру»: back in a new tab or device, their game not open there yet | none (owner, decision 4) |
 | `closed`    | «X зараз не в грі — чекаємо»: a player of our round, in the room, whose game is closed (after 2 s: following the room into a game takes a moment), while nobody we play with has it open, or it is the round's runner; «X зараз не в грі» while others play on with us (a game for 3+: whether the round goes on without them is the game's rule; decision 52) | none: the game's own quit (`round.quit()`) is the way out |
 | `restoring` | «Повертаю гру з того місця, де ви зупинилися…»: our copy runs a saved round (a reload) and its snapshot has not come for 1 s; «Аня повертає гру з того місця, де ви зупинилися…»: Аня's copy, the round's runner, waits so for it while ours has none to send (when it comes, the round runs on; one on no device ends it, `lost`, after 15 s) | none |
@@ -614,8 +634,12 @@ Its look is the game's: `.wait-row`, `.wait-time`, `.fine`, `.btn`, `.btn.ghost`
 [data-kind=seat] .fine{display:none}` to hide a line the game already shows. The library adds one `<style
 data-ihroteka-wait>` to the game's `<head>`: `ihroteka-wait:empty{display:none!important}`, and at zero specificity
 (`:where`: any rule of the game's wins) a block, rows that wrap and centre with a small gap, paragraphs without
-margins, a time that never breaks, and the small line on a line of its own. That style is there only inside the
-library: a game that gives the element a box (padding, a border, a background) also says
+margins, a time that never breaks, and the small line on a line of its own; and a copy that gets rows (empty a moment
+before) comes in calmly, `animation: ihk-keep var(--m-in,200ms) var(--m-ease-out,ease-out) both` (4 px up, from
+opacity .01, never from 0: see "Motion" below), above what moves past it in the game (`position:relative; z-index:1`),
+so it stays the holder all through its entry. Its rows change in place (the time each second, a row that comes or
+goes), and the entry does not play again; rows that move to the card or another copy are not animated out. That style
+is there only inside the library: a game that gives the element a box (padding, a border, a background) also says
 `ihroteka-wait:empty{display:none}` itself (without `!important`), so its page opened on its own shows no empty box.
 
 **Rules for a game:**
@@ -629,6 +653,9 @@ library: a game that gives the element a box (padding, a border, a background) a
    `ihroteka-wait[showing]:not([showing=version])` exists (a version note alone is no waiting message).
 5. Keep it out of a `role=dialog aria-modal` layer unless a copy is inside that dialog, or a screen reader cannot reach
    its buttons.
+6. Never set `opacity:0` on a copy or on a panel around it, not even for the first frame of an entry (start a fade at
+   .01, as the library's keyframes do), and lay nothing of the game's over a copy with a higher `z-index` (the copy's
+   is 1: what moves past it passes under it): for that frame the copy is unseen, and the rows go to the card.
 
 A real-time game, the way Two Dragons does it: a copy in each menu panel, in flow, and one over the field, below the
 menu's overlay (positioned where a banner would be): with the menu open, the field's copy is covered and the open
@@ -665,6 +692,72 @@ reader hears the move it did not see, who added what and the total, before the l
 **On the dev server** the console says so, once: `ihroteka-wait: leave it empty: the library fills it` (something was
 put in a copy), and `ihroteka-wait: none of this game's waiting screens is seen (hidden, covered or out of view): the
 library's card over the game says it instead`.
+
+### Motion: how the library moves, and what a game may use
+
+The library moves calmly, one way everywhere (owner, decision 62; `library/app/motion.js`, its rules at its top). State
+first: what shows, what is hidden, inert or heard, and the focus change at once, as they would with no motion at all,
+and nothing waits for an animation; what leaves is gone at once (a copy of it, with no ids or roles, unheard and
+untouchable, fades); only `transform` and `opacity` move, for 240 ms at most (longer only the owner's holds, decision
+63); under «менше руху» nothing moves or scales, only fades of 120 ms at most.
+
+A game gets the same vocabulary as it starts. While its `<head>` is still being parsed (`ihroteka`'s attach, before its
+body and before its own styles), the library:
+- puts `<style data-ihroteka-motion>` into its `<head>`, before the game's own styles: the tokens on `:root` —
+  `--m-press` 80 ms, `--m-release` 160 ms, `--m-quick` 140 ms, `--m-in` 200 ms, `--m-move` 240 ms, and the easings
+  `--m-ease-out`, `--m-ease-in`, `--m-ease-move`, `--m-spring` (a release only: about 5 % overshoot) — and the
+  keyframes: entries `ihk-in` (12 px up), `ihk-pop` (a dialog), `ihk-drop` (from the top), `ihk-keep` (4 px: a row, a
+  waiting copy), `ihk-fwd` and `ihk-back` (a step, from opacity .4), `ihk-fade`, `ihk-beat` (a countdown digit),
+  `ihk-up` and `ihk-down` (a score that rolls); exits `ihk-out`, `ihk-sink`, `ihk-fade-out`; and `ihk-tick` (a beat),
+  `ihk-land` (a card that lands), `ihk-look` («look here»: an ink outline that fades), `ihk-drain` (a bar that
+  empties). Every entry starts at opacity .01, never 0 (see the waiting screens' rule 6); the distances are in the
+  keyframes (no `var()` inside `@keyframes`: Safari 15 ignores it there). The tokens are at zero specificity
+  (`:where(:root)`), and the game's own rules (and its own `@keyframes` of the same name) win; only the off switch and
+  the focus ring (below) win over them.
+- sets on the game's `<html>`: `data-ihroteka` (it is in the library, before its body is parsed: CSS can keep a place
+  for «← Усі ігри» from the first paint, `html[data-ihroteka] …`); `data-input`, `pointer` or `key`: the last input in
+  the library's page or any game's window (a press of a pointer; a navigation key: Tab and Escape, or Enter, Space,
+  the arrows, Home, End, PageUp and PageDown outside a text field), the library's at attach, absent before any; and
+  `data-motion="off"` when motion is off.
+- listens for `touchstart` on the game's document (passive: it does nothing), so iPhones show `:active` on a press.
+
+The game's first paints are not seen: the library's opening card (the game's cover and title; «Аня відкриває «…»…»
+when the room follows Аня; after 0.3 s «Відкриваю гру…» and «До бібліотеки») stands over its frame until it is ready:
+its page loaded, then the house fonts, Onest and Unbounded, in (0.15 s at most for them) and one frame more (motion
+off: at its load). Then the card goes at once (its copy fades over the game) and the game has the focus (unless a
+library dialog is open then, as a room link's name: the dialog keeps it). What a game
+paints after its `load` (pictures it fetches itself) is seen as it comes.
+
+Nothing moves by itself: a game uses the names in its own CSS, with the fallbacks, as
+`animation: ihk-in var(--m-in,200ms) var(--m-ease-out,ease-out) both` (a class it restarts from its script for a beat
+or a roll). A game page opened on its own has none of it: the names are unknown there, and nothing moves. In a game the
+library itself animates only its waiting screens' entry (above); the games on the shelf get the vocabulary at attach
+and do not use it in their own CSS yet (docs/ROADMAP.md).
+
+**The focus ring by modality**, after a tap or a click: no ring on a button the game focuses; after a navigation key, a
+ring; on a text field, always:
+
+```css
+:root[data-input=pointer] :focus-visible:not(input,textarea,select){outline-color:transparent}
+```
+
+(It outranks a plain `button:focus-visible` rule of the game's; a game that wants its ring after a tap too says so with
+a more specific rule.)
+
+**«Менше руху»** (`prefers-reduced-motion: reduce`, followed live): inside its media query every keyframe that moves is
+a fade (no `transform`), `ihk-tick`, `ihk-land` and `ihk-drain` do nothing (the static state says it), `ihk-look` is a
+step of 600 ms, and the tokens are shorter (press and release 0, the rest 100–120 ms). A game's own keyframes that move
+are redefined the same way in its own `@media (prefers-reduced-motion: reduce)`, and its spinners stop there.
+
+**Motion off** (`html[data-motion=off]`): every animation and transition is instant (durations and delays 0,
+`!important`), and the library makes no copies, glides or flights: the browser scenarios see each state at the moment
+it comes (tests/e2e/README.md). The library's page turns it on from its first script, before anything is painted, when
+`window.__ihrotekaMotion` is `'off'` (the scenarios set it) or `localStorage` `'ihroteka-motion'` is `'off'` (by hand:
+`localStorage.setItem('ihroteka-motion', 'off')` on the library's address, then reload; `removeItem` brings motion
+back); a game's `<html>` gets it at attach. A game whose own script moves something (a glide, a restarted class) checks
+it too: with `document.documentElement.dataset.motion === 'off'` it changes the state and moves nothing. The library's
+holds (decision 63: «Ви граєте разом» 2.4 s, 0.6 s before «Чекаємо, поки повернеться…») and its other timed words keep
+their time with motion off too: they are what the player is meant to read, not motion.
 
 ### A multiplayer game on it, the way Two Dragons does it
 
@@ -747,7 +840,8 @@ and send whatever it likes wherever it likes. `window.ihroteka` is a convenience
 library's own people belong on it. Sandboxed frames with a message API come when games come from other authors
 (owner, decision 23: [docs/ROADMAP.md](docs/ROADMAP.md)). The trust goes the other way too: the library page writes into
 the game's document (the rows of its waiting screens, one `<style data-ihroteka-wait>`, the `showing` attribute: see
-"Waiting screens"), as same-origin trusted code; the policy below has no `style-src`, so that style is allowed.
+"Waiting screens"; one `<style data-ihroteka-motion>` and the attributes of its `<html>`: see "Motion"), as same-origin
+trusted code; the policy below has no `style-src`, so those styles are allowed.
 
 What the page does close, against mistakes rather than against a game:
 - **Scripts.** The page's Content-Security-Policy (a `<meta>` in `library/app/page.html`; a game's `srcdoc` frame
@@ -779,9 +873,11 @@ What the page does close, against mistakes rather than against a game:
   site not added to the home screen (the key and the offline copy) after 7 days of use without a visit. Storage that
   does not answer in time (Safari, now and then) is not taken for «nothing remembered»: the dialog shows, keeps asking
   the storage (for about a minute), and closes by itself, opening the game, when the key comes after all. While the
-  password is checked (a cheap phone may take seconds) the dialog says «Відмикаю…», and after a second «Відмикаю… Це
-  може тривати кілька секунд.» (a status line, there and empty before, so a screen reader hears the first words too);
-  «Скасувати» (or Escape, or a tap outside) meanwhile stores nothing. «Забути пароль на цьому пристрої» marks the
+  password is checked (a cheap phone may take seconds) «Відкрити» says «Відмикаю…» in itself after 0.3 s, and a status
+  line under it says «Відмикаю…», after a second «Відмикаю… Це може тривати кілька секунд.» (there and empty before, so
+  a screen reader hears the first words too; on the screen only with motion off, see "Motion");
+  «Не той пароль.» comes in the place kept for it under the field; «Скасувати» (or Escape, or a tap outside) meanwhile
+  stores nothing. «Забути пароль на цьому пристрої» marks the
   device first: if its storage did not answer, the next page finishes the forgetting; if neither could be written, the
   button stays, with «Не вдалося забути пароль. Закрий вкладку й спробуй ще раз.». A person removed from the keyring
   can open no game sealed after that (their device's offline copy keeps opening the games it already has until it

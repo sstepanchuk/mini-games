@@ -8,7 +8,7 @@
 // Спробуйте ще раз.», «Спробувати ще» (before: «Чекаю на з’єднання…» for good).
 'use strict';
 const { scenario, check, step, until } = require('./support/scenario.cjs');
-const { phone, pair, allLinked, libState } = require('./support/pages.cjs');
+const { phone, pair, allLinked, libState, chipText } = require('./support/pages.cjs');
 
 scenario('nearbybye: a page that reloads in a nearby room keeps its place', async () => {
   const H = await phone('hhhhhhhhhhhh', 'Ганна'), G = await phone('gggggggggggg', 'Гліб');
@@ -24,7 +24,7 @@ scenario('nearbybye: a page that reloads in a nearby room keeps its place', asyn
   const kept = await until(async () => { const s = await libState(H.p); return s.kind === 'nearby' && s.away.join() === 'Гліб' && s; }, 10000);
   check(kept, 'Ганна’s room goes on; Гліб is away, his place kept', await libState(H.p));
   check(kept && kept.players.join() === 'Ганна,Гліб', 'the same two places', kept && kept.players);
-  check(/зв’язок зник/.test(await H.p.textContent('#together')), 'Ганна’s chip: «Разом · зв’язок зник…»', await H.p.textContent('#together'));
+  check(await chipText(H.p) === 'Зв’язок зник', 'Ганна’s chip: «Зв’язок зник» (owner, decision 65)', await chipText(H.p));
 
   step('his new page pairs again');
   await H.together();

@@ -9,6 +9,9 @@
      so without it the timers' worker is refused there and the internet room loses its keepalive. It lets in nothing
      new: a blob: script is made by code already running here, which may run inline code anyway. -->
 <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' blob: https://cdn.jsdelivr.net/npm/mqtt@5.16.0/dist/mqtt.min.js https://unpkg.com/mqtt@5.16.0/dist/mqtt.min.js; worker-src 'self' blob:; object-src 'none'; base-uri 'self'">
+<!-- Motion off before anything paints (library/app/motion.js): the browser scenarios set window.__ihrotekaMotion
+     (tests/e2e/support/scenario.cjs); by hand, localStorage 'ihroteka-motion' = 'off' -->
+<script>try{if(window.__ihrotekaMotion==='off'||localStorage.getItem('ihroteka-motion')==='off')document.documentElement.dataset.motion='off'}catch(e){}</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="{{theme}}">
 <meta name="robots" content="noindex">
@@ -41,16 +44,10 @@
 <link rel="modulepreload" href="{{base}}lib/ihroteka.js">
 </head>
 <body>
-<!-- #busy: «Відкриваю Ігротеку…» as the page starts; or why the library did not open, with «Спробувати ще» under it
-     (ihrotekaStuck below; index.js stuck). The stage: the open game's frame, under a note while it opens or when it did
-     not («Спробувати ще» / «Ввести пароль»: shell.js) or broke («Скопіювати звіт»). -->
-<p class="busy" id="busy">Відкриваю Ігротеку…</p>
-<noscript><p class="err">Без JavaScript бібліотека не відкриється.</p></noscript>
-
 <section class="shelf" id="shelf" hidden>
   <div class="shelf-head">
     <h1 class="title">Ігротека</h1>
-    <button class="chip" id="together" type="button">Грати разом</button>
+    <button class="chip" id="together" type="button"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.4" r="3.3"/><path d="M2.8 19.6c.7-3.7 3-5.5 6.2-5.5s5.5 1.8 6.2 5.5"/><path d="M15.4 5.4a3.1 3.1 0 1 1 1.2 5.9"/><path d="M17.7 14.3c2 .5 3.2 2.3 3.6 5.3"/></svg><span class="lbl"><span>Грати разом</span></span><i class="dot" aria-hidden="true"></i></button>
   </div>
   <div class="games" id="games"></div>
   <p class="fine" id="install" hidden></p>
@@ -61,23 +58,47 @@
 <section class="stage" id="stage" hidden>
   <div class="stage-note" id="stage-note"><p id="stage-text"></p><button class="btn" id="stage-report" type="button" hidden>Скопіювати звіт</button><button class="btn" id="stage-retry" type="button" hidden>Спробувати ще</button><button class="btn ghost" id="stage-back" type="button">До бібліотеки</button></div>
 </section>
+
+<!-- #boot, after the shelf and the stage (either shown hides it: style.css): as the page starts, nothing for 300 ms, then
+     «Ігротека» and «Відкриваю Ігротеку…» (#busy) fade in. A library that did not open: the same place becomes a card
+     (.stuck) with why (#busy, an alert), «Ще не вийшло — …» under it after a try that did not help (#busy-again), and
+     «Спробувати ще» (#busy-retry): ihrotekaStuck below, or index.js stuck. -->
+<div class="boot" id="boot"><h1 class="title">Ігротека</h1><p class="busy" id="busy">Відкриваю Ігротеку…</p><noscript><p class="err">Без JavaScript бібліотека не відкриється.</p></noscript></div>
 <div id="layer"></div>
 
 <script>
   // The library is a module: if it does not come (the network failed) or this browser cannot run it, say so instead of
-  // spinning forever (no spinner; told to a screen reader); retry: a «Спробувати ще» that loads the page again. Not once
-  // the library started (it says the rest itself: index.js), nor over what was said already.
+  // spinning forever (no spinner; told to a screen reader); retry: a «Спробувати ще» that loads the page again (pending
+  // for 600 ms at least, so the press is seen to do something; also as soon as the network is back), and the page so
+  // reloaded says «Ще не вийшло — …» if it still cannot (the tries, in sessionStorage). Not once the library started
+  // (it says the rest itself: index.js), nor over what was said already.
+  var ihrotekaTries = 0;
+  try { ihrotekaTries = +sessionStorage.getItem('ihroteka-retry') || 0; sessionStorage.removeItem('ihroteka-retry'); } catch (e) {}
   function ihrotekaStuck(text, retry) {
     var b = document.getElementById('busy');
     if (window.__ihrotekaBooted || !b || b.className !== 'busy') return;
+    var box = b.parentNode;
+    box.className = 'boot stuck';
     b.className = 'err';
     b.setAttribute('role', 'alert');
     b.textContent = text;
     if (!retry) return;
+    var again = document.createElement('p');
+    again.className = 'fine'; again.id = 'busy-again'; again.setAttribute('role', 'status');
+    if (ihrotekaTries) again.textContent = 'Ще не вийшло — спробую знову, щойно з’явиться інтернет.';
     var r = document.createElement('button');
     r.className = 'btn'; r.type = 'button'; r.id = 'busy-retry'; r.textContent = 'Спробувати ще';
-    r.onclick = function () { location.reload(); };
-    b.parentNode.insertBefore(r, b.nextSibling);
+    var go = function () {
+      if (r.hasAttribute('aria-busy')) return;
+      try { sessionStorage.setItem('ihroteka-retry', String(ihrotekaTries + 1)); } catch (e) {}
+      r.className = 'btn is-busy'; r.setAttribute('aria-busy', 'true');
+      r.innerHTML = '<span class="spin" aria-hidden="true"></span><span>Спробувати ще</span>';
+      setTimeout(function () { location.reload(); }, 600);
+    };
+    r.onclick = go;
+    addEventListener('online', go);
+    box.insertBefore(again, b.nextSibling);
+    box.insertBefore(r, again.nextSibling);
     r.focus();
   }
   setTimeout(function () { ihrotekaStuck('Цей браузер застарий для бібліотеки. Онови його або відкрий в іншому.'); }, 8000);

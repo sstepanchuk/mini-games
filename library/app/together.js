@@ -103,7 +103,7 @@ const { CAP, SHARE_BYTES, SHARE_KEYS } = rules;
 const REJOIN = 'ihroteka-rejoin', RELOADED = 'ihroteka-reloaded';   // (sessionStorage) see versionCheck
 const KEPT = 'ihroteka-kept';                            // (sessionStorage) see keepRoom
 
-let shell = null;                                        // { current(), follow(id), invite(), address(), seats(id), askName(...),
+let shell = null;                                        // { current(), follow(id, by), invite(), address(), seats(id), askName(...),
                                                          //   wires() → { game: wire } (the shelf's), reload(still?, later?) →
                                                          //   Promise of what it did (see attempt), gameError(), busy() (the
                                                          //   password dialog is open: see versionCheck), newer() → Promise of
@@ -374,7 +374,8 @@ function onLibMessage(m, from, reliable) {
   if (m.t === 'lib-state' && Array.isArray(m.e)) {
     const known = m.e.filter(e => Array.isArray(e) && knownEntry(e)), keys = st.merge(known);
     if (keys.length) trace.note('state ← ' + from + ': ' + keys.join(' '));
-    if (keys.includes('view')) { const v = st.get('view'); if (ID(v) && v !== shell.current()) shell.follow(v); }
+    // (who chose it: the follower's opening card and note name them, «Аня відкриває «…»…», «Аня повертає всіх…»)
+    if (keys.includes('view')) { const v = st.get('view'); if (ID(v) && v !== shell.current()) shell.follow(v, st.by('view')); }
     if (keys.includes('here:' + room.me)) staleHere(st.get('view'));
     if (keys.includes('wire:' + room.me)) staleWires();
     // a player back (in a new tab, or after their place dropped) says where they are now: no longer loading (nor

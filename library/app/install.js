@@ -1,6 +1,7 @@
 // The library as an app on the phone: the service worker keeps every file for offline use (sw.js),
 // and the shelf tells how to install it ("Add to Home Screen" on iPhone, the install button elsewhere).
 import { $, btn, root } from './dom.js';
+import { ghost, play } from './motion.js';
 
 const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
@@ -16,19 +17,24 @@ export function registerWorker({ onUpdate }) {
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (had) onUpdate(); had = true; });
 }
 
-// one line under the shelf: install the app, or how to do it on iPhone, or that it works offline
+// One line under the shelf: install the app, or how to do it on iPhone, or that it works offline (the UX spec I33: in
+// ink, «Встановити» on paper, a finger's size). One that comes later (the browser offers the app) rises in (ihk-in);
+// one that goes is gone at once, its ghost fading (motion.js).
 export function installHint() {
   const box = $('install');
   if (standalone()) { box.hidden = true; return; }
   const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   if (ios) { box.textContent = 'Щоб грати без інтернету, додай Ігротеку на екран: «Поділитися» → «На екран „Додому“».'; box.hidden = false; }
+  const gone = () => { if (box.hidden) return; ghost(box); box.hidden = true; };
   addEventListener('beforeinstallprompt', e => {
     e.preventDefault();
     box.replaceChildren('Ігротека може працювати як застосунок, навіть без інтернету. ');
-    box.append(btn('Встановити', () => { e.prompt(); e.userChoice.finally(() => { box.hidden = true; }); }, 'btn ghost'));
+    box.append(btn('Встановити', () => { e.prompt(); e.userChoice.finally(gone); }, 'btn second'));
+    const was = box.hidden;
     box.hidden = false;
+    if (was) play(box, 'ihk-in');
   });
-  addEventListener('appinstalled', () => { box.hidden = true; });
+  addEventListener('appinstalled', gone);
 }
 
 // ask the browser to keep our files even when space runs low (installed apps usually get it)

@@ -9,7 +9,7 @@
 // поруч тримав телефон, на якому грає Ганна: без нього вона далі не може»).
 'use strict';
 const { scenario, check, step, until } = require('./support/scenario.cjs');
-const { phone, pair, allLinked, libState, frameOf, waitShown, clickWait } = require('./support/pages.cjs');
+const { phone, pair, allLinked, libState, chipText, frameOf, waitShown, clickWait } = require('./support/pages.cjs');
 
 scenario('nearby3: three phones without internet', async () => {
   const H = await phone('hhhhhhhhhhhh', 'Ганна'), G1 = await phone('gggggggggggg', 'Гліб'), G2 = await phone('kkkkkkkkkkkk', 'Кіра');
@@ -25,7 +25,7 @@ scenario('nearby3: three phones without internet', async () => {
   await pair(H, G2, { adding: true });
   const three = async () => (await Promise.all(ALL.map(x => libState(x.p)))).every(s => s.linked && s.players.join() === ROSTER);
   check(await until(three, 20000), 'all three linked, the same roster: ' + ROSTER, await Promise.all(ALL.map(x => libState(x.p))));
-  for (const X of ALL) check(/^Разом 3/.test(await X.p.textContent('#together')), X.name + '’s chip: «Разом 3 …»', await X.p.textContent('#together'));
+  for (const X of ALL) check(await chipText(X.p) === 'Разом · 3', X.name + '’s chip: «Разом · 3» (owner, decision 65)', await chipText(X.p));
 
   step('Кіра opens a game; everyone follows');
   if (!(await G2.p.$('.game'))) { check(false, 'a game on the shelf (the dev server serves games/)'); return; }
@@ -49,7 +49,7 @@ scenario('nearby3: three phones without internet', async () => {
   // count as away too, net/room.js presence)
   const kept = async () => (await Promise.all([G1, G2].map(x => libState(x.p)))).every(s => s.kind === 'nearby' && s.players.join() === ROSTER && s.away.includes('Ганна'));
   check(await until(kept, 15000), 'the guests keep the room; Ганна is away (her place kept)', await Promise.all([G1, G2].map(x => libState(x.p))));
-  for (const X of [G1, G2]) check(/зв’язок зник/.test(await X.p.textContent('#together')), X.name + '’s chip: «Разом · зв’язок зник…»', await X.p.textContent('#together'));
+  for (const X of [G1, G2]) check(await chipText(X.p) === 'Зв’язок зник', X.name + '’s chip: «Зв’язок зник»', await chipText(X.p));
 
   step('Гліб, who played with Ганна, does not wait for her phone');
   const hub = async X => { const x = await waitShown(X.p); return x.where && /^Чекаємо, поки повернеться Ганна… \d+:\d\d/.test(x.text) && x; };

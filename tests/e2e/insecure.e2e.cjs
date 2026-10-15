@@ -7,7 +7,7 @@
 'use strict';
 const { scenario, launch, watch, check, step, until, w, U } = require('./support/scenario.cjs');
 const { fakeNet } = require('./support/fakenet.cjs');
-const { enterName, openPage, createLink, libState, dialogText } = require('./support/pages.cjs');
+const { enterName, openPage, createLink, libState, chipText, dialogText } = require('./support/pages.cjs');
 
 // before the library's code (after the fake network's): no Web Crypto, and every broker connection counted
 function PLAIN() {
@@ -55,7 +55,7 @@ scenario('insecure: no Web Crypto (plain http): nearby only, saying why; a room 
   const note = await until(() => Q.evaluate(() => [...document.querySelectorAll('.toast')].map(x => x.textContent).join(' ')), 3000, 50);
   check(/через https/.test(note), 'a note says why', note);
   check(await until(async () => (await libState(Q)).status === 'unavailable', 5000), 'no internet room: unavailable', await libState(Q));
-  check((await Q.textContent('#together')).trim() === 'Лише через https', 'the chip: «Лише через https»', await Q.textContent('#together'));
+  check(await chipText(Q) === 'Лише через https', 'the chip: «Лише через https»', await chipText(Q));
   await Q.click('#together');
   await Q.waitForSelector('.dialog');
   const d = await dialogText(Q);

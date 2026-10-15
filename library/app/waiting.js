@@ -22,16 +22,26 @@
                 коли буде інтернет»; why our update did not happen, with «Спробувати ще»; a game one shelf lacks (q10)
    Every name stands in the nominative (arbitrary names cannot be declined; and no gender: q16), without direction
    controls (shown), and the screens isolate it where it stands (iso: a name never reorders the rest of its line, q17).
+   Our own internet gone (facts.offline: the others only look away), the link rows are one: «Немає інтернету на цьому
+   пристрої — чекаємо, поки зв’язок повернеться…», nothing to press (owner, UX Q2). A player away less than GRACE is not
+   named yet (settled: a reload is back in a moment; owner, UX Q1).
+   Outside a game's screens, for invite.js (owner, UX Q3, Q4): the chip's words and dot (chipLook), the link screen's
+   statuses still under way (underway: a spinner only then), and the notes at the bottom (noteOf: none repeats what a
+   dialog or the game already says). tests/app/together-ux.test.js pins them.
    ===================================================================== */
 export const KINDS = ['link', 'loading', 'closed', 'restoring', 'seat', 'version'];   // row order; api-surface.json "screens"
 // a button: its text and its classes (the markup's hooks, screens.js)
-export const LABEL = { repair: ['З’єднатися знову', 'btn'], release: ['Не чекати', 'btn ghost'], update: ['Оновити', 'btn ghost'], retry: ['Спробувати ще', 'btn ghost'] };
+export const LABEL = { repair: ['З’єднатися знову', 'btn'], release: ['Не чекати', 'btn ghost'], update: ['Оновити', 'btn'], retry: ['Спробувати ще', 'btn ghost'] };
 // what a screen reader calls a button that acts on one player (its aria-label: the visible words first, then whom, the
 // name in the nominative as the row says it: owner, decision 42); «З’єднатися знову», «Оновити» and «Спробувати ще» keep
 // their plain names: the same on every row
 export const NAMED = { release: n => 'Не чекати, поки повернеться ' + shown(n) };
 const NEARBY = 'Зв’язок поруч сам не відновиться: з’єднайтеся ще раз кодами.';
 const RESTORING = 'Повертаю гру з того місця, де ви зупинилися…', SEAT = 'Ти чекаєш на місце';
+// our own internet is gone (an internet room whose brokers we no longer reach): the others only look away from here
+export const OFFLINE = 'Немає інтернету на цьому пристрої — чекаємо, поки зв’язок повернеться…';
+// a player away less than this (ms) is not named as one who dropped out yet: a reload is back in a moment (owner, UX Q1)
+export const GRACE = 600;
 // the time a place is still kept, m:ss (165000 → 2:45, 1 → 0:01)
 export const mmss = ms => { const s = Math.max(0, Math.ceil(ms / 1000)); return (s / 60 | 0) + ':' + String(s % 60).padStart(2, '0'); };
 // names as the screens join them: «Аня», «Аня і Богдан», «Аня, Богдан і Віра» (no .at(): Safari 15.4)
@@ -77,17 +87,16 @@ const FAILED = new Map([
 // What a page says of a version gap (rules.versionGap, with failed: together.js), each its own part (owner, decision 9
 // and q11): the older page that it should update, the newer that the friend should, nearby (no internet: a reload
 // brings back the same copy) when there is internet; why our update did not happen; a game one shelf lacks (q10: whom,
-// or that this one lacks it). short: the chip's words (a game's and a failure's as they are, or the side only).
+// or that this one lacks it). (The chip says «Інша версія» for all of them: chipLook below.)
 // gap: { why, older, failed, missing, who }
-function versionLine(gap, { nearby = false, short = false } = {}) {
+function versionLine(gap, { nearby = false } = {}) {
   const failed = FAILED.get(gap.failed);
-  if (failed) return plain(short ? 'У друга новіша версія' : failed);
+  if (failed) return plain(failed);
   if (gap.why === 'game' && gap.missing === 'theirs' && gap.who && gap.who.length) {
     return line(joined(gap.who), gap.who.length > 1 ? ' не можуть' : ' не може', ' відкрити цю гру: там інша версія Ігротеки');
   }
   if (gap.why === 'game' && gap.missing === 'ours') return plain('У кімнаті відкрили гру, якої тут немає');
   const older = gap.older === true;
-  if (short) return plain(older ? 'У друга новіша версія' : 'У друга старіша версія');
   return plain((older ? 'У друга новіша версія — онови сторінку' : 'У друга старіша версія — хай оновить сторінку') + (nearby ? ', коли буде інтернет' : ''));
 }
 export const versionWords = (gap, opts) => versionLine(gap, opts).text;
@@ -97,7 +106,8 @@ export const versionAct = gap => FAILED.has(gap.failed) ? 'retry' : 'update';
 
 // facts: null (nothing to say: the shelf) | { waits: [{ name, why: 'link'|'loading'|'closed', left, release, round?,
 //   repair?, cut?, on? }], restoring: false | true | { by: name }, seat: null | { players: [names] },
-//   gap: null | { key, older, failed, why, game, missing, who }, offer: bool, nearby: bool, host: the hub's name (nearby) }
+//   gap: null | { key, older, failed, why, game, missing, who }, offer: bool, nearby: bool, host: the hub's name (nearby),
+//   offline: our own internet is gone (invite.js: then one row, OFFLINE, for whoever dropped out) }
 // → { rows: [{ key, kind, name, text, time, fine, acts: [{ act, arg }], say, classic, iso }], showing, say, key }
 //   time: ms left (link only, else null); say: what a screen reader hears (never the time; nearby, why with the first
 //   row that says it only); classic: a row of the card from before the screens (placeLines); key: a row's identity
@@ -109,7 +119,9 @@ export function screen(facts) {
     rows.push({ key: kind + ':' + (name || '') + ':' + acts.map(a => a.act).join(',') + ':' + extra, kind, name, text: l.text, time, fine: fine && fine.text, acts, say,
       classic, iso: { text: l.at, fine: fine ? fine.at : [] } });
   let told = false;                                      // nearby: why pairing again is needed, heard once (with the first)
+  let off = false;                                       // (our own internet gone: its row once, where the first link row was)
   for (const x of facts.waits || []) {
+    if (x.why === 'link' && facts.offline) { if (!off) { off = true; add('link', null, plain(OFFLINE), { classic: true, extra: 'offline' }); } continue; }
     const link = x.why === 'link', l = (x.why === 'closed' && x.on ? LINE.on : LINE[x.why])(x.name);
     let fine = null, say = l.text, extra = x.why === 'closed' && x.on ? 'on' : '';
     if (link && x.cut) { fine = CUT(x.name); say += ' ' + fine.text; extra = 'cut'; }
@@ -132,6 +144,9 @@ export function screen(facts) {
   }
   return { rows, showing: [...new Set(rows.map(r => r.kind))].join(' '), say: sayOf(rows), key: rows.map(r => r.key).join('|') };
 }
+// The facts without the players who dropped out less than GRACE ago (awayFor(name) → ms away): their link rows wait
+// until then (a reload is back in a moment); the rest as given (a new object: the facts given are not changed)
+export const settled = (facts, awayFor) => facts && { ...facts, waits: (facts.waits || []).filter(x => x.why !== 'link' || !(awayFor(x.name) < GRACE)) };
 // the rows as sentences: '. ' between them, only a space after one that already ends one («…», «.»)
 export const sayOf = rows => rows.reduce((s, r) => !s ? r.say : s + (/[.…!?]$/.test(s) ? ' ' : '. ') + r.say, '');
 // The card's rows (invite.js): none while a copy of the game's holds them (held); before the game's page has parsed
@@ -139,3 +154,32 @@ export const sayOf = rows => rows.reduce((s, r) => !s ? r.say : s + (/[.…!?]$/
 // exactly the card from before the screens (classic rows: link and loading of whom we play with, and version)
 export const placeLines = (rows, { ready, adopted, held }) =>
   held ? [] : !ready ? rows.filter(r => r.kind === 'version') : adopted ? rows : rows.filter(r => r.classic);
+
+/* ---------- outside a game's screens: the chip, the link screen's status, the notes (invite.js) ---------- */
+// The chip on the shelf (owner, UX Q3): a word or two that say the state (never the colour alone), and its dot ('' none,
+// 'wait', 'on', 'lost', 'warn'); the ping only in the dialog. c: null (no room) | { linked, weak, players (how many),
+// nearby, status (net/room.js STATUSES), secure (the page can have internet rooms), gap (another version, while not
+// together) } → { text, dot }
+export function chipLook(c) {
+  if (!c) return { text: 'Грати разом', dot: '' };
+  if (c.linked) return c.weak ? { text: 'Зв’язок зник', dot: 'lost' } : { text: 'Разом' + (c.players > 2 ? ' · ' + c.players : ''), dot: 'on' };
+  if (c.gap) return { text: 'Інша версія', dot: 'warn' };
+  if (c.nearby) return { text: 'З’єднуюсь…', dot: 'wait' };
+  if (c.status === 'unavailable' && !c.secure) return { text: 'Лише через https', dot: 'lost' };
+  if (c.status === 'unavailable' || c.status === 'no-signal') return { text: 'Без інтернету', dot: 'lost' };
+  return { text: 'Чекаю…', dot: 'wait' };
+}
+// the link screen's statuses that are still under way (a spinner beside them: owner, UX I22); the others say how it is
+const UNDERWAY = new Set(['connecting', 'no-signal', 'waiting', 'joining', 'peer-left']);
+export const underway = status => UNDERWAY.has(status);
+// A note at the bottom of the screen for a change of the room (together.js onChange), or '' (owner, UX Q4: none repeats
+// what a dialog or the game already says). c: { kind, players (how many), linked, dialog (the open «Грати разом»
+// screen, or ''), game (the open game shows the room itself: it placed its <ihroteka-wait>), known (everyone we hear
+// now we were linked with before: only a reload, or a link that started over) }
+export function noteOf(what, c) {
+  if (c.game) return '';
+  if (what === 'linked') return c.dialog || c.known ? '' : c.kind === 'nearby' ? 'Ви разом, поруч без інтернету' : 'Ви разом!';
+  if (what === 'join') return c.linked && c.players > 2 && c.dialog !== 'together' ? 'Тепер вас ' + c.players : '';
+  if (what === 'leave') return c.linked ? 'Одне місце звільнилося' : '';
+  return '';
+}

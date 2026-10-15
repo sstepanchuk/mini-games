@@ -5,8 +5,9 @@
 // code of the last room is used again only if it is that long (a shorter one is from before the seal, phase 5).
 // «Ви граєте разом» stays as it is while the room changes (a third player joins, drops out, comes back): only what it
 // says changes, and the focused «Від’єднатися» keeps its focus. The notes at the bottom of the screen stack in a column
-// and never cover each other, and the same one twice shows once (owner, decision 40). The last friend gone for good:
-// the link screen says so (decision 28). A name left empty: «Напиши своє ім’я» (decision 40).
+// and never cover each other, also over a dialog, and the same one twice shows once (owner, decision 40); none says
+// what the open «Грати разом» says already (decision 66: so the link's dialog is closed first). The last friend gone
+// for good: the link screen says so (decision 28). A name left empty: «Напиши своє ім’я» (decision 40).
 'use strict';
 const { scenario, check, step, until, launch } = require('./support/scenario.cjs');
 const { openPage, createLink, enterName, phone, pair, allLinked, libState, dialogText } = require('./support/pages.cjs');
@@ -18,9 +19,9 @@ function noteToasts() {
   const look = () => {
     const c = document.querySelector('#layer > .toasts');
     if (c) c.style.pointerEvents = 'auto';               // (the column lets taps through: hit-testable only for this look)
-    const now = [...document.querySelectorAll('.toast:not(.out)')].map(t => {
+    const now = [...document.querySelectorAll('#layer > .toasts > .toast')].map(t => {
       const r = t.getBoundingClientRect(), hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
-      return { text: t.textContent, rect: [r.left, r.top, r.right, r.bottom], top: !!hit && t.contains(hit), dialog: !!document.querySelector('.backdrop') };
+      return { text: t.textContent, rect: [r.left, r.top, r.right, r.bottom], top: !!hit && t.contains(hit), dialog: !!document.querySelector('#layer > .backdrop') };
     });
     if (c) c.style.pointerEvents = '';
     const last = window.__toasts[window.__toasts.length - 1];
@@ -111,6 +112,8 @@ scenario('ui: the play-together dialog, without and with internet; a link and ne
   const An = await openPage(T, 'aaaaaaaaaaaa', undefined, { label: 'Аня' });
   await An.evaluate(noteToasts);
   const code = await createLink(An, 'Аня');
+  await An.keyboard.press('Escape');                     // (open, its «Ви граєте разом» would say it: no note then)
+  await An.waitForSelector('#layer > .backdrop', { state: 'detached' });
   const Bo = await openPage(T, 'bbbbbbbbbbbb', code, { name: 'Богдан' });
   const Vi = await openPage(T, 'cccccccccccc', code, { label: 'Віра' });   // (its name asked: given as soon as Богдан is in)
   check(await allLinked([An, Bo], 15000), 'Аня and Богдан linked');
@@ -119,12 +122,15 @@ scenario('ui: the play-together dialog, without and with internet; a link and ne
   const log = () => An.evaluate(() => window.__toasts);
   const both = await until(async () => (await log()).some(l => l.some(t => t.text === 'Ви разом!') && l.some(t => t.text === 'Тепер вас 3')), 5000, 100);
   check(both, '«Ви разом!» and «Тепер вас 3» both on the screen', await log());
+  await An.click('#together');                           // (a dialog opened while they show: they stay on top of it)
+  await An.waitForSelector('#layer > .backdrop');
   const overlap = l => l.some((t, i) => l.some((u, j) => i < j && meet(t.rect, u.rect)));
   check(!(await log()).some(overlap), 'never one over another', (await log()).filter(overlap));
   const region = await An.evaluate(() => { const c = document.querySelector('#layer > .toasts'); return c && [c.getAttribute('role'), c.getAttribute('aria-live'), c.getAttribute('aria-atomic')].join(); });
   check(region === 'status,polite,false', 'one live region that reads each new note by itself (not the ones still showing again)', region);
   const under = l => l.some(t => !t.top);
-  check((await log()).some(l => l.some(t => t.dialog)) && !(await log()).some(under), 'each on top, of the open dialog too («Ви разом!» comes while it is open)', (await log()).filter(under));
+  check((await log()).some(l => l.some(t => t.dialog)) && !(await log()).some(under), 'each on top, of a dialog open over them too', (await log()).filter(under));
+  await An.keyboard.press('Escape');
   const Sa = await openPage(T, 'dddddddddddd', code, { name: 'Сава' });
   check(await allLinked([An, Bo, Vi, Sa], 15000), 'Сава joins: four');
   await until(async () => !(await An.$('.backdrop')), 5000);

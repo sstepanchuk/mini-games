@@ -4,8 +4,10 @@
 // more often), and the dialog says why under «Готую код…» and on step 1: «Браузер може спитати дозволу на камеру…».
 // While the page is hidden (another app in front) it is off, and on again when the page is back: on a code shown and
 // on the scan screen, where a pasted code still links; never while a code is being made (that is when it matters).
-// A camera that ends by itself is asked for once more, then the code is pasted by hand. Every way out leaves it off:
-// Escape, «Скасувати», linked, failed, another version. Chromium only (its fake camera; getUserMedia counted in the page).
+// A wrong code typed while the camera runs is said in place, and the camera goes on reading (UX I09: frames still
+// looked at). A camera that ends by itself is asked for once more, then the code is pasted by hand. Every way out leaves
+// it off: Escape, «Скасувати», linked, failed, another version. Chromium only (its fake camera; getUserMedia counted in
+// the page).
 'use strict';
 const { scenario, check, step, until, skip, CHROMIUM } = require('./support/scenario.cjs');
 const { phone, pair, allLinked, libState } = require('./support/pages.cjs');
@@ -14,9 +16,12 @@ if (!CHROMIUM) skip('the fake camera is Chromium’s');
 const LINE = 'Браузер може спитати дозволу на камеру: вона знадобиться на кроці 2, і з нею пристрої поруч з’єднуються надійніше';
 
 // in the page, before the library: every camera stream it gets, its tracks stopped (and whether a code showed then),
-// and whether the dialog said the line while it made a code
+// whether the dialog said the line while it made a code, and how many camera frames were looked at for a code
 function CAMS(line) {
-  window.__cams = []; window.__stops = []; window.__busyLine = false;
+  window.__cams = []; window.__stops = []; window.__busyLine = false; window.__looks = 0;
+  const gid = CanvasRenderingContext2D.prototype.getImageData;
+  CanvasRenderingContext2D.prototype.getImageData = function (...a) { window.__looks++; return gid.apply(this, a); };
+  if (window.BarcodeDetector) { const d = BarcodeDetector.prototype.detect; BarcodeDetector.prototype.detect = function (...a) { window.__looks++; return d.apply(this, a); }; }
   const md = navigator.mediaDevices, gum = md.getUserMedia.bind(md);
   md.getUserMedia = async c => { const s = await gum(c); window.__cams.push(s); return s; };
   const stop = MediaStreamTrack.prototype.stop;
@@ -77,6 +82,12 @@ scenario('nearbycam: the camera, said and off while the page is hidden', async (
   await hide(G, false);
   check(await liveIs(G, 1), 'back: on again', await cam(G));
   check(await until(() => G.p.evaluate(() => document.querySelector('video.scan')?.videoWidth > 0), 5000), '… and its picture plays', await cam(G));
+  await G.p.click('text=Ввести код вручну');
+  await G.p.fill('#layer .dialog input.link', 'ABCDEFGHABCDEFGHABCDEFGHABCDEFGHABCDEFGH');
+  await G.p.press('#layer .dialog input.link', 'Enter');
+  check(await until(async () => /Це не той код\. Спробуй ще\./.test(await G.text()), 5000, 50), 'a wrong code typed: said in place', await G.text());
+  const looks = await G.p.evaluate(async () => { const a = window.__looks; await new Promise(r => setTimeout(r, 1600)); return window.__looks - a; });
+  check(looks >= 4, '… and the camera goes on reading (frames looked at in 1.6 s)', looks);
   await G.paste(offer);
   const answer = await G.code();
   check(await liveIs(G, 0), 'Гліб shows his code: off', await cam(G));
