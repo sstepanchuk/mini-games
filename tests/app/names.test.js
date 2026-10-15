@@ -45,7 +45,12 @@ describe('players named as an object\'s own parts', () => {
     assert.equal(await C.call('rquit'), true);
     assert.ok(await heardR(A, 'end quit toString', 3000), 'over: ' + rlines(await A.game()));
     assert.ok(await heardR(B, 'end quit toString', 3000));
-    assert.deepEqual(await Promise.all([A, B, C].map(async X => { const r = await rec(X); return [r.id, r.on, r.reason, r.by]; })), Array(3).fill([id, false, 'quit', 'toString']));
+    // (toString's game hears its end at once; the quit went to the round's runner, __proto__, and the room's record of
+    // the round reaches toString's copy when the runner's end does, maybe after the others: CI saw it still on)
+    assert.ok(await heardR(C, 'end quit toString', 3000), 'the quitter hears it too: ' + rlines(await C.game()));
+    const ends = () => Promise.all([A, B, C].map(async X => { const r = await rec(X); return [r.id, r.on, r.reason, r.by]; }));
+    await until(async () => (await ends()).every(r => r[1] === false), 3000);
+    assert.deepEqual(await ends(), Array(3).fill([id, false, 'quit', 'toString']));
     // __proto__ cut off (it held the room): constructor lets its place go («Не чекати»: room.release) and holds the room
     await A.net({ up: false });
     assert.ok(await until(async () => (await B.state()).away.includes('__proto__'), 5000), 'away');
