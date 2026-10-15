@@ -7,8 +7,9 @@
 // tab of the copy that does not run the round reloads and gets it back; then the runner's: the round goes on from its
 // snapshot ('run' with it). Meanwhile the other one sees whom the round waits for in the library's waiting screen at
 // the end of the game's page, under its buttons (<ihroteka-wait>, README "Waiting screens": «Чекаємо, поки
-// повернеться …» or «… повертається в гру»), and its +1/+2 stay where they were; never in the library's card over the
-// game (sampled every 100 ms on both pages). At the end «← Усі ігри» in the game takes both to the shelf. Runs on its
+// повернеться …» or «… повертається в гру»), its own line is quiet meanwhile (one message: not «Хід: …» under it),
+// and its +1/+2 stay where they were; never in the library's card over the game (sampled every 100 ms on both pages).
+// At the end each still sees «(ти)» on their own chip, and «← Усі ігри» in the game takes both to the shelf. Runs on its
 // own server: E2E_URL is only checked to be up, by run.cjs.
 'use strict';
 const { launch, scenario, check, step, until } = require('./support/scenario.cjs');
@@ -82,6 +83,8 @@ scenario('newgame: cli new, then two devnet tabs play it without internet', asyn
     const waits = await until(async () => { const x = await waitShown(P[other]); return x.where === 'screen' && says.test(x.text) && x; }, 10000);
     check(waits && waits.say === waits.text.replace(/ \d+:\d\d( Не чекати)?$/, ''), other + '\'s game, meanwhile: whom it waits for («Чекаємо, поки повернеться ' + name + '…» or «' + name + ' повертається в гру») in its waiting screen (a screen reader hears it, not the time)',
       waits || await waitShown(P[other]));
+    const line = await view(F[other]);
+    check(line && line.play && line.say === '', '… and ' + other + '\'s own line is quiet meanwhile (the screen says it, not «Хід: …» too)', line);
     const moved = await stepsTop(F[other]);
     check(top !== null && moved !== null && Math.abs(moved - top) <= 1, '… and ' + other + '\'s +1/+2 stay where they were (' + top + ' → ' + moved + ' px from the top)', [top, moved]);
     await enterName(P[name], name);                         // (the room's link asks for the name again)
@@ -98,6 +101,7 @@ scenario('newgame: cli new, then two devnet tabs play it without internet', asyn
   const won = v && NAMES.find(n => v[n].say === 'Перемога твоя!');
   check(won && NAMES.every(n => n === won || v[n].say === 'Перемога: ' + won + '!'), 'one winner at 10: «Перемога твоя!» / «Перемога: ' + won + '!»', v);
   check(v && NAMES.every(n => !v[n].steps.some(Boolean)), 'no more moves; «Ще раз» on both', v);
+  check(v && NAMES.every(n => v[n].seats.includes(n + ' (ти)')), 'each still sees «(ти)» on their own chip after the end', v);
   check(away.every(u => /^https:\/\/fonts\.(googleapis|gstatic)\.com\//.test(u)), 'nothing but web fonts tried the internet (and got nothing)', away);
   for (const n of NAMES) {
     await count(n);

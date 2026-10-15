@@ -34,8 +34,13 @@
    своїх таких написів не малює (README, «Waiting screens»). Свій напис про паузу чи очікування, якщо додаси, ховай,
    поки бібліотека щось каже (крім версії): document.querySelector('ihroteka-wait[showing]:not([showing=version])');
    коли сказане змінюється, екран шле подію 'showing'. Шаблон слухає її заради фокуса: рядок із «Не чекати», що пішов,
-   забирає фокус клавіатури із собою, і keepFocus ставить його на те, що тепер можна натиснути.
-   Читач екрана чує й хід, якого не бачить: хто скільки додав і скільки разом («Богдан: +2 — 7 з 10. Твій хід»). */
+   забирає фокус клавіатури із собою, і keepFocus ставить його на те, що тепер можна натиснути; і заради рядка стану:
+   поки бібліотека каже, на кого чекаємо, він мовчить (не «Хід: Богдан» під «Чекаємо, поки повернеться Богдан…»).
+   Читач екрана чує й хід, якого не бачить: хто скільки додав і скільки разом («Богдан: +2 — 7 з 10. Твій хід»).
+   Рух (README «Motion»; у бібліотеці, поза нею нічого не рухається): раунд заходить уперед, лобі — назад (з причиною,
+   чому раунд перервано), число котиться вгору, нові слова проявляються (replay: клас руху зі style.css), а те, що зміна
+   зсунула, пливе на нове місце (glide). Спершу стан, потім рух: стан, слова й фокус міняються одразу, а рух лише
+   прикрашає те, що вже є, — ніщо на нього не чекає. */
 import { newRound, move, newer, valid, TARGET, STEPS } from './rules.js';
 
 const lib = window.ihroteka, round = lib ? lib.round : null, room = round ? lib.room : null;
@@ -58,7 +63,10 @@ const runs = () => !ours() || round.runs;               // раунд ведем
 const local = () => Array.from({ length: Math.max(2, lib ? lib.game.players.min : 2) }, (_, i) => 'Гравець ' + (i + 1));
 // чи можна нам ходити: разом — лише на своєму місці й у свою чергу; на одному пристрої — завжди
 const myTurn = () => !!G && G.winner < 0 && (ours() ? G.seats[G.turn] === room.me : !together());
-const name = i => G.seats[i] + (ours() && G.seats[i] === room.me ? ' (ти)' : '');
+// ім'я на фішці; своє — з «(ти)» (разом; і тоді, коли раунд уже скінчився)
+const name = i => G.seats[i] + (!isLocal(G) && G.seats[i] === room.me ? ' (ти)' : '');
+// бібліотека каже, на кого чи на що чекаємо (інша версія — не очікування): рядок стану тоді мовчить
+const libSays = () => !!document.querySelector('ihroteka-wait[showing]:not([showing=version])');
 // почати (і «Ще раз») не можна, поки копії, що починає раунди, немає: бібліотека відкинула б старт. Інших не чекаємо
 // (правило вгорі): ведучий починає й тоді, коли когось немає
 const startOff = () => together() && !round.runs && !!round.runner && room.away(round.runner) > 0;
@@ -161,7 +169,56 @@ function say(text) {
   if ($('say-text').textContent !== text) $('say-text').textContent = text;
 }
 
+/* Рух. Словник руху (ключові кадри ihk-*, токени --m-*) дає бібліотека: вона кладе його в сторінку гри ще до наших
+   стилів і ставить html[data-ihroteka]; без неї тут нічого не рухається, з вимкненим рухом теж (html[data-motion=off]:
+   так у браузерних сценаріях — сторінка тоді та сама, ніщо не додано). «Менше руху» (налаштування системи): ключові кадри
+   бібліотеки самі стають згасанням, а glide нічого не зсуває. */
+const html = document.documentElement;
+const moving = () => html.hasAttribute('data-ihroteka') && html.getAttribute('data-motion') !== 'off';
+const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+const MOTIONS = ['ihk-fwd', 'ihk-back', 'ihk-up', 'ihk-fade'];   // класи руху (style.css)
+// клас руху на el — з початку, хоч би він ще йшов; коли рух скінчився, клас знято
+function replay(el, cls) {
+  if (!moving() || !el.isConnected) return;
+  el.classList.remove(...MOTIONS);
+  void el.offsetWidth;                                   // (стиль перераховано: той самий рух почнеться знову)
+  el.classList.add(cls);
+  const end = e => { if (e.target === el) { el.removeEventListener('animationend', end); el.removeEventListener('animationcancel', end); el.classList.remove(cls); } };
+  el.addEventListener('animationend', end);
+  el.addEventListener('animationcancel', end);
+}
+// glide(els, change): change() — одразу; що з els вона зсунула, пливе на нове місце зі старого (FLIP: лише transform,
+// 240 мс, --m-move), а не стрибає. Спершу всі читання, потім усі записи; що зміна показала чи сховала, не пливе (воно
+// з'являється чи зникає само); що ще пливло, пливе далі звідти, де його видно. Ніщо на це не чекає.
+const gliding = new WeakMap();                           // елемент → його рух, що ще йде
+function glide(els, change) {
+  if (!moving() || calm()) { change(); return; }
+  const rect = e => e.getClientRects().length ? e.getBoundingClientRect() : null;
+  const from = els.map(rect);
+  change();
+  for (const e of els) gliding.get(e)?.cancel();         // (нове місце — без старого руху)
+  const to = els.map(rect);
+  els.forEach((e, i) => {
+    const a = from[i], b = to[i];
+    if (!a || !b || (Math.abs(a.left - b.left) < 1 && Math.abs(a.top - b.top) < 1)) return;
+    const t = 'translate(' + (a.left - b.left) + 'px,' + (a.top - b.top) + 'px)';
+    gliding.set(e, e.animate([{ transform: t }, { transform: 'none' }], { duration: 240, easing: 'cubic-bezier(.4,0,.2,1)' }));
+  });
+}
+// що пливе, коли гра змінюється: кнопки лобі й раунду, рядок стану й екран очікування під ними
+const MOVERS = [$('start'), $('invite'), $('steps'), document.querySelector('.actions'), $('say'), document.querySelector('ihroteka-wait')];
+
+// намалювати стан; що змінилось, рухається (лише в бібліотеці): раунд заходить уперед, лобі — назад, сума котиться
+// вгору (нова — з'являється), нові слова рядка проявляються, а що зсунулось, пливе (glide)
 function draw() {
+  const lobby = !$('lobby').hidden, total = $('total').textContent, text = $('say-text').textContent;
+  glide(MOVERS, paint);
+  if (lobby !== !G) replay($(G ? 'play' : 'lobby'), G ? 'ihk-fwd' : 'ihk-back');
+  else if (G && $('total').textContent !== total) replay($('total'), +$('total').textContent > +total ? 'ihk-up' : 'ihk-fade');
+  if ($('say-text').textContent && $('say-text').textContent !== text) replay($('say-text'), 'ihk-fade');
+}
+
+function paint() {
   $('lobby').hidden = !!G;
   $('play').hidden = !G;
   const no = startOff();
@@ -180,15 +237,20 @@ function draw() {
     keepFocus();
     return;
   }
-  $('total').textContent = G.total;
-  $('seats').replaceChildren(...G.seats.map((s, i) => {
-    const li = document.createElement('li');
-    li.textContent = name(i);
-    if (i === (G.winner >= 0 ? G.winner : G.turn)) li.className = G.winner >= 0 ? 'won' : 'turn';
-    return li;
-  }));
+  if ($('total').textContent !== String(G.total)) $('total').textContent = G.total;
   const over = G.winner >= 0, mine = !isLocal(G) && G.seats[over ? G.winner : G.turn] === room.me;
-  say(over ? (mine ? 'Перемога твоя!' : 'Перемога: ' + G.seats[G.winner] + '!') : mine ? 'Твій хід' : 'Хід: ' + G.seats[G.turn]);
+  // фішки гравців — ті самі вузли від ходу до ходу (міняються лише слова й позначка): чий хід, хто виграв
+  const ol = $('seats');
+  while (ol.children.length > G.seats.length) ol.lastElementChild.remove();
+  while (ol.children.length < G.seats.length) ol.append(document.createElement('li'));
+  G.seats.forEach((s, i) => {
+    const li = ol.children[i], t = name(i), marked = i === (over ? G.winner : G.turn);
+    if (li.textContent !== t) li.textContent = t;
+    li.classList.toggle('turn', marked && !over);
+    li.classList.toggle('won', marked && over);
+  });
+  // поки бібліотека каже, на кого чекаємо, рядок мовчить (фішка й далі показує, чий хід); переможця він каже завжди
+  say(over ? (mine ? 'Перемога твоя!' : 'Перемога: ' + G.seats[G.winner] + '!') : libSays() ? '' : mine ? 'Твій хід' : 'Хід: ' + G.seats[G.turn]);
   for (const b of $('steps').children) off(b, !myTurn() || G.total + +b.dataset.n > TARGET);
   $('again').hidden = !over;
   // вийти: лише з раунду, що йде, і лише тому, хто в ньому грає (хто лише дивиться, не виходить)
@@ -196,6 +258,7 @@ function draw() {
   q.hidden = over || (!isLocal(G) && !(ours() && round.mySeat >= 0));
   if (q.hidden) unask();
   q.textContent = quitAsk ? 'Точно вийти?' : isLocal(G) ? 'Почати заново' : 'Вийти з раунду';
+  q.classList.toggle('ask', !!quitAsk);                  // (червона, і смужка під нею спливає 2,5 с)
   keepFocus();
 }
 

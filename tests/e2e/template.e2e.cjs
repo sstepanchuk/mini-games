@@ -21,8 +21,22 @@
 //     device «Почати заново»; «Почати» unavailable while the copy that starts rounds is away; a quit by another
 //     player: the lobby says who
 //   - a 24-letter name at 320 px: nothing wider than the screen
+//   - the library's look (UX spec §5, S-I13): Onest and Unbounded, a paper card with a 3 px ink border and the pink and
+//     blue shadows, «Почати» the one yellow button, «Запросити друзів» a paper one, «← Усі ігри» a finger's size (44
+//     px), a press sinks 3 px; light only, also when the system is dark
+//   - it fits (S-I15): a round on a phone lying down (844×390) shows its line and «Вийти з раунду»; on a small phone
+//     (320×568) the library's waiting screen is in view, in a round and in the lobby
+//   - while the library's screen says whom it waits for, the game's line is quiet (the chips still mark the turn; the
+//     version is no wait); «(ти)» stays after the end; the chips are the same nodes from move to move, the winner's
+//     mint with a ✓ (S-I14, S-T27)
+//   - motion, in the library (its vocabulary at attach, README "Motion"): the round comes in forward and the lobby back
+//     with the reason, the total rolls up, what the change pushed glides (glide); the state first, so a key works mid-
+//     entry and every animation is over in 600 ms; motion off: nothing moves, nothing added to the page; «менше руху»:
+//     nothing moves or scales; outside the library nothing moves by itself
 'use strict';
-const { launch, scenario, check, step, watch, w } = require('./support/scenario.cjs');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+const { launch, scenario, check, step, watch, w, CHROMIUM } = require('./support/scenario.cjs');
 const { newGame } = require('./support/newgame.cjs');
 
 // (in the page, before its code) ihroteka with a stand-in room and round: their fields in window.__lib (round: its
@@ -70,6 +84,73 @@ const press = (p, sel) => p.evaluate(sel => document.querySelector(sel).click(),
 const sent = async p => (await got(p)).sent.map(([m, o]) => [m.t, m.round ? m.round.total : m.n, o && o.to]);
 const ID = 'r1aaaaaa', ID2 = 'r2bbbbbb', AB = ['Аня', 'Богдан'];
 const rnd = (o = {}) => ({ id: ID, seats: AB, total: 0, turn: 0, winner: -1, moves: 0, ...o });
+
+// where sel is on the screen, with the screen's size (null: it takes no room); inView: all of it on the screen
+const box = (p, sel) => p.evaluate(sel => {
+  const e = document.querySelector(sel);
+  if (!e || !e.getClientRects().length) return null;
+  const r = e.getBoundingClientRect();
+  return { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right), vh: innerHeight, vw: innerWidth };
+}, sel);
+const inView = b => !!b && b.top >= 0 && b.bottom <= b.vh && b.left >= 0 && b.right <= b.vw;
+const wideOf = p => p.evaluate(() => document.documentElement.scrollWidth);
+// (in the page) the library's waiting screen as screens.js paints it into the game's copy: its default style, one row,
+// the attribute and the event `showing`. 'link': a player dropped out (the line, the time, «Не чекати»); 'seat': we
+// wait for a seat (the line, the small line); 'version'; null: empty again
+function COPY(kind) {
+  const e = document.querySelector('ihroteka-wait');
+  if (!document.querySelector('style[data-ihroteka-wait]')) {
+    const s = document.createElement('style');
+    s.setAttribute('data-ihroteka-wait', '');
+    s.textContent = 'ihroteka-wait:empty{display:none!important}:where(ihroteka-wait){display:block}' +
+      ':where(ihroteka-wait:not(:empty)){position:relative;z-index:1;animation:ihk-keep var(--m-in,200ms) var(--m-ease-out,ease-out) both}' +
+      ':where(ihroteka-wait .wait-row){display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 12px}' +
+      ':where(ihroteka-wait p){margin:0;overflow-wrap:anywhere}:where(ihroteka-wait .wait-time){font-variant-numeric:tabular-nums;white-space:nowrap}' +
+      ':where(ihroteka-wait .fine){flex-basis:100%}';
+    document.head.append(s);
+  }
+  const row = document.createElement('div');
+  row.className = 'wait-row';
+  row.dataset.kind = kind;
+  if (kind === 'link') row.innerHTML = '<p>Чекаємо, поки повернеться <bdi>Богдан</bdi>… <span class="wait-time">2:43</span></p><button type="button" class="btn ghost">Не чекати</button>';
+  else if (kind === 'seat') row.innerHTML = '<p>Ти чекаєш на місце</p><p class="fine">Грають зараз: <bdi>Богдан</bdi> і <bdi>Сава</bdi>.</p>';
+  else row.innerHTML = '<p>У когось із вас інша версія Ігротеки.</p><button type="button" class="btn">Оновити</button>';
+  if (kind) { e.replaceChildren(row); e.setAttribute('showing', kind); } else { e.replaceChildren(); e.removeAttribute('showing'); }
+  e.dispatchEvent(new Event('showing'));
+}
+const says = (p, kind = null) => p.evaluate(COPY, kind);
+// the library's motion vocabulary as its attach puts it into a game's page (README "Motion": MOTION_CSS of
+// library/app/motion.js, data-ihroteka on <html>; data-motion=off with motion off)
+let motionCss = null;
+const inLibrary = async (p, off = false) => {
+  motionCss = motionCss || (await import(pathToFileURL(path.join(__dirname, '..', '..', 'library', 'app', 'motion.js')).href)).MOTION_CSS;
+  await p.evaluate(([css, off]) => {
+    const s = document.createElement('style');
+    s.setAttribute('data-ihroteka-motion', '');
+    s.textContent = css;
+    document.head.prepend(s);
+    document.documentElement.setAttribute('data-ihroteka', '');
+    if (off) document.documentElement.setAttribute('data-motion', 'off');
+  }, [motionCss, off]);
+  await p.evaluate(RECORD);
+};
+// (in the page) every animation that starts from now on, in window.__moved: { on (the element's id, or its tag), name
+// (a keyframe's; 'glide': one of the page's script, element.animate), moves (its keyframes move or scale) }. Kept as
+// they start, so a slow machine that reads late still sees what ran (not what still runs)
+function RECORD() {
+  const M = window.__moved = [], moves = k => k.some(f => f.transform && f.transform !== 'none');
+  document.addEventListener('animationstart', e => {
+    const a = e.target.getAnimations().find(x => x.animationName === e.animationName);
+    M.push({ on: e.target.id || e.target.localName, name: e.animationName, moves: !!a && moves(a.effect.getKeyframes()) });
+  }, true);
+  const animate = Element.prototype.animate;
+  Element.prototype.animate = function (k, o) { M.push({ on: this.id || this.localName, name: 'glide', moves: moves(Array.isArray(k) ? k : []) }); return animate.call(this, k, o); };
+}
+// what started since the last call (after two frames: animationstart comes with the next one)
+const moved = p => p.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(window.__moved.splice(0))))));
+// what still moves now, a transition (a press, a hover) aside
+const running = p => p.evaluate(() => document.getAnimations().filter(a => !a.transitionProperty && a.playState !== 'finished').map(a => a.animationName || 'glide'));
+const named = (list, on, name) => list.some(a => a.on === on && a.name === name);
 
 scenario('template: its page on the round\'s events (a stand-in library)', async () => {
   const G = await newGame('demo1'), U2 = G.url;
@@ -300,4 +381,147 @@ scenario('template: its page on the round\'s events (a stand-in library)', async
   await remit(p, 'run', { id: ID, seats: ['Аня', LONG], setup: null, state: null });
   await p.click('#steps button[data-n="1"]');
   check((await view(p)).say === 'Хід: ' + LONG && await wide() === 320, 'a round, «Хід: ШШШ…»: the page 320 px wide', [await view(p), await wide()]);
+
+  step('the library\'s look, light only');
+  p = await open();
+  const INK = 'rgb(35, 32, 74)', PAGE = 'rgb(228, 226, 240)', PAPER = 'rgb(246, 245, 251)', YELLOW = 'rgb(255, 217, 26)';
+  const look = () => p.evaluate(() => {
+    const css = s => getComputedStyle(document.querySelector(s)), b = s => { const c = css(s); return c.borderTopWidth + ' ' + c.borderTopStyle + ' ' + c.borderTopColor; };
+    const h = s => document.querySelector(s).getBoundingClientRect().height;
+    return { scheme: getComputedStyle(document.documentElement).colorScheme, page: css('body').backgroundColor, ink: css('body').color, text: css('body').fontFamily,
+      title: css('h1').fontFamily, card: { bg: css('main').backgroundColor, border: b('main'), radius: css('main').borderTopLeftRadius, shadow: css('main').boxShadow },
+      start: { bg: css('#start').backgroundColor, border: b('#start'), h: h('#start') }, invite: { bg: css('#invite').backgroundColor, border: b('#invite'), h: h('#invite') },
+      home: h('#home') };
+  });
+  let lk = await look();
+  check(/^Onest\b/.test(lk.text.replace(/["']/g, '')) && /^Unbounded\b/.test(lk.title.replace(/["']/g, '')), 'Onest for its words, Unbounded for its title', [lk.text, lk.title]);
+  check(lk.card.bg === PAPER && lk.card.border === '3px solid ' + INK && lk.card.radius === '18px' && /^rgb\(255, 79, 163\) 6px 6px 0px\b.*, rgb\(43, 108, 240\) -6px -6px 0px\b/.test(lk.card.shadow),
+    'a paper card: a 3 px ink border, 18 px corners, the pink and blue shadows', lk.card);
+  check(lk.start.bg === YELLOW && lk.start.border === '3px solid ' + INK && lk.start.h >= 44, '«Почати»: the yellow one, an ink border', lk.start);
+  check(lk.invite.bg !== YELLOW && [PAPER, 'rgb(255, 255, 255)'].includes(lk.invite.bg) && lk.invite.border === '3px solid ' + INK && lk.invite.h >= 44, '«Запросити друзів»: a paper one', lk.invite);
+  check(lk.home >= 44, '«← Усі ігри»: 44 px at least, for a finger', lk.home);
+  if (CHROMIUM) {                                         // (:active under Playwright's mouse: checked where it is sure)
+    await p.hover('#start');
+    await p.mouse.down();
+    await w(300);
+    const sunk = await p.evaluate(() => getComputedStyle(document.getElementById('start')).transform);
+    await p.mouse.move(0, 0);
+    await p.mouse.up();
+    check(sunk === 'matrix(1, 0, 0, 1, 3, 3)', 'pressed, «Почати» sinks 3 px', sunk);
+  }
+  check(lk.scheme === 'light' && lk.page === PAGE && lk.ink === INK, 'light: the library\'s page and ink', lk);
+  await p.emulateMedia({ colorScheme: 'dark' });
+  lk = await look();
+  check(lk.scheme === 'light' && lk.page === PAGE && lk.ink === INK && lk.card.bg === PAPER && lk.start.bg === YELLOW, '… and the same when the system is dark (light only)', lk);
+
+  step('a round on a phone lying down (844×390), the waiting screen on a small phone (320×568)');
+  p = await open();
+  await p.setViewportSize({ width: 844, height: 390 });
+  await L(p, { linked: true, players: AB, round: { active: true, id: ID, seats: AB, runner: 'Аня', runs: true } });
+  await remit(p, 'run', { id: ID, seats: AB, setup: null, state: null });
+  let at = { say: await box(p, '#say-text'), steps: await box(p, '#steps'), quit: await box(p, '#quit'), wide: await wideOf(p) };
+  check((await view(p)).say === 'Твій хід' && inView(at.say) && inView(at.steps) && inView(at.quit) && at.wide === 844,
+    '844×390, a round: «Твій хід», the steps and «Вийти з раунду» all in view, nothing wider', at);
+  await p.setViewportSize({ width: 320, height: 568 });
+  await says(p, 'link');
+  at = { wait: await box(p, 'ihroteka-wait'), steps: await box(p, '#steps'), quit: await box(p, '#quit'), wide: await wideOf(p) };
+  check(inView(at.wait) && inView(at.steps) && inView(at.quit) && at.wide === 320,
+    '320×568, a round, the library\'s screen says whom it waits for («Чекаємо, поки повернеться Богдан…», «Не чекати»): in view, with the steps and «Вийти з раунду»', at);
+  p = await open();
+  await p.setViewportSize({ width: 320, height: 568 });
+  await L(p, { linked: false, players: ['Богдан', 'Сава'], waiting: ['Аня'], seated: false });
+  await emit(p, 'players', ['Богдан', 'Сава']);
+  await says(p, 'seat');
+  at = await box(p, 'ihroteka-wait');
+  check((await view(p)).lobby && inView(at), '320×568, the lobby, «Ти чекаєш на місце» / «Грають зараз: …»: in view', at);
+
+  step('the line quiet while the library says whom it waits for; «(ти)» after the end; the chips in place');
+  p = await open();
+  await L(p, { linked: true, players: AB, round: { active: true, id: ID, seats: AB, runner: 'Аня', runs: true } });
+  await remit(p, 'run', { id: ID, seats: AB, setup: null, state: null });
+  await p.evaluate(() => { for (const li of document.querySelectorAll('#seats li')) li.dataset.was = li.textContent; });
+  const chips = () => p.evaluate(() => [...document.querySelectorAll('#seats li')].map(li => ({ text: li.textContent, was: li.dataset.was || null, cls: li.className })));
+  await p.click('#steps button[data-n="1"]');
+  let ch = await chips();
+  check((await view(p)).say === 'Хід: Богдан' && ch.length === 2 && ch.every(c => c.was === c.text) && ch[1].cls === 'turn', 'Аня +1: the same two chips (updated in place, not made anew), Богдан\'s marks the turn', ch);
+  await says(p, 'link');
+  v = await view(p);
+  ch = await chips();
+  check(v.say === '' && ch[1].cls === 'turn', 'the library\'s screen says whom it waits for: the line is quiet (the chip still marks whose turn it is)', [v, ch]);
+  await says(p, 'version');
+  check((await view(p)).say === 'Хід: Богдан', 'it says another version (no wait): the line again', await view(p));
+  await says(p);
+  check((await view(p)).say === 'Хід: Богдан', 'it says nothing: the line', await view(p));
+  await emit(p, 'message', { t: 'move', id: ID, n: 2, at: 1 }, 'Богдан');
+  await emit(p, 'message', { t: 'newer', round: rnd({ total: 8, moves: 5, turn: 0 }) }, 'Богдан');
+  await p.click('#steps button[data-n="2"]');
+  await L(p, { round: { active: false } });
+  await remit(p, 'end', { id: ID, by: 'Аня', reason: 'over', result: (await got(p)).overs[0] });
+  await says(p, 'link');
+  await w(300);
+  v = await view(p);
+  ch = await chips();
+  const won = await p.evaluate(() => {
+    const li = document.querySelector('#seats li.won'), mark = ['::before', '::after'].map(x => getComputedStyle(li, x)).find(s => s.content !== 'none' && s.content !== 'normal' && parseFloat(s.width) > 0);
+    return li && { bg: getComputedStyle(li).backgroundColor, mark: !!mark };
+  });
+  check(v.say === 'Перемога твоя!' && v.seats.join() === 'Аня (ти),Богдан' && ch.every(c => c.was === c.text), 'the end: «Перемога твоя!» (said, whoever is waited for), «Аня (ти)» kept, the same chips', [v, ch]);
+  check(won && won.bg === 'rgb(201, 242, 212)' && won.mark, 'the winner\'s chip: mint, with a ✓', won);
+
+  step('motion in the library: forward into the round, back with the reason, the total rolls up, what moved glides');
+  p = await open();
+  await inLibrary(p);
+  const line = await box(p, '#say');
+  await p.click('#start');
+  await p.keyboard.press('2');
+  v = await view(p);
+  let mv = await moved(p);
+  check(v.play && v.total === 2 && v.say === 'Хід: Гравець 2', 'the state first: Start, then a key mid-entry: the round on, +2 at once', v);
+  check(named(mv, 'play', 'ihk-fwd') && named(mv, 'total', 'ihk-up'), 'the round comes in forward (ihk-fwd), its total rolls up (ihk-up)', mv);
+  check(JSON.stringify(await box(p, '#say')) === JSON.stringify(line), 'the card keeps its height: the line under the round stays where it was in the lobby', [line, await box(p, '#say')]);
+  await w(600);
+  check(!(await running(p)).length, 'all over within 0.6 s', await running(p));
+  p = await open();
+  await inLibrary(p);
+  const was = await box(p, '#start');
+  await L(p, { linked: true, players: ['Аня', 'Сава'] });
+  await emit(p, 'linked');
+  v = await view(p);
+  mv = await moved(p);
+  await w(400);
+  const now = await box(p, '#start');
+  check(v.text === 'Грають: Аня, Сава.' && now.top < was.top && mv.some(a => a.on === 'start' && a.name === 'glide' && a.moves),
+    'Сава comes: the lobby says less at once, and «Почати», moved up, glides there (glide)', [v.text, was, now, mv]);
+  p = await open();
+  await inLibrary(p);
+  await L(p, { linked: true, players: AB, round: { active: true, id: ID, seats: AB, runner: 'Аня', runs: true } });
+  await remit(p, 'run', { id: ID, seats: AB, setup: null, state: null });
+  await moved(p);
+  await L(p, { round: { active: false } });
+  await remit(p, 'end', { id: ID, by: 'Богдан', reason: 'quit', result: null });
+  v = await view(p);
+  mv = await moved(p);
+  check(v.lobby && v.say === 'Раунд перервано. Вийти вирішує: Богдан.' && named(mv, 'lobby', 'ihk-back'), 'Богдан quits: the lobby comes back (ihk-back), with the reason at once', [v, mv]);
+
+  step('motion off, «менше руху», outside the library');
+  p = await open();
+  await inLibrary(p, true);
+  await p.click('#start');
+  await p.keyboard.press('2');
+  mv = await moved(p);
+  const added = await p.evaluate(() => [...document.querySelectorAll('[class*="ihk-"], [style*="animation"], [style*="transform"]')].map(e => e.id || e.localName));
+  check((await view(p)).total === 2 && !mv.length && !added.length, 'motion off (html[data-motion=off]): the same state, nothing moves, nothing added to the page', [mv, added]);
+  p = await open();
+  await p.emulateMedia({ reducedMotion: 'reduce' });
+  await inLibrary(p);
+  await p.click('#start');
+  await p.keyboard.press('2');
+  mv = await moved(p);
+  check((await view(p)).total === 2 && mv.length && !mv.some(a => a.moves || a.name === 'glide'), '«менше руху»: fades only (nothing moves or scales, nothing glides)', mv);
+  p = await open();
+  await p.evaluate(RECORD);
+  await p.click('#start');
+  await p.keyboard.press('2');
+  mv = await moved(p);
+  check((await view(p)).total === 2 && !mv.length, 'outside the library: nothing moves by itself', mv);
 }, { timeout: 120000 });

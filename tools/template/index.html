@@ -2,8 +2,14 @@
 <html lang="uk">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#e4e2f0">
 <title>{{title}}</title>
+<!-- шрифти бібліотеки (Onest, Unbounded) не затримують перший показ: поки вони вантажаться (чи без інтернету), видно
+     системний шрифт; у бібліотеці гру видно, коли вони вже є -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;700&family=Unbounded:wght@500;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
 <!-- збірка вбудовує стилі й модулі в одну сторінку (README, «Adding a game») -->
 <link rel="stylesheet" href="style.css">
 </head>
@@ -13,15 +19,20 @@
   <h1>{{title}}</h1>
   <section id="lobby">
     <p id="lobby-text"></p>
-    <button id="start" type="button">Почати</button>
-    <button id="invite" type="button" hidden>Запросити друзів</button>
+    <div class="row">
+      <button class="btn" id="start" type="button">Почати</button>
+      <button id="invite" type="button" hidden>Запросити друзів</button>
+    </div>
   </section>
   <section id="play" hidden>
     <p class="total"><b id="total">0</b> з <span id="target"></span></p>
     <ol id="seats" aria-label="Гравці"></ol>
     <div id="steps" class="steps" role="group" aria-label="Додати"></div>
-    <button id="again" type="button" hidden>Ще раз</button>
-    <button class="ghost" id="quit" type="button" hidden>Вийти з раунду</button>
+    <!-- «Ще раз» і «Вийти з раунду» — в одному рядку сталої висоти: коли одна змінює іншу, нічого під ними не зсувається -->
+    <div class="row actions">
+      <button class="btn" id="again" type="button" hidden>Ще раз</button>
+      <button class="ghost" id="quit" type="button" hidden>Вийти з раунду</button>
+    </div>
   </section>
   <!-- рядок стану — він же живий регіон: читач екрана чує в ньому й хід, якого не бачить (#said, «Богдан: +2 — 7 з
        10.»), а тоді те, що видно (#say-text, «Твій хід») -->

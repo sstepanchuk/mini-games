@@ -10,8 +10,9 @@
 // README "Waiting screens"), and the game's own lobby nothing; whom a game waits for shows in that screen throughout,
 // never in the library's card (sampled every 100 ms on every page). Then a round stands on the turn of a player whose
 // game is closed (the room to the shelf by «← Усі ігри» and back, his game slow to open): the others see «… зараз не в
-// грі», one of them ends it with «Вийти з раунду» (pressed twice), every lobby says who, and his game opens into the
-// lobby. Runs on its own server: E2E_URL is only checked to be up, by run.cjs.
+// грі» (their own lines quiet meanwhile: one message), one of them ends it with «Вийти з раунду» (pressed twice), every
+// lobby says who, and his game opens into the lobby. Runs on its own server: E2E_URL is only checked to be up, by
+// run.cjs.
 'use strict';
 const { launch, scenario, check, step, until, w } = require('./support/scenario.cjs');
 const { openPage, createLink, libState, short, waitShown } = require('./support/pages.cjs');
@@ -124,6 +125,8 @@ scenario('newgame3: the template for three, in devnet tabs: only the runner\'s s
   const closed = await until(async () => { const x = await views([R, O]), y = await Promise.all([R, O].map(n => waitShown(P[n])));
     return [R, O].every(n => x[n] && x[n].play && x[n].total === sum) && y.every(z => z.where === 'screen' && z.text === X + ' зараз не в грі') && [x, y]; }, 10000);
   check(closed, R + ' and ' + O + ' back in the round (' + sum + ', ' + X + '\'s turn), their screens: «' + X + ' зараз не в грі»', closed || [await views([R, O]), await waitShown(P[R]), await waitShown(P[O])]);
+  const lines = closed && await views([R, O]);
+  check(lines && [R, O].every(n => lines[n] && lines[n].say === ''), '… and their own lines are quiet meanwhile (not «Хід: ' + X + '» too)', lines);
   await F[O].click('#quit');
   check((await view(F[O])).quit === 'Точно вийти?', O + ' presses «Вийти з раунду»: «Точно вийти?»', await view(F[O]));
   await F[O].click('#quit');

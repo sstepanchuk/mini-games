@@ -197,7 +197,11 @@ From nothing to two players on screen, then on the shelf:
    `<ihroteka-wait></ihroteka-wait>` (the template's is at the end of the page, under its buttons and its status line,
    seen in the lobby and in a round, and the page stands at the top, not in the middle: when the screen comes or goes,
    nothing above it moves; on a short landscape phone, where that end is out of view, the library's card over the game
-   says it instead): the library fills it; draw no such message yourself (see "Waiting screens").
+   says it instead): the library fills it; draw no such message yourself (see "Waiting screens"). The template looks
+   like the library (Onest and Unbounded, a paper card with an ink border, «Почати» the one yellow button; light only)
+   and, in the library, moves with its vocabulary ("Motion" below): `replay(el, cls)` restarts one of its motion classes
+   (`style.css`: the round comes in forward, the lobby back, the total rolls up, new words fade in), and
+   `glide(els, change)` lets what a change pushed glide there.
 7. `game.json` (validated by the dev server and the build):
    - `title`, `tagline`, `description`, `image`; optional `shareTitle`, `shareDescription`, `imageAlt`, `emoji`,
      `theme`, `players` (`"2"` or `"2-4"`; 2 when not given);
@@ -657,17 +661,20 @@ is there only inside the library: a game that gives the element a box (padding, 
    .01, as the library's keyframes do), and lay nothing of the game's over a copy with a higher `z-index` (the copy's
    is 1: what moves past it passes under it): for that frame the copy is unseen, and the rows go to the card.
 
-A real-time game, the way Two Dragons does it: a copy in each menu panel, in flow, and one over the field, below the
-menu's overlay (positioned where a banner would be): with the menu open, the field's copy is covered and the open
-panel's holds the rows; with it closed, the field's. Its pause banner shows only its own reasons, and only while the
-library says nothing (`libSays()`), redrawn on `showing`; while the library says whom the round waits for, neither its
-hint about the controls nor a joystick waiting for a finger shows over the field (one comes under a finger), and a
-focus lost with a row goes to the open panel. A turn-based one, the way Хрестики-нулики does: one copy right under its
-status line, the page standing at the top (the board never moves when the screen comes or goes; on a short screen it
-is smaller while the screen speaks); the status says nothing of waiting for a seat or for a closed game, nor whose turn
-it is while the round stands still (the score still marks it); a player waiting for a seat sees who plays, with their
-marks and the series, and no board; and the page redraws on `showing` (which also puts the focus back where it
-belongs).
+A real-time game, the way Two Dragons does it: a copy in each menu panel, in flow (in its room under «Почати гру», so
+nothing above the button moves when it speaks), and one over the field, below the menu's overlay (positioned where a
+banner would be): with the menu open, the field's copy is covered and the open panel's holds the rows; with it closed,
+the field's. Its pause banner shows only its own reasons, and only while the library says nothing (`libSays()`),
+redrawn on `showing`; while the library says whom the round waits for, a paper veil lies over the still field (until
+the round plays again), neither its hint about the controls nor a joystick waiting for a finger shows over it (one
+comes under a finger), and a focus lost with a row goes to the open panel. A turn-based one, the way Хрестики-нулики
+does: one copy right under its status line, the page standing at the top (the board never moves when the screen comes
+or goes; on a short screen it is smaller while the screen speaks, and under a finished game's result on any screen but
+a phone on its side, so «Ще раз» stays in view; it glides there and back); the status says nothing
+of waiting for a seat or for a closed game, nor whose turn it is while the round stands still (the score still marks
+it); a player waiting for a seat sees who plays, with their marks and the series, and no board (one who lost the seat
+as a round ended still sees that round's board and result for 1.5 s, then «Твоє місце займає …»: owner, decisions 63
+and 64); and the page redraws on `showing` (which also puts the focus back where it belongs).
 
 **Accessibility.** The copies are plain text and buttons in the game's reading and Tab order; what is said is
 announced once, from the library page's live region (the game's own status lines go quiet, which announces nothing).
@@ -687,7 +694,9 @@ game, only while `document.hasFocus()`, after each redraw, on every `showing` an
 when the focus is lost (on `<body>`, or on a button no longer shown), to what can be pressed now («Почати» or
 «Запросити друзів», the first step, «Ще раз»; never «Вийти з раунду»). Its status line is its live region: a screen
 reader hears the move it did not see, who added what and the total, before the line a sighted player reads
-(«Богдан: +2 — 7 з 10. Твій хід»; its own: «Ти: +1 — …»), and its steps are a group, «Додати».
+(«Богдан: +2 — 7 з 10. Твій хід»; its own: «Ти: +1 — …»), and its steps are a group, «Додати». While the library
+says whom the round waits for (`libSays()`), that line is quiet (one message; the chips still mark whose turn it is,
+and the winner's line always shows).
 
 **On the dev server** the console says so, once: `ihroteka-wait: leave it empty: the library fills it` (something was
 put in a copy), and `ihroteka-wait: none of this game's waiting screens is seen (hidden, covered or out of view): the
@@ -731,8 +740,13 @@ paints after its `load` (pictures it fetches itself) is seen as it comes.
 Nothing moves by itself: a game uses the names in its own CSS, with the fallbacks, as
 `animation: ihk-in var(--m-in,200ms) var(--m-ease-out,ease-out) both` (a class it restarts from its script for a beat
 or a roll). A game page opened on its own has none of it: the names are unknown there, and nothing moves. In a game the
-library itself animates only its waiting screens' entry (above); the games on the shelf get the vocabulary at attach
-and do not use it in their own CSS yet (docs/ROADMAP.md).
+library itself animates only its waiting screens' entry (above); the rest is the game's own. Two Dragons,
+Хрестики-нулики and `cli new`'s template use the names in their CSS; their scripts only restart a class (a countdown
+digit, a score that rolls, a new line), put a copy of what left into a layer of their own (`.ihk-fx`: no ids or roles,
+`aria-hidden`, `inert`, `pointer-events:none`; it fades and goes), let what a change pushed glide there (FLIP,
+`transform` only: the template's `glide(els, change)`, documented in its `main.js`), and, in Two Dragons, ease the
+camera to your dragon during the count inside the canvas's own frame. Their scripts do none of it when `data-motion` is
+off or outside the library, and glide nothing (the camera snaps) under «менше руху».
 
 **The focus ring by modality**, after a tap or a click: no ring on a button the game focuses; after a navigation key, a
 ring; on a text field, always:
