@@ -79,9 +79,12 @@
     if (window.__ihrotekaBooted || !b || b.className !== 'busy') return;
     var box = b.parentNode;
     box.className = 'boot stuck';
-    b.className = 'err';
-    b.setAttribute('role', 'alert');
-    b.textContent = text;
+    // a new line in its place: WebKit (Safari) kept the old one's ring turning (its ::before, still animating) once
+    // .busy was off it
+    var n = document.createElement('p');
+    n.id = 'busy'; n.className = 'err'; n.setAttribute('role', 'alert'); n.textContent = text;
+    box.replaceChild(n, b);
+    b = n;
     if (!retry) return;
     var again = document.createElement('p');
     again.className = 'fine'; again.id = 'busy-again'; again.setAttribute('role', 'status');

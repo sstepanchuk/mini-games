@@ -135,7 +135,8 @@ const SHELF = '#shelf:not([hidden])', PW = '.dialog input[type=password]';
     await c.route('**/lib/ihroteka.js', r => r.abort('internetdisconnected'));
     await p.goto(SITE);
     x = await until(async () => { const y = await busy(p); return y.text === OFFLINE && y; }, 5000, 100);
-    check(x && x.cls === 'err' && !x.spins && x.retry === 'Спробувати ще', 'at once: «' + OFFLINE + '», with «Спробувати ще»', await busy(p));
+    check(x && x.cls === 'err' && !x.spins && x.role === 'alert' && x.retry === 'Спробувати ще' && x.focus === 'busy-retry',
+      'at once: «' + OFFLINE + '», no spinner, told to a screen reader, with «Спробувати ще» (focused)', await busy(p));
     await w(9000);
     check((await busy(p)).text === OFFLINE, 'still that after 9 s (not «застарий»)', await busy(p));
     await c.close();
