@@ -198,7 +198,8 @@ From nothing to two players on screen, then on the shelf:
    seen in the lobby and in a round, and the page stands at the top, not in the middle: when the screen comes or goes,
    nothing above it moves; on a short landscape phone, where that end is out of view, the library's card over the game
    says it instead): the library fills it; draw no such message yourself (see "Waiting screens"). The template looks
-   like the library (Onest and Unbounded, a paper card with an ink border, «Почати» the one yellow button; light only)
+   like the library (Oswald for the title and the numbers, Inter Tight for the words, a paper sheet with an ink frame and
+   head rule, «Почати» the one black button; light only)
    and, in the library, moves with its vocabulary ("Motion" below): `replay(el, cls)` restarts one of its motion classes
    (`style.css`: the round comes in forward, the lobby back, the total rolls up, new words fade in), and
    `glide(els, change)` lets what a change pushed glide there.
@@ -732,7 +733,7 @@ body and before its own styles), the library:
 
 The game's first paints are not seen: the library's opening card (the game's cover and title; «Аня відкриває «…»…»
 when the room follows Аня; after 0.3 s «Відкриваю гру…» and «До бібліотеки») stands over its frame until it is ready:
-its page loaded, then the house fonts, Onest and Unbounded, in (0.15 s at most for them) and one frame more (motion
+its page loaded, then the house fonts, Inter Tight and Oswald, in (0.15 s at most for them) and one frame more (motion
 off: at its load). Then the card goes at once (its copy fades over the game) and the game has the focus (unless a
 library dialog is open then, as a room link's name: the dialog keeps it). What a game
 paints after its `load` (pictures it fetches itself) is seen as it comes.

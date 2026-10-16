@@ -48,7 +48,7 @@ export async function boot({ game, dev } = {}) {
   }
 }
 
-// The shelf's first paint in its own fonts (Onest and Unbounded, which page.html loads without blocking), or after ms,
+// The shelf's first paint in its own fonts (Inter Tight and Oswald, which page.html loads without blocking), or after ms,
 // whichever comes first (I14). Motion off (the tests): none, the page starts as it always did.
 function fontsIn(ms) {
   if (mode() === 'off' || !document.fonts || !document.fonts.load) return null;

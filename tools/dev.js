@@ -49,7 +49,7 @@ function shelfHtml(game, dirs, devnet) {
       return [];
     }
   });
-  const html = page({ title: 'Ігротека (dev)', description: '', shareTitle: '', shareDescription: '', imageUrl: '', imageAlt: '', emoji: '🛠', theme: '#e4e2f0',
+  const html = page({ title: 'Ігротека (dev)', description: '', shareTitle: '', shareDescription: '', imageUrl: '', imageAlt: '', emoji: '🛠', theme: '#eee7d7',
     base: '/', bootArgs: JSON.stringify({ game, dev: { games } }) });
   return devnet ? html.replace('</head>', () => devnetScript() + '\n</head>') : html;   // (before the library's code runs)
 }

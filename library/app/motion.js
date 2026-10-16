@@ -39,7 +39,7 @@
    tint(el, from, to, o)      a colour on a small element (a dot that fills, a chip that is new: never a surface) goes
                               from `from` to `to` (its own), o.duration (140 ms), o.easing; under «менше руху» a step
                               (`from` held as long): a colour, not motion → its Animation, or null
-   typeset(doc, ms, first?)   → a Promise: the house fonts (Onest, Unbounded) in doc, or ms, whichever comes first (after
+   typeset(doc, ms, first?)   → a Promise: the house fonts (Inter Tight, Oswald) in doc, or ms, whichever comes first (after
                               the Promise first: their stylesheet); never rejects (a first paint in the final font)
    busy(btn, text?)/free(btn, o)   the pressed button's busy look: only after 300 ms, then for 500 ms at least, in place
                               (a ring and the words in it, aria-busy). The look only: it blocks no press
@@ -77,7 +77,7 @@ export const MOTION_CSS = `:where(:root){
 @keyframes ihk-up{from{opacity:.01;transform:translateY(.45em)}}                 /* score gained */
 @keyframes ihk-down{from{opacity:.01;transform:translateY(-.45em)}}              /* score lost */
 @keyframes ihk-land{from{transform:scale(.96)}}                                  /* card the player came back to */
-@keyframes ihk-look{from{outline-color:#23204a}to{outline-color:rgba(35,32,74,0)}}   /* «look here», 700 ms */
+@keyframes ihk-look{from{outline-color:#1b1a17}to{outline-color:rgba(27,26,23,0)}}   /* «look here», 700 ms */
 @keyframes ihk-drain{to{transform:scaleX(0)}}                                    /* armed ✕ / auto-closing dialog */
 @media (prefers-reduced-motion:reduce){
   :where(:root){--m-press:0ms;--m-release:0ms;--m-quick:100ms;--m-in:120ms;--m-move:120ms}
@@ -86,7 +86,7 @@ export const MOTION_CSS = `:where(:root){
   @keyframes ihk-beat{from{opacity:.01}} @keyframes ihk-up{from{opacity:.01}}   @keyframes ihk-down{from{opacity:.01}}
   @keyframes ihk-out{to{opacity:0}}      @keyframes ihk-sink{to{opacity:0}}
   @keyframes ihk-tick{to{}} @keyframes ihk-land{to{}} @keyframes ihk-drain{to{}}   /* nothing moves; the static state says it */
-  @keyframes ihk-look{0%,99.9%{outline-color:#23204a}to{outline-color:rgba(35,32,74,0)}}   /* a step: 600 ms, no fade */
+  @keyframes ihk-look{0%,99.9%{outline-color:#1b1a17}to{outline-color:rgba(27,26,23,0)}}   /* a step: 600 ms, no fade */
 }
 /* tests and screenshots: everything instant (motion.js also makes no ghosts, glides or flights) */
 :root[data-motion=off] *,:root[data-motion=off] *::before,:root[data-motion=off] *::after{
@@ -314,7 +314,7 @@ export function typeset(doc, ms, first = null) {
   let fonts = null;
   try {
     const fs = doc && doc.fonts;
-    if (fs && fs.load) fonts = Promise.resolve(first).then(() => Promise.all([fs.load('16px Onest'), fs.load('800 16px Unbounded')]));
+    if (fs && fs.load) fonts = Promise.resolve(first).then(() => Promise.all([fs.load('500 16px "Inter Tight"'), fs.load('700 16px Oswald')]));
   } catch (e) {}
   return Promise.race([Promise.resolve(fonts).catch(() => {}), new Promise(done => setTimeout(done, ms))]);
 }

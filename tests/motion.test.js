@@ -387,14 +387,14 @@ test('ghost(): a part still entering (play) leaves from where its entry got to, 
 test('tint(): a colour on a small element (a step under «менше руху»); settle(): glides end now; typeset(): the house fonts, capped', async () => {
   const D = makeDoc(), dot = D.el('i');
   D.doc.body.append(dot);
-  const a = M.tint(dot, '#fff', '#23204a');
-  assert.deepEqual(a.frames, [{ backgroundColor: '#fff' }, { backgroundColor: '#23204a' }], 'from the colour given to the one it ends on');
+  const a = M.tint(dot, '#fffdf7', '#1b1a17');
+  assert.deepEqual(a.frames, [{ backgroundColor: '#fffdf7' }, { backgroundColor: '#1b1a17' }], 'from the colour given to the one it ends on');
   assert.equal(a.timing.duration, 140, 'quick by default');
-  assert.equal(M.tint(dot, '#c9f2d4', '#fff', { duration: 600, easing: 'ease-in' }).timing.easing, 'ease-in');
+  assert.equal(M.tint(dot, '#f2b91b', '#fffdf7', { duration: 600, easing: 'ease-in' }).timing.easing, 'ease-in');
   D.media.matches = true;
-  assert.equal(M.tint(dot, '#fff', '#23204a').timing.easing, 'step-end', '«менше руху»: a step, not a fade');
+  assert.equal(M.tint(dot, '#fffdf7', '#1b1a17').timing.easing, 'step-end', '«менше руху»: a step, not a fade');
   D.doc.documentElement.setAttribute('data-motion', 'off');
-  assert.equal(M.tint(dot, '#fff', '#23204a'), null, 'off: nothing');
+  assert.equal(M.tint(dot, '#fffdf7', '#1b1a17'), null, 'off: nothing');
   const E = makeDoc(), row = E.el('div');
   E.doc.body.append(row);
   row.rect = { left: 0, top: 100, width: 200, height: 40 };
@@ -406,7 +406,7 @@ test('tint(): a colour on a small element (a step under «менше руху»)
   assert.equal(ended, 1, 'settle: its glide ends at once, once');
   const asked = [], t0 = Date.now();
   await M.typeset({ fonts: { load: f => { asked.push(f); return Promise.resolve([]); } } }, 5000);
-  assert.ok(Date.now() - t0 < 1000 && asked.some(f => /Onest/.test(f)) && asked.some(f => /800 .*Unbounded/.test(f)), 'typeset: Onest and Unbounded, as soon as they are in');
+  assert.ok(Date.now() - t0 < 1000 && asked.some(f => /500 .*"Inter Tight"/.test(f)) && asked.some(f => /700 .*Oswald/.test(f)), 'typeset: Inter Tight and Oswald, as soon as they are in');
   const t1 = Date.now();
   await M.typeset({ fonts: { load: () => new Promise(() => {}) } }, 40);
   assert.ok(Date.now() - t1 >= 35, 'fonts that never come: the cap');

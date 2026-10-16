@@ -1,13 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" fill="#e4e2f0"/>
-  <g transform="rotate(-8 256 256)">
-    <rect x="132" y="132" width="268" height="268" rx="56" fill="#2b6cf0" transform="translate(-22 -22)"/>
-    <rect x="132" y="132" width="268" height="268" rx="56" fill="#ff4fa3" transform="translate(22 22)"/>
-    <rect x="132" y="132" width="268" height="268" rx="56" fill="#ffd91a" stroke="#23204a" stroke-width="16"/>
-    <g fill="#23204a">
-      <circle cx="196" cy="196" r="24"/><circle cx="336" cy="196" r="24"/>
-      <circle cx="266" cy="266" r="24"/>
-      <circle cx="196" cy="336" r="24"/><circle cx="336" cy="336" r="24"/>
-    </g>
+  <rect width="512" height="512" fill="#eee7d7"/>
+  <g>
+    <!-- the thick black bar the word «Ігротека» stands on; the two dragons stand on it the same way -->
+    <rect x="62" y="396" width="388" height="46" fill="#1b1a17"/>
+    <!-- the piece: a yellow triangle hanging over them -->
+    <path d="M300 70h136l-68 116z" fill="#f2b91b"/>
+    <!-- Хвилька: the blue circle, round eyes, looking at the square -->
+    <circle cx="342" cy="290" r="106" fill="#1f46b8"/>
+    <circle cx="300" cy="258" r="26" fill="#f8f4ea"/><circle cx="360" cy="258" r="26" fill="#f8f4ea"/>
+    <circle cx="290" cy="262" r="12.5" fill="#1b1a17"/><circle cx="350" cy="262" r="12.5" fill="#1b1a17"/>
+    <!-- Жаринка: the red square with ink horns on its top corners, eyes narrowed in anger (\ /), looking at the circle -->
+    <path d="M84 222 62 158 136 222zM198 222 262 158 250 222z" fill="#1b1a17"/>
+    <rect x="82" y="220" width="176" height="176" fill="#db3b22"/>
+    <path d="M124 256h46v46h-46zM194 256h46v46h-46z" fill="#f8f4ea"/>
+    <path d="M123 255h48v24zM193 255h48l-48 24z" fill="#db3b22"/>
+    <path d="M147 276h22v22h-22zM217 276h22v22h-22z" fill="#1b1a17"/>
   </g>
 </svg>

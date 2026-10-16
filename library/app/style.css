@@ -1,27 +1,42 @@
-/* The look of the library: paper, ink outlines, pink and blue offset shadows. Motion (library/app/motion.js MOTION_CSS:
-   the --m-* tokens and the ihk-* keyframes) comes in at boot, after this file's first paint: every token is read here
-   with its fallback, var(--m-in, 200ms). Only transform and opacity move; what leaves is gone at once (motion.js). */
+/* The look of the library: «Великі цифри», the square graphic poster with type and numbers as the image. Warm poster
+   paper, black frames and thick black underline bars, the three primary shapes (a red square, a blue circle, a yellow
+   triangle); titles, numbers and the slabs one presses in Oswald (a heavy condensed grotesk), «Ігротека» across the
+   whole width; the words in Inter Tight. Sharp corners; what is pressed casts a hard block.
+   Colours have roles: red is Жаринка and the main press, blue is Хвилька and the library's own voice (its dialogs, its
+   card over a game, the focus ring), yellow is a piece, «your turn», «together». Motion (library/app/motion.js
+   MOTION_CSS: the --m-* tokens and the ihk-* keyframes) comes in at boot, after this file's first paint: every token is
+   read here with its fallback, var(--m-in, 200ms). Only transform and opacity move; what leaves is gone at once. */
+/* Oswald's stand-ins, while it has not come (a slow first visit, offline before it was ever stored): faces the device
+   has, condensed or scaled down so a word set for Oswald's width still fits, with Oswald's ascent and descent (so a line
+   is as tall as it will be): size-adjust and the overrides work in Chrome, Firefox and Safari 17+ */
+@font-face{font-family:'Ihk Cond 1';font-weight:500 700;src:local('Arial Narrow Bold'),local('ArialNarrow-Bold'),local('HelveticaNeue-CondensedBold');size-adjust:98%;ascent-override:121.4%;descent-override:29.6%;line-gap-override:0%}
+@font-face{font-family:'Ihk Cond 2';font-weight:500 700;src:local('Roboto Condensed Bold'),local('RobotoCondensed-Bold');size-adjust:94%;ascent-override:126.6%;descent-override:30.9%;line-gap-override:0%}
+@font-face{font-family:'Ihk Cond 3';font-weight:500 700;src:local('Arial Bold'),local('Arial-BoldMT'),local('Helvetica Bold'),local('Helvetica-Bold'),local('Liberation Sans Bold'),local('LiberationSans-Bold');size-adjust:82%;ascent-override:145.1%;descent-override:35.4%;line-gap-override:0%}
+@font-face{font-family:'Ihk Cond 4';font-weight:500 700;src:local('Segoe UI Bold'),local('SegoeUI-Bold'),local('Roboto Bold'),local('Roboto-Bold');size-adjust:78%;ascent-override:152.6%;descent-override:37.2%;line-gap-override:0%}
+@font-face{font-family:'Ihk Cond 5';font-weight:500 700;src:local('DejaVu Sans Bold'),local('DejaVuSans-Bold');size-adjust:68%;ascent-override:175.0%;descent-override:42.6%;line-gap-override:0%}
 :root{
-  --page:#e4e2f0;
-  --paper:#f6f5fb;
-  --ink:#23204a;
-  --mute:#5f5c85;                                        /* 4.9:1 on --page, 5.8:1 on paper */
-  --err:#c00062;                                         /* 4.8:1 on --page, 6.1:1 on white */
-  --pink:#ff4fa3;                                        /* fills, marks, shadows */
-  --pink-text:#d6007a;                                   /* pink as text: 4.7:1 on paper */
-  --blue:#2b6cf0;
-  --yellow:#ffd91a;
-  --mint:#c9f2d4;                                        /* together, won: with a word or a ✓, never by hue alone */
-  --off:#ebe9f4;                                         /* a button that cannot be pressed now: «waiting», not «broken» */
+  --page:#eee7d7;                                        /* poster paper */
+  --paper:#f8f4ea;                                       /* a sheet on it: cards, dialogs */
+  --white:#fffdf7;                                       /* fields, options */
+  --ink:#1b1a17;                                         /* 14.1:1 on --page, 15.8:1 on --paper */
+  --mute:#59544a;                                        /* 6.1:1 on --page, 6.9:1 on --paper, 5.6:1 on --off */
+  --red:#db3b22;                                         /* fills and blocks; ink on it 3.9:1 (large only) */
+  --err:#b12a15;                                         /* red as text: 5.3:1 on --page, 6.0:1 on --paper */
+  --blue:#1f46b8;                                        /* 6.5:1 on --page; paper on it 7.3:1 */
+  --yellow:#f2b91b;                                      /* ink on it 9.7:1 */
+  --off:#e4ddcc;                                         /* a button that cannot be pressed now: «waiting», not «broken» */
   --bw:3px;
-  --r-card:18px;--r-btn:12px;--r-pill:999px;
-  --sh-card:6px 6px 0 var(--pink),-6px -6px 0 var(--blue);   /* cards, dialogs, note cards */
-  --sh-voice:3px 3px 0 var(--pink),-3px -3px 0 var(--blue);  /* the library speaking inside a game */
-  --sh-panel:6px 6px 0 var(--ink);                           /* a game's own panels */
-  --sh-btn:4px 4px 0 var(--ink);                             /* what is pressed: hover +2px (a mouse), press leaves 1px */
+  --r-pill:999px;
+  --sh-card:8px 8px 0 var(--blue);                       /* the library speaking: dialogs, note cards */
+  --sh-voice:5px 5px 0 var(--blue);                      /* the library speaking inside a game */
   --tap:44px;                                            /* the least height of a ghost button, «← Усі ігри», a tool */
-  --display:'Unbounded','Arial Black','Segoe UI',system-ui,sans-serif;
-  --text:'Onest','Segoe UI',system-ui,-apple-system,sans-serif;
+  /* titles, numbers, the slabs: Oswald (its stand-ins below); the words: Inter Tight */
+  --display:'Oswald','Ihk Cond 1','Ihk Cond 2','Ihk Cond 3','Ihk Cond 4','Ihk Cond 5',sans-serif;
+  --text:'Inter Tight','Inter','Segoe UI','Helvetica Neue',system-ui,sans-serif;
+  --font:var(--text);
+  --bar:6px;                                             /* the underline bar under a heading */
+  /* the three shapes as pictures (the chip's «together», the masthead) */
+  --duo:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 20'%3E%3Ccircle cx='18' cy='10' r='9' fill='%231f46b8'/%3E%3Crect x='1' y='3' width='14' height='14' fill='%23db3b22'/%3E%3C/svg%3E");
 }
 *{box-sizing:border-box;margin:0;padding:0}
 [hidden]{display:none !important}
@@ -30,22 +45,27 @@ html{min-height:100%;background:var(--page)}
    the library did not open */
 body{
   min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;
-  gap:20px;padding:calc(env(safe-area-inset-top,0px) + 24px) 16px calc(env(safe-area-inset-bottom,0px) + 24px);
-  background:var(--page);color:var(--ink);font:16px/1.45 var(--text);
+  gap:20px;padding:calc(env(safe-area-inset-top,0px) + 20px) 16px calc(env(safe-area-inset-bottom,0px) + 24px);
+  background:var(--page);color:var(--ink);font:500 16px/1.45 var(--text);
   -webkit-tap-highlight-color:transparent;
 }
 button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid var(--blue);outline-offset:3px}
+/* «look here» in the house ink: motion.js plays ihk-look; this file comes after its keyframes, so ours wins (same name,
+   same 700 ms; a 600 ms step under «менше руху», below) */
+@keyframes ihk-look{from{outline-color:#1b1a17}to{outline-color:rgba(27,26,23,0)}}
 
+/* a sheet: flush left, sharp, a black frame and a thick black bar on top (the poster's head rule) */
 .card{
-  width:min(420px,100%);display:flex;flex-direction:column;gap:14px;
-  padding:26px 22px 22px;text-align:center;
-  background:var(--paper);border:var(--bw) solid var(--ink);border-radius:var(--r-card);box-shadow:var(--sh-card);
+  position:relative;width:min(420px,100%);display:flex;flex-direction:column;gap:14px;
+  padding:22px 22px 22px;text-align:left;
+  background:var(--paper);border:var(--bw) solid var(--ink);border-top-width:12px;box-shadow:var(--sh-card);
 }
-.cover{display:block;width:100%;height:auto;aspect-ratio:1200/630;object-fit:cover;border:3px solid var(--ink);border-radius:12px;background:var(--page)}
-.title{
-  font-family:var(--display);font-weight:800;font-size:clamp(28px,8vw,40px);line-height:1.08;
-  text-shadow:3px 3px 0 var(--pink),-3px -2px 0 var(--blue);padding:4px 0 2px;
-}
+/* the pendant: the masthead's yellow triangle hangs from the head rule of every sheet the library speaks with */
+:is(.dialog,.note-card)::after{content:'';position:absolute;top:0;right:18px;width:34px;height:28px;pointer-events:none;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 28'%3E%3Cpath d='M0 0h34L17 28z' fill='%23f2b91b'/%3E%3C/svg%3E") center/100% 100% no-repeat}
+.dialog h2,.note-card .head{padding-right:40px}
+.dialog:has(.cover)::after{display:none}                /* (the password dialog: the game's cover leads, the pendant would touch it) */
+.cover{display:block;width:100%;height:auto;aspect-ratio:1200/630;object-fit:cover;border:3px solid var(--ink);background:var(--page)}
+.title{font-family:var(--display);font-weight:700;font-size:clamp(44px,13vw,64px);line-height:.95;letter-spacing:0}
 .fine{font-size:13px;color:var(--mute)}
 /* for screen readers only (what they hear of the card over a game: who and why, not the time; a player's «(ти)») */
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
@@ -53,27 +73,31 @@ button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid var(-
 /* fields: one line high in a row or a column; an error turns the field and says why in the slot kept under it */
 form{display:flex;flex-direction:column;gap:12px}
 input[type=password],input.link{
-  width:100%;font:500 17px/1.2 var(--text);color:var(--ink);text-align:center;letter-spacing:.04em;
-  padding:13px 12px;border:3px solid var(--ink);border-radius:12px;background:#fff;
+  width:100%;font:600 17px/1.2 var(--text);color:var(--ink);text-align:left;letter-spacing:.01em;
+  padding:13px 14px;border:3px solid var(--ink);border-radius:0;background:var(--white);
   transition:border-color var(--m-quick,140ms) linear,box-shadow var(--m-quick,140ms) linear;
 }
-input[aria-invalid=true]{border-color:var(--err);box-shadow:0 0 0 3px rgba(192,0,98,.16)}
+input::placeholder{color:var(--mute);opacity:1}
+input[aria-invalid=true]{border-color:var(--err);box-shadow:inset 6px 0 0 var(--err)}
 .stack{display:flex;flex-direction:column;gap:4px}      /* a field, its error slot, its button (invite.js, lock.js) */
 .stack > .btn{margin-top:4px}
-.stack > .err,.stack > .err:empty{display:block;min-height:1.45em;font-size:14px;text-align:left;padding-left:4px}
+.stack > .err,.stack > .err:empty{display:block;min-height:1.45em;font-size:14px;text-align:left;padding-left:2px}
 
-/* buttons. Pressing: down 3px in 80 ms, back in 160 ms with a little spring; a lift on hover only with a mouse (below) */
+/* buttons: a black slab with paper words that casts a red block (the one that matters); .second: a paper slab that
+   casts black. Pressing: down 3px onto its block in 80 ms, back in 160 ms with a little spring; a lift on hover only
+   with a mouse (below) */
 .btn{
   appearance:none;-webkit-appearance:none;cursor:pointer;
-  font:700 16px/1.2 var(--text);color:var(--ink);text-decoration:none;
-  padding:14px 16px;border:3px solid var(--ink);border-radius:var(--r-btn);background:var(--yellow);
+  font:600 19px/1.15 var(--display);letter-spacing:.02em;color:var(--paper);text-decoration:none;text-align:center;
+  padding:13px 18px 14px;border:3px solid var(--ink);border-radius:0;background:var(--ink);
 }
-.btn.second{background:var(--paper)}                    /* the other choice next to the one that matters */
+.btn.second{background:var(--paper);color:var(--ink)}   /* the other choice next to the one that matters */
 .btn.ghost{
-  min-height:var(--tap);padding:10px 12px;background:none;border-color:transparent;box-shadow:none;font-weight:500;
-  text-decoration:underline;transition:background-color var(--m-press,80ms) linear;
+  min-height:var(--tap);padding:10px 4px;background:none;border-color:transparent;box-shadow:none;font:600 16px/1.2 var(--text);letter-spacing:0;color:var(--ink);
+  text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:5px;align-self:flex-start;
+  transition:background-color var(--m-press,80ms) linear;
 }
-.btn.ghost:active{transform:none;box-shadow:none;background:rgba(35,32,74,.1)}
+.btn.ghost:active{transform:none;box-shadow:none;background:rgba(27,26,23,.1)}
 .btn.danger{color:var(--err)}                           /* a ghost that ends something: «Скасувати» a room, «Від’єднатися» */
 .btn.ghost.small{font-size:13px;color:var(--mute)}      /* a small text link (under «Закрити»: «Скопіювати звіт для розробника») */
 /* unavailable now: off, dashed, muted, nothing to press; busy (motion.js busy): in place, a ring in it */
@@ -86,15 +110,16 @@ input[aria-invalid=true]{border-color:var(--err);box-shadow:0 0 0 3px rgba(192,0
 .swap > span{grid-area:1/1;transition:opacity var(--m-quick,140ms) linear}
 .swap > span:last-child,.swap.done > span:first-child{opacity:0}
 .swap.done > span:last-child{opacity:1}
-.swap svg{width:14px;height:14px;vertical-align:-1px;margin-left:4px;fill:none;stroke:currentColor;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+.swap svg{width:14px;height:14px;vertical-align:-1px;margin-left:4px;fill:none;stroke:currentColor;stroke-width:3;stroke-linecap:square;stroke-linejoin:miter}
 .err{min-height:1.45em;font-weight:700;color:var(--err)}
 .err:empty{display:none}
-.busy{font-weight:500;color:var(--mute)}
+.busy{font-weight:600;color:var(--mute)}
+/* the ring that turns: black, with a red quarter */
 .busy::before,.spin{
-  content:'';display:inline-block;width:12px;height:12px;margin-right:8px;vertical-align:-1px;
-  border:2.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite;
+  content:'';display:inline-block;width:13px;height:13px;margin-right:9px;vertical-align:-1px;
+  border:3px solid currentColor;border-right-color:var(--red);border-radius:50%;animation:spin .8s linear infinite;
 }
-.busy::before{border-color:var(--ink);border-right-color:transparent}
+.busy::before{border-color:var(--ink);border-right-color:var(--red)}
 @keyframes spin{to{transform:rotate(1turn)}}
 /* the password dialog's «Відмикаю…» (lock.js) while it says nothing: out of sight and of the column, still a live
    region. While the password is checked, «Відкрити» looks as it was for 300 ms, then says «Відмикаю…» in itself
@@ -103,7 +128,7 @@ input[aria-invalid=true]{border-color:var(--err);box-shadow:0 0 0 3px rgba(192,0
 .dialog .busy:empty::before{content:none}
 :root:not([data-motion=off]) .dialog .stack > .busy[role=status]{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 :root:not([data-motion=off]) .dialog .stack > .busy[role=status]::before{content:none}
-:root:not([data-motion=off]) .dialog .stack > .btn[type=submit]:disabled:not(.is-busy){background:var(--yellow);border-style:solid;color:var(--ink);box-shadow:var(--sh,4px) var(--sh,4px) 0 var(--shc,var(--ink));cursor:default}
+:root:not([data-motion=off]) .dialog .stack > .btn[type=submit]:disabled:not(.is-busy){background:var(--ink);border-style:solid;color:var(--paper);box-shadow:var(--sh,4px) var(--sh,4px) 0 var(--shc,var(--red));cursor:default}
 #busy{text-align:center}                         /* «Відкриваю Ігротеку…», or why it did not open: over «Спробувати ще» */
 
 /* the page as it starts (page.html #boot, after the shelf and the stage: either one shown hides it). Nothing for
@@ -111,61 +136,94 @@ input[aria-invalid=true]{border-color:var(--err);box-shadow:0 0 0 3px rgba(192,0
    that did not open: the same place, now a card (.stuck), so nothing moves */
 .boot{
   width:min(420px,100%);display:flex;flex-direction:column;align-items:center;gap:14px;margin-top:clamp(16px,10vh,72px);
-  padding:26px 22px 22px;text-align:center;border:var(--bw) solid transparent;border-radius:var(--r-card);
+  padding:22px 22px 22px;text-align:center;border:var(--bw) solid transparent;border-top-width:12px;
   animation:boot-in var(--m-in,200ms) var(--m-ease-out,cubic-bezier(.2,.8,.3,1)) 300ms both;
 }
 @keyframes boot-in{from{opacity:.01}}
 .shelf:not([hidden]) ~ .boot,.stage:not([hidden]) ~ .boot{display:none}
 .boot.stuck{background:var(--paper);border-color:var(--ink);box-shadow:var(--sh-card)}
-.boot #busy.err{font-weight:500;color:var(--ink)}       /* (why: said in ink, it is no fault of the player's) */
+.boot #busy.err{font-weight:600;color:var(--ink)}       /* (why: said in ink, it is no fault of the player's) */
 .boot #busy-again:empty{display:none}
 .boot #busy-retry{align-self:stretch}
 :root[data-motion=off] .boot{animation:none}
 
-/* game shelf */
-.shelf{width:min(720px,100%);display:flex;flex-direction:column;gap:18px}
-.shelf-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-/* a phone: «Грати разом» on its own row under «Ігротека», so a longer word on it moves nothing (owner, decision 65) */
-@media (max-width:419px){.shelf-head{flex-direction:column;align-items:flex-start;gap:10px}}
+/* game shelf: the masthead «Ігротека» across the whole width (Oswald, sized to the column: its ink runs edge to edge)
+   standing on a thick black bar; under it «Грати разом» at the left and the three shapes at the right (decision 65:
+   «Грати разом» on a row of its own, so a longer word on it moves nothing); then the cards. A wide screen: the same,
+   only bigger, the cards two in a row */
+.shelf{width:min(720px,100%);display:flex;flex-direction:column;gap:16px}
+.shelf-head{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:11px;container-type:inline-size}
+/* the three shapes at the right of the chip's row: a red square, a blue circle, a yellow triangle */
+.shelf-head::after{
+  content:'';position:absolute;right:0;bottom:11px;width:var(--mark);height:calc(var(--mark) * .27);pointer-events:none;
+  background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 27'%3E%3Crect x='0' y='0' width='27' height='27' fill='%23db3b22'/%3E%3Ccircle cx='50' cy='13.5' r='13.5' fill='%231f46b8'/%3E%3Cpath d='M73 27 86.5 0 100 27z' fill='%23f2b91b'/%3E%3C/svg%3E") right center/100% 100% no-repeat;
+}
+.shelf{--mark:clamp(52px,20vw,96px)}
+/* «Ігротека»: its ink 3.38 em wide (the І's side bearing pulled out past the edge), so 1/3.4 of the column fills it; one
+   line, nothing past the column (a wider stand-in before Oswald comes is cut at the edge, never scrolls). The bar is the
+   heading's own bottom edge: the р's tail runs into it */
+.shelf .title{
+  align-self:stretch;text-indent:-.05em;white-space:nowrap;overflow:hidden;
+  font-size:calc((100vw - 32px) / 3.4);font-size:calc(100cqi / 3.4);line-height:.8;letter-spacing:0;
+  padding-bottom:.09em;border-bottom:clamp(12px,.14em,24px) solid var(--ink);
+}
+/* a small phone (320–360): the chip's row a little closer, the shapes smaller */
+@media (max-width:360px){
+  .shelf{gap:14px}
+  .shelf-head{gap:10px}
+}
 .shelf > .btn.ghost{align-self:center}
 .shelf > .fine{text-align:center}
-.games{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:18px}
+.games{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:18px 22px}
 .game{
-  --sh:5px;--shc:var(--ink);display:flex;flex-direction:column;overflow:hidden;color:inherit;text-decoration:none;
-  background:var(--paper);border:3px solid var(--ink);border-radius:16px;
+  --sh:6px;--shc:var(--ink);display:flex;flex-direction:column;overflow:hidden;color:inherit;text-decoration:none;
+  background:var(--paper);border:3px solid var(--ink);
 }
 .game img{display:block;width:100%;aspect-ratio:1200/630;object-fit:cover;border-bottom:3px solid var(--ink);background:var(--page)}
-.game-body{display:flex;flex-direction:column;gap:4px;padding:12px 14px 14px;text-align:left}
-.game-body b{font:800 18px/1.2 var(--display)}
-.game-body span{font-size:14px;color:var(--mute)}
+.game-body{position:relative;display:flex;flex-direction:column;gap:4px;padding:10px 14px 12px 14px;text-align:left}
+.game-body b{font:700 26px/.96 var(--display);letter-spacing:.005em}
+.game-body span{font-size:14px;line-height:1.4;color:var(--mute)}
+/* each card's index: a square, a circle, a triangle, in turn (the shelf's rhythm), as tall as the title's capitals */
+.games .game-body b::before{content:'';display:inline-block;width:.5em;height:.5em;margin-right:.3em;vertical-align:.04em;background:var(--red)}
+.games .game:nth-child(3n+2) .game-body b::before{background:var(--blue);border-radius:50%}
+.games .game:nth-child(3n) .game-body b::before{background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 9'%3E%3Cpath d='M5 0l5 9H0z' fill='%23f2b91b'/%3E%3C/svg%3E") center/contain no-repeat}
 /* the card a game opened from, while its copy flies (shell.js): unseen, never a double; still focusable (back on the
-   shelf it has the focus). Back on the shelf it lands, with a blue shadow for 900 ms («you came from here») */
+   shelf it has the focus). Back on the shelf it lands, with a blue block for 900 ms («you came from here») */
 .game.lifted{opacity:0}
 .game.came{--shc:var(--blue)}
 /* «install»: a line in ink with «Встановити» on paper, a finger's size (install.js) */
 #install{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px 12px;font-size:15px;color:var(--ink)}
-#install .btn{min-height:var(--tap);padding:10px 16px;background:var(--paper);border-color:var(--ink);font-weight:700;text-decoration:none}
+#install .btn{min-height:var(--tap);padding:10px 16px;background:var(--paper);color:var(--ink);border-color:var(--ink);font-weight:600;text-decoration:none}
 
-/* "play together" chip: an icon, a short word or two (one cell: the old and the new cross-fade), a dot for the state.
-   It keeps one size whatever it says (its words in the middle, between the icon and the dot), so nothing moves as the
-   words change (owner, decision 65): wide enough for «Без інтернету» */
-.chip{
-  --sh:3px;--shc:var(--blue);appearance:none;cursor:pointer;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;min-width:13.4em;
-  font:700 15px/1.2 var(--text);color:var(--ink);padding:9px 14px;border:3px solid var(--ink);border-radius:var(--r-pill);background:var(--paper);
+/* a wide screen: the column wider, the masthead with it, the cards two in a row */
+@media (min-width:620px){.games{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}}
+@media (min-width:860px) and (min-height:560px){
+  .shelf{width:min(860px,100%);gap:20px}
+  .shelf-head{gap:18px}
 }
-.chip.on{--shc:var(--pink);background:var(--mint)}
-.chip .ic{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+
+/* "play together" chip: the two shapes together, a short word or two (one cell: the old and the new cross-fade), a dot
+   for the state. Its form is the two shapes too: square at the start, a half circle at the end (no soft pill). It keeps one size whatever it says (its words in the middle, between the shapes and the dot), so
+   nothing moves as the words change (owner, decision 65): wide enough for «Без інтернету» */
+.chip{
+  --sh:4px;--shc:var(--ink);appearance:none;cursor:pointer;display:inline-flex;align-items:center;gap:9px;white-space:nowrap;min-width:13.4em;min-height:var(--tap);
+  font:700 15px/1.2 var(--text);color:var(--ink);padding:9px 16px 9px 14px;border:3px solid var(--ink);border-radius:0 var(--r-pill) var(--r-pill) 0;background:var(--paper);
+}
+.chip::before{content:'';flex:none;width:28px;height:20px;background:var(--duo) center/contain no-repeat}
+.chip.on{background:var(--yellow)}
+.chip .ic{display:none}                                  /* (the people of the old look: the two shapes say it now) */
 .chip .lbl{flex:1;display:inline-grid;justify-items:center;text-align:center}
 .chip .lbl > span{grid-area:1/1}
-.chip .dot{flex:none;width:10px;height:10px;border-radius:50%;border:2px solid var(--ink);background:#fff;transition:background-color var(--m-quick,140ms) linear}
+.chip .dot{flex:none;width:12px;height:12px;border-radius:50%;border:2.5px solid var(--ink);background:var(--white);transition:background-color var(--m-quick,140ms) linear}
 .chip .dot.wait{background:var(--yellow);border-style:dashed}       /* «Чекаю…», «З’єднуюсь…» */
-.chip .dot.on{background:#1f9d55}                                   /* «Разом», «Разом · 3» */
-.chip .dot.lost{background:#cfcde3;border-style:dashed}             /* «Зв’язок зник», «Без інтернету» */
-.chip .dot.warn{background:var(--pink)}                             /* «Інша версія» */
+.chip .dot.on{background:var(--ink)}                                /* «Разом», «Разом · 3» */
+.chip .dot.lost{background:var(--off);border-style:dashed}          /* «Зв’язок зник», «Без інтернету» */
+.chip .dot.warn{background:var(--red)}                              /* «Інша версія» */
 
-/* the press, the same for everything pressed (I12, I23): a shadow of its own (--sh, --shc), down 3px with a 1px shadow
-   in 80 ms, back in 160 ms with a little spring (box-shadow moves only here, for this one control) */
-.btn:not(.ghost){--sh:4px;--shc:var(--ink)}
+/* the press, the same for everything pressed (I12, I23): a block of its own (--sh, --shc), down 3px onto it with 1px
+   left in 80 ms, back in 160 ms with a little spring (box-shadow moves only here, for this one control) */
+.btn:not(.ghost){--sh:4px;--shc:var(--red)}
+.btn.second{--shc:var(--ink)}
 .option{--sh:4px;--shc:var(--ink)}
 .btn:not(.ghost),.option,.chip,.game{
   box-shadow:var(--sh) var(--sh) 0 var(--shc);
@@ -176,12 +234,12 @@ input[aria-invalid=true]{border-color:var(--err);box-shadow:0 0 0 3px rgba(192,0
   transition-duration:var(--m-press,80ms);transition-timing-function:var(--m-ease-out,cubic-bezier(.2,.8,.3,1));
 }
 .btn:not(.ghost):is(:disabled,[aria-disabled=true]),.btn.is-busy{box-shadow:none}
-/* hover lifts 2px, only where there is a mouse: never stuck on after a touch */
+/* hover lifts 2px and the slab turns blue, only where there is a mouse: never stuck on after a touch */
 @media (hover:hover) and (pointer:fine){
   :is(.btn:not(.ghost):not(.is-busy),.option,.chip,.game):not(:disabled):not([aria-disabled=true]):hover:not(:active){
     transform:translate(-2px,-2px);box-shadow:calc(var(--sh) + 2px) calc(var(--sh) + 2px) 0 var(--shc);transition-duration:var(--m-press,80ms);
   }
-  .btn.ghost:hover:not(:active){background:rgba(35,32,74,.06)}
+  .btn.ghost:hover:not(:active){background:rgba(27,26,23,.06)}
 }
 
 /* the open game: a frame over the whole screen, inside the safe area. While the stage comes in over the shelf (its
@@ -202,23 +260,27 @@ input[aria-invalid=true]{border-color:var(--err);box-shadow:0 0 0 3px rgba(192,0
 }
 .stage-note.layered{background:none}
 .stage-note > .note-bg{position:absolute;inset:0;z-index:-1;background:var(--page)}
-.stage-note > .note-bg.veil{background:rgba(228,226,240,.6)}
+.stage-note > .note-bg.veil{background:rgba(238,231,215,.86)}
 /* a game that broke while it started (shell.js): the note covers it */
 .stage-note.over{z-index:3}
 /* a note as a card: what happened and what can be done; in ink, unless something went wrong (.err); a game that broke
    has a heading (#stage-text.head) and a line of what can be done */
-.note-card{width:min(340px,100%);gap:12px;padding:22px 20px 18px}
-.note-card .head{font:800 21px/1.2 var(--display);color:var(--ink)}
+.note-card{width:min(340px,100%);gap:12px;padding:20px 20px 18px;text-align:left}
+.note-card .head{font:700 30px/1.05 var(--display);letter-spacing:0;color:var(--ink)}
+/* a heading the library speaks with stands on a thick black bar (under its words, through the tails of р and у) */
+:is(.dialog h2,.note-card .head){text-decoration:underline var(--ink);text-decoration-thickness:var(--bar);text-underline-offset:5px;text-decoration-skip-ink:none}
+.note-card > .btn:not(.ghost){align-self:stretch}
 /* the opening card (shell.js): the game's cover and title, who opened it (we follow them), and in their place from the
    start «Відкриваю гру…» (a status: there, empty, before it speaks) and «До бібліотеки», unseen for 300 ms (.wait); it
    flies from the tapped card (motion.js fly), which is .lifted meanwhile */
-.open-card{width:min(328px,100%);display:flex;flex-direction:column;overflow:hidden;background:var(--paper);border:3px solid var(--ink);border-radius:16px;box-shadow:5px 5px 0 var(--ink);text-align:left}
+.open-card{width:min(328px,100%);display:flex;flex-direction:column;overflow:hidden;background:var(--paper);border:3px solid var(--ink);box-shadow:6px 6px 0 var(--ink);text-align:left}
 .open-card > :is(img,canvas){display:block;width:100%;height:auto;aspect-ratio:1200/630;object-fit:cover;border-bottom:3px solid var(--ink);background:var(--page)}
 .open-card .game-body{gap:8px}
-.open-card .who{font-size:14px;color:var(--mute);font-weight:500}
+.open-card .who{font-size:14px;color:var(--mute);font-weight:600}
 .open-card .later{display:flex;flex-direction:column;align-items:flex-start;gap:2px}
 .open-card .later > p{min-height:1.45em}
-.open-card .later .btn.ghost{margin-left:-12px}         /* (its words under the title's) */
+.open-card .later .btn.ghost{margin-left:-4px}          /* (its words under the title's) */
+.open-card .game-body b{font:700 26px/1 var(--display);letter-spacing:.005em}
 .open-card .later.wait .btn{visibility:hidden}
 /* a page-coloured veil that fades off the shelf as it comes back (in the fx layer, motion.js; never catches a tap) */
 .page-veil{position:fixed;inset:0;background:var(--page);pointer-events:none}
@@ -229,69 +291,75 @@ input[aria-invalid=true]{border-color:var(--err);box-shadow:0 0 0 3px rgba(192,0
    shelf and the game, under the dialogs and the notes, so it never covers a dialog that stays open (motion.js puts the
    layer over everything, inline: in a game, where it knows nothing of the page) */
 .ihk-fx{z-index:9!important}
-/* a dialog stands by its top edge: when what it shows changes, only its bottom edge moves */
+/* a dialog stands by its top edge: when what it shows changes, only its bottom edge moves. Behind it the page is
+   papered over (the shelf's black rules fade to a trace: nothing behind can be mistaken for the dialog's own edge) */
 .backdrop{
   position:fixed;inset:0;display:flex;align-items:flex-start;justify-content:center;
   padding:calc(env(safe-area-inset-top,0px) + clamp(16px,10vh,72px)) 16px calc(env(safe-area-inset-bottom,0px) + 16px);
-  background:rgba(35,32,74,.45);overflow-y:auto;
+  background:rgba(238,231,215,.93);overflow-y:auto;
 }
 /* (a shadow at an edge says there is more to scroll: the paper covers it while scrolled to that edge; a step that
    enters from the side never makes it scroll sideways) */
 .dialog{
   max-height:100%;overflow-y:auto;overflow-x:hidden;gap:12px;
-  background:linear-gradient(var(--paper) 30%,rgba(246,245,251,0)) top/100% 28px no-repeat local,
-             linear-gradient(rgba(246,245,251,0),var(--paper) 70%) bottom/100% 28px no-repeat local,
-             radial-gradient(farthest-side at 50% 0,rgba(35,32,74,.22),rgba(35,32,74,0)) top/100% 10px no-repeat scroll,
-             radial-gradient(farthest-side at 50% 100%,rgba(35,32,74,.22),rgba(35,32,74,0)) bottom/100% 10px no-repeat scroll,var(--paper);
+  background:linear-gradient(var(--paper) 30%,rgba(248,244,234,0)) top/100% 28px no-repeat local,
+             linear-gradient(rgba(248,244,234,0),var(--paper) 70%) bottom/100% 28px no-repeat local,
+             radial-gradient(farthest-side at 50% 0,rgba(27,26,23,.24),rgba(27,26,23,0)) top/100% 10px no-repeat scroll,
+             radial-gradient(farthest-side at 50% 100%,rgba(27,26,23,.24),rgba(27,26,23,0)) bottom/100% 10px no-repeat scroll,var(--paper);
 }
 /* a dialog's screen (dom.js modal show): one .step, entering forward, back or as a fade (ihk-fwd, ihk-back, ihk-fade) */
 .dialog .step{display:flex;flex-direction:column;gap:12px}
 /* a long name (24 letters at 320 px) breaks rather than run off the dialog or the card over a game */
 .dialog,.waiting{overflow-wrap:anywhere}
 .dialog:focus{outline:none}
-.dialog h2{font:800 22px/1.15 var(--display);text-wrap:balance}   /* (balanced lines, where the browser can) */
-.dialog .row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
-input.link{font-size:14px;letter-spacing:0;text-align:left;padding:10px 12px}
+.dialog h2{font:700 32px/1.1 var(--display);letter-spacing:0;padding-bottom:4px;text-wrap:balance}   /* (balanced lines, where the browser can) */
+.dialog .row{display:flex;gap:10px;justify-content:flex-start;flex-wrap:wrap}
+input.link{font-size:14px;font-weight:500;letter-spacing:0;text-align:left;padding:10px 12px}
 .option{
   appearance:none;cursor:pointer;display:flex;align-items:center;gap:14px;text-align:left;
-  padding:12px 14px;border:3px solid var(--ink);border-radius:14px;background:#fff;color:var(--ink);font:inherit;
+  padding:12px 14px 12px 12px;border:3px solid var(--ink);border-radius:0;background:var(--white);color:var(--ink);font:inherit;
 }
-.option b{display:block;font:800 17px/1.2 var(--display)}
+.option b{display:block;font:600 21px/1.1 var(--display);letter-spacing:.01em;margin-bottom:2px}
 .option span span{font-size:14px;color:var(--mute)}
-.option-icon{flex:none;width:40px;height:40px;display:grid;place-items:center;border:3px solid var(--ink);border-radius:50%;background:var(--yellow)}
-.option-icon svg{width:22px;height:22px;fill:none;stroke:var(--ink);stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+/* the words beside the picture, in balanced lines: no «Wi-» / «Fi» or «QR-» / «код» split at a line's end, at any width
+   (where text-wrap is not known, Safari before 17.5, the lines simply fall as they fall) */
+.option > span:not(.option-icon){text-wrap:balance;line-height:1.3}
+/* the ways, in turn: a red square, a blue circle (with the library's own picture in paper on it) */
+.option-icon{flex:none;width:44px;height:44px;display:grid;place-items:center;background:var(--red)}
+.option + .option .option-icon{background:var(--blue);border-radius:50%}
+.option-icon svg{width:24px;height:24px;fill:none;stroke:var(--paper);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
 /* a status line (the link screen's, a pairing step's): two lines kept, so nothing under it moves when it changes; a
    ring beside it only while something is under way (.busy) */
-.status-line{min-height:2.9em;display:flex;align-items:flex-start;justify-content:center;font-weight:500;color:var(--mute)}
+.status-line{min-height:2.9em;display:flex;align-items:flex-start;justify-content:flex-start;font-weight:600;color:var(--mute)}
 .status-line > span{display:block}
 .status-line.busy::before{flex:none;margin-top:.3em}
 /* nearby: the step («● ○») with whose turn it is, under the heading; a box of the code's size, and of the camera's,
    while they come (a ring in it), so nothing jumps when they do */
-.steps-dots{display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;font-weight:700;color:var(--mute)}
-.steps-dots i{width:12px;height:12px;border-radius:50%;border:2.5px solid var(--ink);background:#fff;transition:background-color var(--m-quick,140ms) linear}
+.steps-dots{display:flex;align-items:center;justify-content:flex-start;gap:8px;font-size:13px;font-weight:700;color:var(--mute)}
+.steps-dots i{width:12px;height:12px;border-radius:50%;border:2.5px solid var(--ink);background:var(--white);transition:background-color var(--m-quick,140ms) linear}
 .steps-dots i.on{background:var(--ink)}
 .steps-dots span{margin-left:2px}
-.qr{align-self:center;max-width:100%;height:auto!important;aspect-ratio:1;border:3px solid var(--ink);border-radius:10px;image-rendering:pixelated;background:#fff}
+.qr{align-self:center;max-width:100%;height:auto!important;aspect-ratio:1;border:3px solid var(--ink);image-rendering:pixelated;background:#fff}
 .placeholder,.qr.code{align-self:center;width:min(260px,100%);aspect-ratio:1}
-.placeholder{display:grid;place-items:center;border:3px dashed var(--ink);border-radius:10px;background:#fff}
-.placeholder.camera{width:100%;aspect-ratio:4/3;max-height:50vh;background:var(--ink);color:var(--paper);border-style:solid;border-radius:12px}
+.placeholder{display:grid;place-items:center;border:3px dashed var(--ink);background:var(--white)}
+.placeholder.camera{width:100%;aspect-ratio:4/3;max-height:50vh;background:var(--ink);color:var(--paper);border-style:solid}
 .placeholder .spin{margin:0;width:22px;height:22px;border-width:3px}
-video.scan{width:100%;aspect-ratio:4/3;max-height:50vh;object-fit:cover;border:3px solid var(--ink);border-radius:12px;background:#000}
+video.scan{width:100%;aspect-ratio:4/3;max-height:50vh;object-fit:cover;border:3px solid var(--ink);background:#000}
 /* «Ви граєте разом»: each player a chip with a dot (dashed while away, the words with it), «ти» as a tag; how they are
    linked kept two lines high («напряму» comes and goes); the ping in a slot of its own, in even digits; and how long
    it stays open (2.4 s): a bar that drains (a hold, so from JS: play(bar, 'ihk-drain', { duration: 2400 }); under
    «менше руху» it stays whole) */
-.people{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin:0;padding:0;list-style:none;text-align:left}
-.person{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:5px 11px;border:2.5px solid var(--ink);border-radius:var(--r-pill);background:#fff;font-weight:700;font-size:14px;transition:background-color var(--m-quick,140ms) linear}
-.person > i{flex:none;width:10px;height:10px;border-radius:50%;border:2px solid var(--ink);background:#1f9d55;transition:background-color var(--m-quick,140ms) linear}
+.people{display:flex;flex-wrap:wrap;justify-content:flex-start;gap:8px;margin:0;padding:0;list-style:none;text-align:left}
+.person{display:inline-flex;align-items:center;gap:7px;max-width:100%;padding:6px 12px;border:2.5px solid var(--ink);border-radius:0 var(--r-pill) var(--r-pill) 0;background:var(--white);font-weight:700;font-size:14px;transition:background-color var(--m-quick,140ms) linear}
+.person > i{flex:none;width:11px;height:11px;border-radius:50%;border:2px solid var(--ink);background:var(--ink);transition:background-color var(--m-quick,140ms) linear}
 .person.away{border-style:dashed}
-.person.away > i{background:#cfcde3;border-style:dashed}
+.person.away > i{background:var(--off);border-style:dashed}
 .person .state{font-weight:500;color:var(--mute)}
 .person .state:empty{display:none}
-.person .tag{font-style:normal;font-size:11px;line-height:1;padding:3px 7px;border-radius:var(--r-pill);background:var(--ink);color:var(--paper)}
+.person .tag{font-style:normal;font-size:11px;line-height:1;padding:3px 7px;background:var(--ink);color:var(--paper)}
 .how{min-height:2.9em}
 .ping{min-height:1.45em;font-variant-numeric:tabular-nums}
-.drain{height:3px;border-radius:2px;background:var(--ink);transform-origin:left;margin:2px 10% 0}
+.drain{height:4px;background:var(--ink);transform-origin:left;margin:2px 0 0}
 /* the notes at the bottom of the screen (dom.js toast): a column, the newest at the bottom, none over another; over a
    dialog too (the column is in #layer before any dialog: without z-index a dialog would cover what it says). Centred by
    its margins (a toast that goes glides: no transform of its own); above the card over a game: --card-h, how much
@@ -302,24 +370,26 @@ video.scan{width:100%;aspect-ratio:4/3;max-height:50vh;object-fit:cover;border:3
   display:flex;flex-direction:column;gap:8px;align-items:center;width:max-content;max-width:calc(100% - 32px);pointer-events:none;
 }
 .toast{
-  max-width:100%;padding:11px 16px;font-weight:700;text-align:center;
-  background:var(--ink);color:#fff;border-radius:12px;box-shadow:4px 4px 0 var(--pink);
+  max-width:100%;padding:8px 20px 9px;font:600 20px/1.2 var(--display);letter-spacing:.02em;text-align:center;
+  background:var(--ink);color:var(--paper);box-shadow:5px 5px 0 var(--yellow);
 }
 .toasts.tappable .toast{pointer-events:auto;cursor:pointer}
 /* the card over a game that shows none of its waiting screens (invite.js; the rows: waiting.js, screens.js paint): a row
    per thing said, the time in even digits, buttons of a finger's size. 16 px above the game on every phone: the stage
    already keeps out of the unsafe edges (a home bar), unlike .toasts and .backdrop, which are on the page itself.
-   Centred by its margins (its entry rises: no transform of its own) */
-.waiting{position:absolute;left:0;right:0;margin:0 auto;bottom:16px;z-index:2;width:min(420px,calc(100% - 24px));gap:2px;padding:8px 14px;text-align:center}
+   Centred by its margins (its entry rises: no transform of its own). The library's voice: paper, a blue block */
+.waiting{position:absolute;left:0;right:0;margin:0 auto;bottom:16px;z-index:2;width:min(420px,calc(100% - 24px));gap:2px;padding:10px 14px 8px;text-align:center;border-top-width:6px;box-shadow:var(--sh-voice)}
 .wait-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 12px}
 .waiting p{margin:0;font-weight:700}
-.waiting .wait-time{font-variant-numeric:tabular-nums}
+.waiting .wait-time{font:700 19px/1.2 var(--display);font-variant-numeric:tabular-nums;letter-spacing:.02em;display:inline-block;margin-left:.3em;padding:0 7px 1px;vertical-align:-1px;background:var(--ink);color:var(--paper)}
 .waiting .btn{min-height:var(--tap)}
+.waiting .btn.ghost{align-self:center}
 
 /* «менше руху»: nothing moves or scales. Spinners stop (the ring and the words stay), a press and a hover only change
    colour and shadow, the page as it starts only fades (120 ms) */
 @media (prefers-reduced-motion:reduce){
   @keyframes spin{to{}}
+  @keyframes ihk-look{0%,99.9%{outline-color:#1b1a17}to{outline-color:rgba(27,26,23,0)}}
   .busy::before,.spin{animation:none}
   :is(.btn,.option,.chip,.game):is(:hover,:active){transform:none!important}
   .boot{animation-duration:120ms}

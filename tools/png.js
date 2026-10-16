@@ -52,20 +52,47 @@ export function pngInfo(buf) {
 // '#e4e2f0' (or '#abc') → [r, g, b]
 export const rgb = hex => { const h = hex.replace('#', ''), f = h.length < 6 ? [...h.slice(0, 3)].map(c => c + c).join('') : h.slice(0, 6); return [0, 2, 4].map(i => parseInt(f.slice(i, i + 2), 16)); };
 
-// A placeholder cover, 1200×630 unless told (the size of a link preview): the theme colour, a little darker towards
-// the bottom, with a row of four rounded tiles. Replace it with a picture of the game before it goes on the shelf.
-const THEME = '#e4e2f0';                                 // (game.json without "theme")
+// A placeholder cover, 1200×630 unless told (the size of a link preview): an unfinished poster of the library's series
+// («Великі цифри»): the paper panel at the left with its thick black bar (the number and the title are not there yet), the
+// theme colour at the right, a little darker towards the bottom, with the three shapes in white (a square, a circle, a
+// triangle). Replace it with a picture of the game before it goes on the shelf.
+const THEME = '#eee7d7';                                 // (game.json without "theme")
 export const cover = (theme = THEME, w = 1200, h = 630) => png(w, h, coverPixel(theme, w, h));
 
 // buf is still that placeholder: made for no theme, or for this one (a theme put into game.json later). Its pixels are
-// compared, not its bytes: zlib may pack the same pixels differently on another machine.
+// compared, not its bytes: zlib may pack the same pixels differently on another machine. A placeholder an older `cli new`
+// made (four rounded tiles, the old default theme) still counts: a game added before this look is noticed too.
+const OLD_THEME = '#e4e2f0';
 export function isPlaceholder(buf, theme) {
   const info = pngInfo(buf), [w, h] = [1200, 630];
-  return !!info && info.w === w && info.h === h && [...new Set([THEME, theme || THEME])].some(t => info.data.equals(rows(w, h, coverPixel(t, w, h))));
+  if (!info || info.w !== w || info.h !== h) return false;
+  const themes = [...new Set([THEME, OLD_THEME, theme || THEME])];
+  return [coverPixel, oldCoverPixel].some(px => themes.some(t => info.data.equals(rows(w, h, px(t, w, h)))));
 }
 
 // the placeholder's pixel(x, y) → [r, g, b]
 function coverPixel(theme, w, h) {
+  const [r, g, b] = rgb(theme), dark = (v, k) => Math.round(v * k), INK = [27, 26, 23], WHITE = [255, 255, 255], PAPER = rgb(THEME);
+  const PANEL = Math.round(w * .49), M = Math.round(w * .043), BAR = [Math.round(h * .73), Math.round(h * .768)];
+  const T = Math.round(w / 12), GAP = Math.round(w / 40), X0 = PANEL + Math.round((w - PANEL - 3 * T - 2 * GAP) / 2), Y0 = Math.round((h - T) / 2);
+  const inShape = (x, y) => {
+    if (y < Y0 || y >= Y0 + T) return false;
+    const i = Math.floor((x - X0) / (T + GAP)), tx = x - X0 - i * (T + GAP), ty = y - Y0;
+    if (i < 0 || i > 2 || tx >= T) return false;
+    if (i === 0) return true;                                                   // the square
+    if (i === 1) return (tx - T / 2 + .5) ** 2 + (ty - T / 2 + .5) ** 2 <= T * T / 4;   // the circle
+    return Math.abs(tx - T / 2 + .5) <= (ty + .5) / 2;                           // the triangle
+  };
+  return (x, y) => {
+    if (x < PANEL) return x >= M && x < PANEL - M && y >= BAR[0] && y < BAR[1] ? INK : PAPER;
+    if (inShape(x, y)) return WHITE;
+    const k = 1 - 0.12 * y / h;
+    return [dark(r, k), dark(g, k), dark(b, k)];
+  };
+}
+
+// the placeholder of the look before (a row of four rounded white tiles on the theme colour): only to recognise it
+function oldCoverPixel(theme, w, h) {
   const [r, g, b] = rgb(theme), dark = (v, k) => Math.round(v * k);
   const T = Math.round(w / 8), GAP = Math.round(w / 30), X0 = Math.round((w - 4 * T - 3 * GAP) / 2), Y0 = Math.round((h - T) / 2), R = Math.round(T * 0.19);
   const inTile = (x, y) => {
@@ -73,7 +100,7 @@ function coverPixel(theme, w, h) {
     const i = Math.floor((x - X0) / (T + GAP)), tx = x - X0 - i * (T + GAP), ty = y - Y0;
     if (i < 0 || i > 3 || tx >= T) return false;
     const cx = Math.min(Math.max(tx, R), T - R), cy = Math.min(Math.max(ty, R), T - R);
-    return (tx - cx) ** 2 + (ty - cy) ** 2 <= R * R;   // (the corners rounded)
+    return (tx - cx) ** 2 + (ty - cy) ** 2 <= R * R;
   };
   return (x, y) => {
     if (inTile(x, y)) return [255, 255, 255];

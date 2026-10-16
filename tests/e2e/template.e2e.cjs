@@ -21,14 +21,15 @@
 //     device «Почати заново»; «Почати» unavailable while the copy that starts rounds is away; a quit by another
 //     player: the lobby says who
 //   - a 24-letter name at 320 px: nothing wider than the screen
-//   - the library's look (UX spec §5, S-I13): Onest and Unbounded, a paper card with a 3 px ink border and the pink and
-//     blue shadows, «Почати» the one yellow button, «Запросити друзів» a paper one, «← Усі ігри» a finger's size (44
-//     px), a press sinks 3 px; light only, also when the system is dark
+//   - the library's look (UX spec §5, S-I13; «Великі цифри»): Inter Tight and Oswald, a paper card with a 3 px ink
+//     border, a 12 px ink head rule, square corners and the red block under it, «Почати» the one black slab (its red
+//     block under it), «Запросити друзів» a paper one, «← Усі ігри» a finger's size (44 px), a press sinks 3 px; light
+//     only, also when the system is dark
 //   - it fits (S-I15): a round on a phone lying down (844×390) shows its line and «Вийти з раунду»; on a small phone
 //     (320×568) the library's waiting screen is in view, in a round and in the lobby
 //   - while the library's screen says whom it waits for, the game's line is quiet (the chips still mark the turn; the
 //     version is no wait); «(ти)» stays after the end; the chips are the same nodes from move to move, the winner's
-//     mint with a ✓ (S-I14, S-T27)
+//     with the ink block under it and a ✓ in an ink square, which the others have not (S-I14, S-T27)
 //   - motion, in the library (its vocabulary at attach, README "Motion"): the round comes in forward and the lobby back
 //     with the reason, the total rolls up, what the change pushed glides (glide); the state first, so a key works mid-
 //     entry and every animation is over in 600 ms; motion off: nothing moves, nothing added to the page; «менше руху»:
@@ -384,21 +385,22 @@ scenario('template: its page on the round\'s events (a stand-in library)', async
 
   step('the library\'s look, light only');
   p = await open();
-  const INK = 'rgb(35, 32, 74)', PAGE = 'rgb(228, 226, 240)', PAPER = 'rgb(246, 245, 251)', YELLOW = 'rgb(255, 217, 26)';
+  const INK = 'rgb(27, 26, 23)', PAGE = 'rgb(238, 231, 215)', PAPER = 'rgb(248, 244, 234)', WHITE = 'rgb(255, 253, 247)', RED = 'rgb(219, 59, 34)';
   const look = () => p.evaluate(() => {
-    const css = s => getComputedStyle(document.querySelector(s)), b = s => { const c = css(s); return c.borderTopWidth + ' ' + c.borderTopStyle + ' ' + c.borderTopColor; };
+    const css = s => getComputedStyle(document.querySelector(s)), b = (s, side = 'Top') => { const c = css(s); return c['border' + side + 'Width'] + ' ' + c['border' + side + 'Style'] + ' ' + c['border' + side + 'Color']; };
     const h = s => document.querySelector(s).getBoundingClientRect().height;
     return { scheme: getComputedStyle(document.documentElement).colorScheme, page: css('body').backgroundColor, ink: css('body').color, text: css('body').fontFamily,
-      title: css('h1').fontFamily, card: { bg: css('main').backgroundColor, border: b('main'), radius: css('main').borderTopLeftRadius, shadow: css('main').boxShadow },
-      start: { bg: css('#start').backgroundColor, border: b('#start'), h: h('#start') }, invite: { bg: css('#invite').backgroundColor, border: b('#invite'), h: h('#invite') },
-      home: h('#home') };
+      title: css('h1').fontFamily, card: { bg: css('main').backgroundColor, border: b('main', 'Left'), head: b('main'), radius: css('main').borderTopLeftRadius, shadow: css('main').boxShadow },
+      start: { bg: css('#start').backgroundColor, color: css('#start').color, border: b('#start'), shadow: css('#start').boxShadow, h: h('#start') },
+      invite: { bg: css('#invite').backgroundColor, border: b('#invite'), h: h('#invite') }, home: h('#home') };
   });
   let lk = await look();
-  check(/^Onest\b/.test(lk.text.replace(/["']/g, '')) && /^Unbounded\b/.test(lk.title.replace(/["']/g, '')), 'Onest for its words, Unbounded for its title', [lk.text, lk.title]);
-  check(lk.card.bg === PAPER && lk.card.border === '3px solid ' + INK && lk.card.radius === '18px' && /^rgb\(255, 79, 163\) 6px 6px 0px\b.*, rgb\(43, 108, 240\) -6px -6px 0px\b/.test(lk.card.shadow),
-    'a paper card: a 3 px ink border, 18 px corners, the pink and blue shadows', lk.card);
-  check(lk.start.bg === YELLOW && lk.start.border === '3px solid ' + INK && lk.start.h >= 44, '«Почати»: the yellow one, an ink border', lk.start);
-  check(lk.invite.bg !== YELLOW && [PAPER, 'rgb(255, 255, 255)'].includes(lk.invite.bg) && lk.invite.border === '3px solid ' + INK && lk.invite.h >= 44, '«Запросити друзів»: a paper one', lk.invite);
+  check(/^Inter Tight\b/.test(lk.text.replace(/["']/g, '')) && /^Oswald\b/.test(lk.title.replace(/["']/g, '')), 'Inter Tight for its words, Oswald for its title', [lk.text, lk.title]);
+  check(lk.card.bg === PAPER && lk.card.border === '3px solid ' + INK && lk.card.head === '12px solid ' + INK && lk.card.radius === '0px' && lk.card.shadow.startsWith(RED + ' 8px 8px 0px'),
+    'a paper card: a 3 px ink border, a 12 px ink head rule, square corners, the red block', lk.card);
+  check(lk.start.bg === INK && lk.start.color === PAPER && lk.start.border === '3px solid ' + INK && lk.start.shadow.startsWith(RED + ' 4px 4px 0px') && lk.start.h >= 44,
+    '«Почати»: the black slab, the red block under it', lk.start);
+  check(lk.invite.bg !== lk.start.bg && [PAPER, WHITE].includes(lk.invite.bg) && lk.invite.border === '3px solid ' + INK && lk.invite.h >= 44, '«Запросити друзів»: a paper one', lk.invite);
   check(lk.home >= 44, '«← Усі ігри»: 44 px at least, for a finger', lk.home);
   if (CHROMIUM) {                                         // (:active under Playwright's mouse: checked where it is sure)
     await p.hover('#start');
@@ -412,7 +414,7 @@ scenario('template: its page on the round\'s events (a stand-in library)', async
   check(lk.scheme === 'light' && lk.page === PAGE && lk.ink === INK, 'light: the library\'s page and ink', lk);
   await p.emulateMedia({ colorScheme: 'dark' });
   lk = await look();
-  check(lk.scheme === 'light' && lk.page === PAGE && lk.ink === INK && lk.card.bg === PAPER && lk.start.bg === YELLOW, '… and the same when the system is dark (light only)', lk);
+  check(lk.scheme === 'light' && lk.page === PAGE && lk.ink === INK && lk.card.bg === PAPER && lk.start.bg === INK, '… and the same when the system is dark (light only)', lk);
 
   step('a round on a phone lying down (844×390), the waiting screen on a small phone (320×568)');
   p = await open();
@@ -461,12 +463,15 @@ scenario('template: its page on the round\'s events (a stand-in library)', async
   await w(300);
   v = await view(p);
   ch = await chips();
+  // (every chip has its seat's shape before its name: the winner's ✓ is a mark the other chip has not)
   const won = await p.evaluate(() => {
-    const li = document.querySelector('#seats li.won'), mark = ['::before', '::after'].map(x => getComputedStyle(li, x)).find(s => s.content !== 'none' && s.content !== 'normal' && parseFloat(s.width) > 0);
-    return li && { bg: getComputedStyle(li).backgroundColor, mark: !!mark };
+    const marks = li => ['::before', '::after'].map(x => getComputedStyle(li, x)).filter(s => s.content !== 'none' && s.content !== 'normal' && parseFloat(s.width) > 0).map(s => s.backgroundColor);
+    const li = document.querySelector('#seats li.won'), other = document.querySelector('#seats li:not(.won)');
+    return li && other && { bg: getComputedStyle(li).backgroundColor, shadow: getComputedStyle(li).boxShadow, others: getComputedStyle(other).boxShadow, marks: marks(li), otherMarks: marks(other) };
   });
   check(v.say === 'Перемога твоя!' && v.seats.join() === 'Аня (ти),Богдан' && ch.every(c => c.was === c.text), 'the end: «Перемога твоя!» (said, whoever is waited for), «Аня (ти)» kept, the same chips', [v, ch]);
-  check(won && won.bg === 'rgb(201, 242, 212)' && won.mark, 'the winner\'s chip: mint, with a ✓', won);
+  check(won && won.bg === WHITE && won.shadow.startsWith(INK + ' 4px 4px 0px') && won.others === 'none' && won.marks.length === won.otherMarks.length + 1 && won.marks.at(-1) === INK,
+    'the winner\'s chip: the ink block under it, a ✓ in an ink square (the other chip has neither)', won);
 
   step('motion in the library: forward into the round, back with the reason, the total rolls up, what moved glides');
   p = await open();

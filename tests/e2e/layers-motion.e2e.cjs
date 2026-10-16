@@ -33,15 +33,15 @@ function freezeOn(kind) {
   mo.observe(note, { attributes: true, attributeFilter: ['hidden'] });
 }
 const thaw = p => p.evaluate(() => { for (const a of document.getAnimations()) a.play(); window.__frozen = null; });
-// The share of the dialog's paper (#f6f5fb, where nothing is drawn on it) in screenshot a that is something else in b
-// (more than 12 off in a channel; the page's own colour, #e4e2f0, is 18 off), read in page p. Only the paper: how its
+// The share of the dialog's paper (#f8f4ea, where nothing is drawn on it) in screenshot a that is something else in b
+// (more than 12 off in a channel; the page's own colour, #eee7d7, is 19 off), read in page p. Only the paper: how its
 // words are smoothed may change as other layers come and go, and a cover changes all of it.
 const covered = (p, a, b) => !a || !b ? Promise.resolve(1) : p.evaluate(async ([a, b]) => {
   const load = s => new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = s; });
   const px = i => { const c = document.createElement('canvas'); c.width = i.width; c.height = i.height; const g = c.getContext('2d'); g.drawImage(i, 0, 0); return g.getImageData(0, 0, c.width, c.height).data; };
   const [x, y] = await Promise.all([load(a), load(b)]);
   if (x.width !== y.width || x.height !== y.height) return 1;
-  const da = px(x), db = px(y), PAPER = [246, 245, 251];
+  const da = px(x), db = px(y), PAPER = [248, 244, 234];
   let paper = 0, gone = 0;
   for (let k = 0; k < da.length; k += 4) {
     if (PAPER.some((v, i) => Math.abs(da[k + i] - v) > 3)) continue;
@@ -55,7 +55,7 @@ scenario('layers-motion: nothing that fades as the view changes covers an open d
   const b = await launch();
   const ctx = await b.newContext({ viewport: { width: 390, height: 844 }, motion: true });
   const p = await openPage(ctx, 'layrlayrlayr');
-  // the dialog's own pixels (inside its rounded corners, where the page under it shows through the dim)
+  // the dialog's own pixels (inside its ink frame, away from its edges)
   const shot = async () => {
     const r = await p.evaluate(s => { const d = document.querySelector(s); if (!d) return null; const b = d.getBoundingClientRect(); return { x: b.x + 20, y: b.y + 20, width: b.width - 40, height: b.height - 40 }; }, DIALOG);
     return r && r.width > 0 && r.height > 0 ? p.screenshot({ clip: r, animations: 'allow' }) : null;

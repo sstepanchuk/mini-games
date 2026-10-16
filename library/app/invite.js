@@ -561,7 +561,7 @@ function show(screen, dir) {
 // the ping, a direct link, another version and «Оновити», a broken link nearby that this phone can pair again, room
 // for more): a focused button keeps its focus. A focused node that goes (hidden, or another kind of 'more') leaves the
 // focus on the dialog itself. Players are chips (a dot: dashed while away, with the words; «ти» a tag); one who comes
-// rises in, mint for a moment; one who goes fades as a ghost, and the others glide (motion.js flip). A broken link
+// rises in, yellow for a moment; one who goes fades as a ghost, and the others glide (motion.js flip). A broken link
 // nearby is said once: the heading «Зв’язок поруч перервався», one line, «З’єднатися знову» (UX I10), no ping.
 const put = (node, text) => { if (node.textContent !== text) node.textContent = text; };
 function paintTogether() {
@@ -611,10 +611,11 @@ function person(name, me) {
   dot.setAttribute('aria-hidden', 'true');
   return el('li', { className: 'person' }, dot, name, ...(tag ? [tag] : []), el('span', { className: 'state' }));
 }
-// one who came: rises in (ihk-keep), mint for 600 ms (a colour on a small chip: under «менше руху» a step, not a fade)
+// one who came: rises in (ihk-keep), the house yellow («Разом») for 600 ms, back to the chip's white (a colour on a
+// small chip: under «менше руху» a step, not a fade)
 function arrive(li) {
   play(li, 'ihk-keep');
-  tint(li, '#c9f2d4', '#fff', { duration: 600, easing: 'ease-in' });
+  tint(li, '#f2b91b', '#fffdf7', { duration: 600, easing: 'ease-in' });
 }
 
 // why a direct link did not work (see net/nearby.js), and what to do
@@ -706,8 +707,8 @@ function steps(n, role) {
   for (const i of dots) i.setAttribute('aria-hidden', 'true');
   return el('p', { className: 'steps-dots' }, ...dots, el('span', { textContent: role }));
 }
-// (the second step comes: its dot fills, 140 ms)
-const filled = s => tint(s.querySelector('.steps-dots i + i.on'), '#fff', '#23204a');
+// (the second step comes: its dot fills, 140 ms: from the white to the ink of .steps-dots i.on)
+const filled = s => tint(s.querySelector('.steps-dots i + i.on'), '#fffdf7', '#1b1a17');
 const stepView = (dir, n, ...nodes) => { const s = view(dlg, dir, ...nodes); if (dir === 'fwd' && n > 1) filled(s); return s; };
 const heading = n => el('h2', { textContent: 'Крок ' + n + ' з 2' });
 function placeholder(camera) {

@@ -1,26 +1,36 @@
-/* Вигляд гри — мова бібліотеки (README «Motion»; огляд UX, «вигляд шаблону»): папір, чорнильні контури, рожеві й сині
-   зсунуті тіні, одна жовта кнопка — та, що веде далі; шрифти Onest і Unbounded; лише світлий (бібліотека світла, і гра в
-   ній не перемикається на темну). Кнопки — справжні кнопки: їх видно читачеві екрана, вони працюють з клавіатури.
-   Рух — словником бібліотеки: ключові кадри ihk-* і токени --m-* (з запасними значеннями), які бібліотека кладе в
-   сторінку гри ще до цих стилів; сторінка сама собою (без бібліотеки) їх не знає — тоді нічого не рухається. Рухаються
-   лише transform і opacity (і колір на малому: фішка), до 240 мс; «менше руху» — лише згасання (унизу). */
+/* Вигляд гри — мова бібліотеки, «Великі цифри» (README «Motion»): теплий папір, чорні рамки й товсті бруски, три фігури
+   (червоний квадрат, синє коло, жовтий трикутник); назва, число й кнопки — великим вузьким Oswald, слова — Inter Tight;
+   гострі кути; одна чорна кнопка з червоним бруском — та, що веде далі; лише світлий (бібліотека світла, і гра в ній не
+   перемикається на темну). Кнопки — справжні кнопки: їх видно читачеві екрана, вони працюють з клавіатури. Рух —
+   словником бібліотеки: ключові кадри ihk-* і токени --m-* (з запасними значеннями), які бібліотека кладе в сторінку гри
+   ще до цих стилів; сторінка сама собою (без бібліотеки) їх не знає — тоді нічого не рухається. Рухаються лише
+   transform і opacity (і колір на малому: табличка гравця), до 240 мс; «менше руху» — лише згасання (унизу). */
+/* поки Oswald не прийшов (перший повільний візит, без інтернету, коли його ще не збережено) — шрифти самого пристрою,
+   вужчі чи зменшені так, щоб слово, поставлене на ширину Oswald, і далі влазило, і з його висотою над і під рядком
+   (рядок уже такої висоти, як буде): size-adjust і ці заміни метрик працюють у Chrome, Firefox і Safari 17+ */
+@font-face{font-family:'Ihk Cond 1';font-weight:500 700;src:local('Arial Narrow Bold'),local('ArialNarrow-Bold'),local('HelveticaNeue-CondensedBold');size-adjust:98%;ascent-override:121.4%;descent-override:29.6%;line-gap-override:0%}
+@font-face{font-family:'Ihk Cond 2';font-weight:500 700;src:local('Roboto Condensed Bold'),local('RobotoCondensed-Bold');size-adjust:94%;ascent-override:126.6%;descent-override:30.9%;line-gap-override:0%}
+@font-face{font-family:'Ihk Cond 3';font-weight:500 700;src:local('Arial Bold'),local('Arial-BoldMT'),local('Helvetica Bold'),local('Helvetica-Bold'),local('Liberation Sans Bold'),local('LiberationSans-Bold');size-adjust:82%;ascent-override:145.1%;descent-override:35.4%;line-gap-override:0%}
+@font-face{font-family:'Ihk Cond 4';font-weight:500 700;src:local('Segoe UI Bold'),local('SegoeUI-Bold'),local('Roboto Bold'),local('Roboto-Bold');size-adjust:78%;ascent-override:152.6%;descent-override:37.2%;line-gap-override:0%}
+@font-face{font-family:'Ihk Cond 5';font-weight:500 700;src:local('DejaVu Sans Bold'),local('DejaVuSans-Bold');size-adjust:68%;ascent-override:175.0%;descent-override:42.6%;line-gap-override:0%}
 :root{
   color-scheme:light;
-  --page:#e4e2f0;
-  --paper:#f6f5fb;
-  --ink:#23204a;
-  --mute:#5f5c85;          /* (4,9:1 на тлі сторінки) */
-  --err:#c00062;
-  --pink:#ff4fa3;
-  --blue:#2b6cf0;
-  --yellow:#ffd91a;
-  --mint:#c9f2d4;          /* виграли (завжди ще й зі знаком ✓, не лише кольором) */
-  --off:#ebe9f4;           /* недоступна кнопка: «чекає», а не «зламалась» */
-  --sh-card:6px 6px 0 var(--pink),-6px -6px 0 var(--blue);   /* картка гри */
-  --sh-voice:3px 3px 0 var(--pink),-3px -3px 0 var(--blue);  /* «каже бібліотека»: її екран очікування */
+  --page:#eee7d7;
+  --paper:#f8f4ea;
+  --white:#fffdf7;
+  --ink:#1b1a17;
+  --mute:#59544a;          /* (6,1:1 на тлі сторінки, 6,9:1 на папері) */
+  --err:#b12a15;
+  --red:#db3b22;
+  --blue:#1f46b8;
+  --yellow:#f2b91b;
+  --off:#e4ddcc;           /* недоступна кнопка: «чекає», а не «зламалась» */
+  --sh-card:8px 8px 0 var(--red);                             /* картка гри: червоний брусок */
+  --sh-voice:5px 5px 0 var(--blue);                           /* «каже бібліотека»: її екран очікування — синій брусок */
   --sh-btn:4px 4px 0 var(--ink);                              /* те, що натискають */
-  --display:'Unbounded','Arial Black','Segoe UI',system-ui,sans-serif;
-  --text:'Onest','Segoe UI',system-ui,-apple-system,sans-serif;
+  --display:'Oswald','Ihk Cond 1','Ihk Cond 2','Ihk Cond 3','Ihk Cond 4','Ihk Cond 5',sans-serif;
+  --text:'Inter Tight','Inter','Segoe UI','Helvetica Neue',system-ui,sans-serif;
+  --font:var(--text);
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
@@ -31,94 +41,107 @@ body{
   margin:0;min-height:100vh;min-height:100dvh;display:flex;align-items:flex-start;justify-content:center;
   padding:calc(env(safe-area-inset-top,0px) + clamp(16px, 10vh - 40px, 64px)) 16px calc(env(safe-area-inset-bottom,0px) + 16px);
   padding-top:calc(env(safe-area-inset-top,0px) + clamp(16px, 10dvh - 40px, 64px));   /* (вище — браузер без dvh) */
-  background:var(--page);color:var(--ink);font:17px/1.45 var(--text);
+  background:var(--page);color:var(--ink);font:500 17px/1.45 var(--text);
   -webkit-tap-highlight-color:transparent;
 }
 p{margin:0}
 /* картка: довге ім'я без пробілів переноситься, а не розширює сторінку (на вузькому телефоні — убік за край) */
 main{
   width:min(28rem,100%);display:flex;flex-direction:column;gap:12px;padding:16px 18px 18px;
-  text-align:center;overflow-wrap:anywhere;
-  background:var(--paper);border:3px solid var(--ink);border-radius:18px;box-shadow:var(--sh-card);
+  position:relative;text-align:left;overflow-wrap:anywhere;
+  background:var(--paper);border:3px solid var(--ink);border-top-width:12px;box-shadow:var(--sh-card);
 }
-/* де на це є місце, лобі й раунд однієї висоти — раунду (число 56 і «з 10» 25, фішки 36, кнопки ходу 55, рядок «Ще
-   раз» 52, проміжки 3 × 12 px): з одного в інше міняється лише те, що вгорі, а рядок стану й екран очікування під ним
-   стоять, де й були (і коли екран з'являється, над ним нічого не зсувається) */
+/* підвіска: жовтий трикутник бібліотеки звисає з товстого верху картки */
+main::after{content:'';position:absolute;top:0;right:18px;width:34px;height:28px;pointer-events:none;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 28'%3E%3Cpath d='M0 0h34L17 28z' fill='%23f2b91b'/%3E%3C/svg%3E") center/100% 100% no-repeat}
+/* де на це є місце, лобі й раунд однієї висоти — раунду (число з «з 10» поруч 78 і 4 над ним, таблички 38, кнопки
+   ходу 53, рядок «Ще раз» 52, проміжки 3 × 12 px): з одного в інше міняється лише те, що вгорі, а рядок стану й екран
+   очікування під ним стоять, де й були (і коли екран з'являється, над ним нічого не зсувається) */
 @media (min-height:540px){#lobby,#play{min-height:260px}}
-h1{margin:0;font:800 clamp(21px,6.4vw,26px)/1.15 var(--display);text-shadow:2px 2px 0 var(--pink),-2px -1px 0 var(--blue)}
+h1{margin:0;font:700 clamp(34px,10.4vw,46px)/.9 var(--display);letter-spacing:0;padding-bottom:3px;
+  text-decoration:underline var(--ink);text-decoration-thickness:6px;text-underline-offset:5px;text-decoration-skip-ink:none}
 /* «← Усі ігри» — ліворуч над назвою, на палець (44 px), а на око там, де й була: від'ємні поля забирають зайве. Лише в
    бібліотеці (поза нею hidden: display тут не має її показати); там її місце є з першого показу (html[data-ihroteka]
    бібліотека ставить ще до коду гри), тож назва потім не зсувається */
-.home{align-self:flex-start;margin:-8px 0 -6px -8px;font-size:15px}
+.home{align-self:flex-start;margin:-6px 0 -4px -4px;font-size:15px}
 html[data-ihroteka] .home[hidden]{display:block!important;visibility:hidden}
 
-section{display:flex;flex-direction:column;align-items:center;gap:12px}
-.row{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:10px}
+section{display:flex;flex-direction:column;align-items:flex-start;gap:12px}
+.row{display:flex;flex-wrap:wrap;justify-content:flex-start;align-items:center;gap:10px 14px}
 .actions{min-height:52px}   /* («Ще раз» ↔ «Вийти з раунду»: рядок тієї самої висоти, нічого під ним не зсувається) */
-.total{color:var(--mute)}
-.total b{display:block;font:800 56px/1 var(--display);color:var(--ink);font-variant-numeric:tabular-nums}
-/* гравці — фішки: чий хід — жовта, переможця — м'ятна зі знаком ✓ (колір міняється за 140 мс) */
-ol{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
+.total{margin-top:4px;font:600 28px/1 var(--display);letter-spacing:.01em;color:var(--ink)}
+/* число: велике чорне, «з 10» поруч на його базовій лінії */
+.total b{display:inline-block;margin-right:.06em;font:700 96px/.66 var(--display);letter-spacing:0;color:var(--ink);font-variant-numeric:tabular-nums}
+ol{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;justify-content:flex-start;gap:10px}
+/* гравці — таблички з фігурою: перший — квадрат, другий — коло, третій — трикутник (і так далі); чий хід — жовта,
+   переможця — з чорним квадратом ✓ (колір міняється за 140 мс) */
 li{
-  display:flex;align-items:center;gap:6px;min-height:36px;padding:4px 12px;
-  border:2.5px solid var(--ink);border-radius:999px;background:#fff;font-size:15px;font-weight:500;
+  display:flex;align-items:center;gap:8px;min-height:38px;padding:4px 12px 4px 10px;
+  border:2.5px solid var(--ink);background:var(--white);font-size:15px;font-weight:700;
   transition:background-color var(--m-quick,140ms) linear;
 }
-li.turn{background:var(--yellow);box-shadow:3px 3px 0 var(--ink)}
-li.won{background:var(--mint);box-shadow:3px 3px 0 var(--ink)}
+li::before{content:'';flex:none;width:12px;height:12px;background:var(--red)}
+li:nth-child(3n+2)::before{background:var(--blue);border-radius:50%}
+li:nth-child(3n)::before{background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 11'%3E%3Cpath d='M6 1l5.2 9H.8z' fill='%23f2b91b' stroke='%231b1a17' stroke-width='1.4'/%3E%3C/svg%3E") center/contain no-repeat}
+li.turn{background:var(--yellow);box-shadow:4px 4px 0 var(--ink)}
+li.won{box-shadow:4px 4px 0 var(--ink)}
 li.won::after{
-  content:'';flex:none;width:18px;height:18px;border-radius:50%;
-  background:var(--ink) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5 6.5 11.5 12.5 4.5' fill='none' stroke='%23f6f5fb' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/12px no-repeat;
+  content:'';flex:none;width:18px;height:18px;
+  background:var(--ink) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5 6.5 11.5 12.5 4.5' fill='none' stroke='%23f8f4ea' stroke-width='2.6' stroke-linecap='square' stroke-linejoin='miter'/%3E%3C/svg%3E") center/12px no-repeat;
 }
-.steps{display:flex;justify-content:center;gap:14px}
+.steps{display:flex;justify-content:flex-start;gap:14px}
 /* рядок стану: місце на рядок є завжди (порожній він нічого під собою не зсуває) */
 #say{min-height:1.45em;font-weight:700}
 /* те, що чує лише читач екрана */
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 
-/* Кнопки. Головна (.btn: «Почати», «Ще раз») — жовта, інша (як «Запросити друзів») — паперова, тиха (.ghost: «Вийти з
-   раунду», «← Усі ігри») — лише підкреслений текст, на палець (44 px). Натискання осідає на 3 px (80 мс) і пружно
-   повертається (160 мс); мишею — піднімається на 2 px. Недоступна — aria-disabled, не disabled (та, що має фокус,
-   лишає його собі): пунктир і сірий текст — «чекає». Ті самі класи (btn, ghost) має й екран очікування бібліотеки */
+/* Кнопки — гострі плити. Головна (.btn: «Почати», «Ще раз») — чорна з червоним бруском, інша (як «Запросити друзів»)
+   — паперова з чорним, тиха (.ghost: «Вийти з раунду», «← Усі ігри») — лише підкреслений текст, на палець (44 px).
+   Натискання осідає на 3 px (80 мс) і пружно повертається (160 мс); мишею — піднімається на 2 px. Недоступна —
+   aria-disabled, не disabled (та, що має фокус, лишає його собі): пунктир і сірий текст — «чекає». Ті самі класи (btn,
+   ghost) має й екран очікування бібліотеки */
 button{
   appearance:none;-webkit-appearance:none;margin:0;cursor:pointer;
-  min-height:44px;padding:11px 18px;border:3px solid var(--ink);border-radius:12px;background:var(--paper);box-shadow:var(--sh-btn);
-  font:700 16px/1.2 var(--text);color:var(--ink);
+  min-height:44px;padding:11px 18px;border:3px solid var(--ink);border-radius:0;background:var(--paper);box-shadow:var(--sh-btn);
+  font:600 19px/1.1 var(--display);letter-spacing:.02em;color:var(--ink);
   transition:transform var(--m-release,160ms) var(--m-spring,cubic-bezier(.3,1.45,.55,1)),box-shadow var(--m-release,160ms) var(--m-spring,cubic-bezier(.3,1.45,.55,1));
 }
-.btn{background:var(--yellow)}
-.steps button{min-width:84px;padding:10px 18px;background:#fff;font:800 24px/1.2 var(--display)}
+.btn{background:var(--ink);color:var(--paper);box-shadow:4px 4px 0 var(--red)}
+.steps button{min-width:84px;padding:7px 18px 8px;background:var(--white);font:700 32px/1 var(--display)}
 .ghost,.home{
-  padding:10px 8px;background:none;border-color:transparent;box-shadow:none;font-weight:500;text-decoration:underline;
+  padding:10px 4px;background:none;border-color:transparent;box-shadow:none;font:600 16px/1.2 var(--text);letter-spacing:0;
+  text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:5px;
   transition:background-color var(--m-press,80ms) linear;
 }
 button:not(.ghost):not(.home)[aria-disabled=true]{background:var(--off);border-style:dashed;box-shadow:none;color:var(--mute);cursor:default}
 @media (hover:hover) and (pointer:fine){
   button:not(.ghost):not(.home):not([aria-disabled=true]):hover{transform:translate(-2px,-2px);box-shadow:6px 6px 0 var(--ink);transition-duration:var(--m-press,80ms)}
-  :is(.ghost,.home):hover{background:rgba(35,32,74,.06)}
+  .btn:not([aria-disabled=true]):hover{box-shadow:6px 6px 0 var(--red)}
+  :is(.ghost,.home):hover{background:rgba(27,26,23,.06)}
 }
 button:not(.ghost):not(.home):not([aria-disabled=true]):active{
   transform:translate(3px,3px);box-shadow:1px 1px 0 var(--ink);
   transition-duration:var(--m-press,80ms);transition-timing-function:var(--m-ease-out,cubic-bezier(.2,.8,.3,1));
 }
-:is(.ghost,.home):active{background:rgba(35,32,74,.1)}
+.btn:not([aria-disabled=true]):active{box-shadow:1px 1px 0 var(--red)}
+:is(.ghost,.home):active{background:rgba(27,26,23,.1)}
 button:focus-visible{outline:3px solid var(--blue);outline-offset:3px}
 /* «Точно вийти?»: червона тиха кнопка, а під нею смужка, що спливає, поки вона чекає на друге натискання (2,5 с) */
 .ghost.ask{position:relative;color:var(--err);font-weight:700;text-decoration:none}
 .ghost.ask::after{
-  content:'';position:absolute;left:8px;right:8px;bottom:9px;height:2.5px;border-radius:2px;background:currentColor;
+  content:'';position:absolute;left:4px;right:4px;bottom:9px;height:3px;background:currentColor;
   transform-origin:left;animation:ihk-drain 2500ms linear both;
 }
 :root[data-motion=off] .ghost.ask::after{animation:none}   /* (рух вимкнено: смужка просто стоїть) */
 
 /* екран очікування бібліотеки (<ihroteka-wait>): бібліотека заповнює його сама й показує, як він з'являється (від
    прозорості .01, не 0: інакше вона вважала б його невидимим), а гра дає йому місце й вигляд — голос бібліотеки
-   (папір, чорнильна рамка, рожева й синя тіні). Порожній — без місця (і поза бібліотекою, де його ніхто не заповнить).
-   Його кнопки — на палець, як на картці бібліотеки */
-ihroteka-wait{padding:8px 12px;border:3px solid var(--ink);border-radius:16px;background:var(--paper);box-shadow:var(--sh-voice);font-size:16px;font-weight:700}
+   (білий аркуш, чорна рамка з товстим верхом, синій брусок; час — чорною табличкою). Порожній — без місця (і поза
+   бібліотекою, де його ніхто не заповнить). Його кнопки — на палець, як на картці бібліотеки */
+ihroteka-wait{padding:8px 12px;border:3px solid var(--ink);border-top-width:6px;background:var(--white);box-shadow:var(--sh-voice);font-size:16px;font-weight:700;text-align:center}
+ihroteka-wait .wait-time{display:inline-block;margin-left:.3em;padding:0 7px 1px;vertical-align:-1px;font:700 18px/1.2 var(--display);letter-spacing:.02em;font-variant-numeric:tabular-nums;background:var(--ink);color:var(--paper)}
 ihroteka-wait:empty{display:none}
 ihroteka-wait .fine{font-size:14px;font-weight:500;color:var(--mute)}
-ihroteka-wait button{padding:8px 14px;font-size:15px}
+ihroteka-wait button{padding:8px 14px;font-size:17px}
 ihroteka-wait .ghost{padding:8px}
 
 /* класи руху (main.js replay кладе один і знімає, коли він скінчився): раунд заходить уперед, лобі — назад, число
@@ -128,12 +151,13 @@ ihroteka-wait .ghost{padding:8px}
 .ihk-up{animation:ihk-up var(--m-in,200ms) var(--m-ease-out,cubic-bezier(.2,.8,.3,1)) both}
 .ihk-fade{animation:ihk-fade var(--m-quick,140ms) linear both}
 
-/* низький екран (телефон 320×568): усе трохи щільніше (число 48, проміжки 10 px), тож екран очікування під раундом
+/* низький екран (телефон 320×568): усе трохи щільніше (число 70, проміжки 10 px), тож екран очікування під раундом
    на екрані */
 @media (max-height:640px){
   main{gap:10px;padding-top:12px}
   section{gap:10px}
-  .total b{font-size:48px}
+  .total{margin-top:4px}
+  .total b{font-size:70px}
 }
 @media (min-height:540px) and (max-height:640px){#lobby,#play{min-height:246px}}
 /* телефон лежить (844×390, 568×320): назва й «← Усі ігри» — одним рядком, а раунд — двома колонками (число ліворуч;
@@ -144,7 +168,7 @@ ihroteka-wait .ghost{padding:8px}
   main{width:min(44rem,100%);display:grid;grid-template-columns:1fr auto 1fr;gap:8px 12px;padding:10px 16px 12px}
   main > *{grid-column:1 / -1}
   main > .home{grid-column:1;grid-row:1;align-self:center;justify-self:start;margin:-6px 0 -6px -8px}
-  main > h1{grid-column:2;grid-row:1;align-self:center;font-size:20px}
+  main > h1{grid-column:2;grid-row:1;align-self:center;font-size:26px;text-decoration-thickness:4px;text-underline-offset:3px}
   #play{display:grid;grid-template-columns:auto auto;justify-content:center;align-items:center;gap:8px 32px}
   #play > *{grid-column:2}
   #play > .total{grid-column:1;grid-row:1 / 4}

@@ -22,7 +22,7 @@ const FIELDS = {
   imageAlt: '?image description',
   emoji: '?tab icon (one emoji)',
   players: '?how many play together: "2", or a range such as "2-4" (1 to 8; 2 when not given)',
-  theme: '?browser theme color, e.g. #e4e2f0'
+  theme: '?browser theme color, e.g. #eee7d7'
 };
 // the fields that are numbers, not strings (whole, from 1)
 const NUMBERS = {
@@ -221,7 +221,7 @@ export function page(vals) {
     .replace(/^\{\{\?(\w+)\}\}(.*\n)/gm, (_, k, line) => vals[k] ? line : '')
     .replace(/\{\{(\w+)\}\}/g, (_, k) => k in vals ? (k === 'bootArgs' ? vals[k] : esc(vals[k])) : problem('page.html: unknown field ' + k));
 }
-const LIBRARY = { title: 'Ігротека', description: 'Наша маленька бібліотека ігор. Ігри відкриваються за паролем.', theme: '#e4e2f0' };
+const LIBRARY = { title: 'Ігротека', description: 'Наша маленька бібліотека ігор. Ігри відкриваються за паролем.', theme: '#eee7d7' };
 
 // The site's version: the commit the library is built from and the day (UTC), e.g. "1a2b3c4 2026-10-12". Every page
 // carries it (<meta name="ihroteka-version">) and the library's diagnostics start with it (together.js).

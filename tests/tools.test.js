@@ -7,7 +7,8 @@
 // README, Trust); it reads only the page's own markup for links (what is inside a script or a style is code), and
 // leaves no relative URL there that the site would not have; the library API it puts first in a game's page defines
 // the game's waiting screens (<ihroteka-wait>) only inside the library. A game whose own tests never finish is not
-// sealed, and one whose tests leave a timer open is; the placeholder cover of `cli new` is noticed (coverWarnings).
+// sealed, and one whose tests leave a timer open is; the placeholder cover of `cli new` is noticed (coverWarnings), and
+// so is the one an older `cli new` made (the look before «Великі цифри»).
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -19,12 +20,26 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ihroteka-tools-'));
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 process.env.IHROTEKA_ROOT = root;                      // (before the tools load: repo.js reads it once)
 const { readManifest, bundleGame, testGame, apiVersion, assetStrings, withLibraryApi, coverWarnings } = await import('../tools/build.js');
-const { png } = await import('../tools/png.js');
+const { png, rgb } = await import('../tools/png.js');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');   // 1×1
 const CLI = path.join(import.meta.dirname, '..', 'tools', 'cli.js');
 const ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^VAULT_PASSWORDS?$/.test(k)));
 const cli = (...args) => { const r = spawnSync(process.execPath, [CLI, ...args], { env: { ...ENV, IHROTEKA_ROOT: root }, encoding: 'utf8' }); return { ok: r.status === 0, out: r.stdout + r.stderr }; };
 const file = (...p) => path.join(root, ...p);
+// the placeholder an older `cli new` drew (tools/png.js before «Великі цифри»): four rounded white tiles in a row on the
+// theme colour (#e4e2f0 without one), a little darker towards the bottom; a game made then still has it
+const oldPlaceholder = (theme = '#e4e2f0', w = 1200, h = 630) => {
+  const [r, g, b] = rgb(theme), dark = (v, k) => Math.round(v * k);
+  const T = Math.round(w / 8), GAP = Math.round(w / 30), X0 = Math.round((w - 4 * T - 3 * GAP) / 2), Y0 = Math.round((h - T) / 2), R = Math.round(T * 0.19);
+  const inTile = (x, y) => {
+    if (y < Y0 || y >= Y0 + T) return false;
+    const i = Math.floor((x - X0) / (T + GAP)), tx = x - X0 - i * (T + GAP), ty = y - Y0;
+    if (i < 0 || i > 3 || tx >= T) return false;
+    const cx = Math.min(Math.max(tx, R), T - R), cy = Math.min(Math.max(ty, R), T - R);
+    return (tx - cx) ** 2 + (ty - cy) ** 2 <= R * R;
+  };
+  return png(w, h, (x, y) => { const k = 1 - 0.12 * y / h; return inTile(x, y) ? [255, 255, 255] : [dark(r, k), dark(g, k), dark(b, k)]; });
+};
 fs.writeFileSync(file('package.json'), JSON.stringify({ homepage: 'https://example.github.io/lib/' }));
 
 test('cli new: a game from the template, valid for the build, its own tests passing, and the way to try it', async () => {
@@ -54,7 +69,12 @@ test('cli new: a game from the template, valid for the build, its own tests pass
   try {
     fs.writeFileSync(at, JSON.stringify({ ...g, theme: '#123456' }));
     assert.deepEqual(coverWarnings('demo2', readManifest('demo2')), placeholder, 'a theme added later');
+    fs.writeFileSync(cov, oldPlaceholder('#123456'));
+    assert.deepEqual(coverWarnings('demo2', readManifest('demo2')), placeholder, 'the placeholder of an older cli new, made for its theme');
     fs.writeFileSync(at, json);
+    fs.writeFileSync(cov, oldPlaceholder());
+    assert.ok(!fs.readFileSync(cov).equals(made), 'the old placeholder is not the new one');
+    assert.deepEqual(coverWarnings('demo2', g), placeholder, 'the placeholder of an older cli new, with no theme');
     fs.writeFileSync(cov, PNG);
     assert.deepEqual(coverWarnings('demo2', g), ['games/demo2/preview.png is 1×1: the shelf and link previews expect 1200×630']);
     fs.writeFileSync(cov, 'GIF89a');
